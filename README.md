@@ -1,5 +1,10 @@
 # 力 Install Deck
 
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Arch / CachyOS](https://img.shields.io/badge/Arch%20%2F%20CachyOS-Hyprland-1793d1)
+![QuickShell 0.3+](https://img.shields.io/badge/QuickShell-0.3%2B-b9a3e3)
+![Wayland](https://img.shields.io/badge/Wayland-1c1b2e)
+
 **Instalador y gestor universal de aplicaciones de un clic para Arch / CachyOS**, con interfaz [QuickShell](https://quickshell.outfoxxed.me/) (Wayland / Hyprland) y estética *CONTROL DECK*.
 
 Arrastra un paquete y se instala solo, gestiona/edita/desinstala las apps de tu menú, y busca e instala software por nombre desde los repos, AUR y Flatpak — todo desde una misma ventana.
@@ -42,6 +47,8 @@ La ventana tiene tres pestañas:
   - **Repos** → `pkexec pacman -S`
   - **Flatpak** → `flatpak install --user`
   - **AUR** → abre un terminal con `paru`/`yay` para el build interactivo
+
+> 🔔 Notificaciones de escritorio (`notify-send`) al terminar cualquier instalación o desinstalación.
 
 ---
 
@@ -110,6 +117,21 @@ bind = SUPER SHIFT, I, exec, pkill -xf "qs -c install-any" || qs -c install-any
 ```
 
 Abre/cierra el deck con **SUPER + SHIFT + I**.
+
+---
+
+## ❓ Instalar una app desde un repo de GitHub
+
+El deck instala **paquetes**, no repositorios. Cuando encuentres un proyecto en GitHub, mira **qué ofrece**:
+
+| Lo que publica el proyecto | Cómo instalarlo |
+|---|---|
+| Está en el **AUR** | Pestaña **STORE** → buscar → **INSTALL** |
+| Tiene **releases** con `.AppImage` / `.flatpak` / `.tar.*` / `.pkg.tar.*` | Descarga el asset → pestaña **INSTALL** (arrástralo) |
+| Solo **código fuente** con un `PKGBUILD` | `git clone` + `makepkg -si` (a mano) |
+| Solo código con `install.sh` / Makefile | Sigue el README del propio proyecto |
+
+Es decir: si algo **no está en repos/AUR/Flatpak ni publica un binario**, hay que compilarlo siguiendo las instrucciones de su repositorio.
 
 ---
 
