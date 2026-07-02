@@ -78,10 +78,14 @@ cd app_install
 ./install.sh
 ```
 
-Esto copia:
-- `bin/install-any` → `~/.local/bin/install-any` (lógica en bash)
-- `quickshell/shell.qml` → `~/.config/quickshell/install-any/shell.qml` (GUI)
-- `install-any.desktop` → `~/.local/share/applications/` (lanzador)
+`install.sh`:
+1. **Comprueba e instala las dependencias que falten** (repos con `pacman`, AUR con `paru`/`yay` si hace falta). No fuerza la Nerd Font si ya tienes alguna instalada.
+2. Copia los archivos:
+   - `bin/install-any` → `~/.local/bin/install-any` (lógica en bash)
+   - `quickshell/shell.qml` → `~/.config/quickshell/install-any/shell.qml` (GUI)
+   - `install-any.desktop` → `~/.local/share/applications/` (lanzador)
+
+> ¿Solo copiar sin tocar dependencias? → `./install.sh --no-deps`
 
 Asegúrate de tener `~/.local/bin` en tu `PATH`.
 
