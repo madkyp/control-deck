@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install Any
+Comment=Instala AppImage, pkg.tar, flatpak y tar con un clic
+Exec=qs -c install-any
+Icon=system-software-install
+Terminal=false
+Categories=System;Utility;

@@ -1,0 +1,809 @@
+#!/usr/bin/env bash
+# install-any — universal one-click package installer for Arch/CachyOS
+#
+#   install-any detect  <file>   -> prints metadata (TYPE/NAME/SUPPORTED/DESC)
+#   install-any install <file>   -> installs the file, streaming progress
+#
+# Supported: .AppImage  .pkg.tar.{zst,xz,gz,-}  .flatpak  tarballs
+# Detected but NOT installed on Arch: .deb  .rpm  (foreign formats)
+#
+# Progress protocol (install): plain human-readable lines on stdout.
+# Exit codes: 0 ok · 2 usage · 3 unsupported format · 4 install failure
+
+set -o pipefail
+
+APPS_DIR="${INSTALL_ANY_APPS_DIR:-$HOME/Applications}"
+DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons"
+
+log()  { printf '%s\n' "$*"; }
+err()  { printf 'ERROR: %s\n' "$*" >&2; }
+# desktop notification (no-op if notify-send is missing)
+notify() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    notify-send -a "Install Deck" -i "${3:-system-software-install}" "$1" "$2" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Format detection — returns a type keyword on stdout.
+# Order matters: .pkg.tar.* must win over the generic .tar.* rule.
+# ---------------------------------------------------------------------------
+detect_type() {
+    local f="${1,,}"   # lowercase copy for matching
+    case "$f" in
+        *.appimage)                                 echo appimage ;;
+        *.pkg.tar.zst|*.pkg.tar.xz|*.pkg.tar.gz|*.pkg.tar) echo pacman ;;
+        *.flatpak)                                  echo flatpak ;;
+        *.deb)                                      echo deb ;;
+        *.rpm)                                      echo rpm ;;
+        *.tar|*.tar.gz|*.tgz|*.tar.xz|*.tar.zst|*.tar.bz2) echo tar ;;
+        *)                                          echo unknown ;;
+    esac
+}
+
+type_label() {
+    case "$1" in
+        appimage) echo "AppImage" ;;
+        pacman)   echo "Paquete Arch (pacman)" ;;
+        flatpak)  echo "Flatpak bundle" ;;
+        deb)      echo "Debian (.deb)" ;;
+        rpm)      echo "RPM (.rpm)" ;;
+        tar)      echo "Archivo tar" ;;
+        *)        echo "Desconocido" ;;
+    esac
+}
+
+is_supported() {
+    case "$1" in
+        appimage|pacman|flatpak|tar) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+type_desc() {
+    case "$1" in
+        appimage) echo "Se copia a ~/Applications, se hace ejecutable y se crea un lanzador." ;;
+        pacman)   echo "Se instala con pacman -U (pedirá contraseña de administrador)." ;;
+        flatpak)  echo "Se instala como bundle de usuario con flatpak." ;;
+        tar)      echo "Se extrae a ~/Applications/<nombre> (uso portable)." ;;
+        deb)      echo "Formato Debian: no es nativo de Arch, no se instalará." ;;
+        rpm)      echo "Formato RPM: no es nativo de Arch, no se instalará." ;;
+        *)        echo "Formato no reconocido." ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# detect subcommand — machine-readable KEY=VALUE lines for the GUI
+# ---------------------------------------------------------------------------
+cmd_detect() {
+    local file="$1" t
+    t="$(detect_type "$file")"
+    printf 'TYPE=%s\n'      "$t"
+    printf 'LABEL=%s\n'     "$(type_label "$t")"
+    printf 'NAME=%s\n'      "$(basename "$file")"
+    printf 'SUPPORTED=%s\n' "$(is_supported "$t" && echo yes || echo no)"
+    printf 'DESC=%s\n'      "$(type_desc "$t")"
+}
+
+# ---------------------------------------------------------------------------
+# AppImage: copy, chmod, extract .desktop/icon, write a launcher entry
+# ---------------------------------------------------------------------------
+install_appimage() {
+    local src="$1"
+    local base; base="$(basename "$src")"
+    local name="${base%.[Aa]pp[Ii]mage}"
+    local dest="$APPS_DIR/$base"
+
+    mkdir -p "$APPS_DIR" "$DESKTOP_DIR" "$ICON_DIR"
+    log "→ Copiando a $dest"
+    cp -f "$src" "$dest" || { err "no se pudo copiar"; return 4; }
+    chmod +x "$dest"
+
+    log "→ Extrayendo metadatos (.desktop / icono)…"
+    local tmp; tmp="$(mktemp -d)"
+    (
+        cd "$tmp" || exit 1
+        "$dest" --appimage-extract '*.desktop' >/dev/null 2>&1
+        "$dest" --appimage-extract '.DirIcon'  >/dev/null 2>&1
+        "$dest" --appimage-extract '*.png'     >/dev/null 2>&1
+        "$dest" --appimage-extract '*.svg'     >/dev/null 2>&1
+    )
+
+    local root="$tmp/squashfs-root"
+    local exec_line="\"$dest\" %U"
+    local icon="$name"
+
+    # Prefer an icon shipped inside the AppImage
+    local found_icon
+    found_icon="$(readlink -f "$root/.DirIcon" 2>/dev/null)"
+    if [[ -z "$found_icon" || ! -f "$found_icon" ]]; then
+        found_icon="$(find "$root" -maxdepth 3 -type f \( -iname '*.png' -o -iname '*.svg' \) 2>/dev/null | head -1)"
+    fi
+    if [[ -n "$found_icon" && -f "$found_icon" ]]; then
+        local ext="${found_icon##*.}"
+        cp -f "$found_icon" "$ICON_DIR/$name.$ext" 2>/dev/null && icon="$ICON_DIR/$name.$ext"
+        log "→ Icono guardado en $icon"
+    fi
+
+    log "→ Creando lanzador $DESKTOP_DIR/$name.desktop"
+    cat > "$DESKTOP_DIR/$name.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$name
+Exec=$exec_line
+Icon=$icon
+Terminal=false
+Categories=Utility;
+X-Created-By=install-any
+EOF
+
+    rm -rf "$tmp"
+    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1
+    log "✔ AppImage instalado. Búscalo como \"$name\" en tu lanzador."
+}
+
+# ---------------------------------------------------------------------------
+# Arch package via pacman (root through polkit)
+# ---------------------------------------------------------------------------
+install_pacman() {
+    local src="$1"
+    log "→ Instalando con pacman (se pedirá autorización de administrador)…"
+    if pkexec pacman -U --noconfirm -- "$src"; then
+        log "✔ Paquete instalado con pacman."
+    else
+        err "pacman falló (dependencias faltantes o autorización cancelada)."
+        return 4
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Flatpak single-file bundle (user scope, no root)
+# ---------------------------------------------------------------------------
+install_flatpak() {
+    local src="$1"
+    log "→ Instalando bundle Flatpak (usuario)…"
+    if flatpak install --user -y "$src"; then
+        log "✔ Flatpak instalado."
+    else
+        err "flatpak install falló (¿falta el runtime? prueba a añadir Flathub)."
+        return 4
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Generic tarball: extract to ~/Applications/<name> (portable, no real install)
+# ---------------------------------------------------------------------------
+install_tar() {
+    local src="$1"
+    local base; base="$(basename "$src")"
+    # strip common tar extensions to name the folder
+    local name="$base"
+    name="${name%.tar.gz}"; name="${name%.tar.xz}"; name="${name%.tar.zst}"
+    name="${name%.tar.bz2}"; name="${name%.tgz}"; name="${name%.tar}"
+    local dest="$APPS_DIR/$name"
+
+    mkdir -p "$dest"
+    log "→ Extrayendo en $dest"
+    if bsdtar -xf "$src" -C "$dest"; then
+        log "✔ Extraído. Contenido en: $dest"
+        log "  (tarball genérico: revisa el README/ejecutable dentro de esa carpeta)"
+    else
+        err "no se pudo extraer el archivo."
+        return 4
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# install subcommand
+# ---------------------------------------------------------------------------
+cmd_install() {
+    local file="$1" t
+    [[ -f "$file" ]] || { err "no existe el archivo: $file"; return 2; }
+    t="$(detect_type "$file")"
+    log "Archivo:  $(basename "$file")"
+    log "Formato:  $(type_label "$t")"
+    log "─────────────────────────────────────────"
+
+    case "$t" in
+        appimage) install_appimage "$file" ;;
+        pacman)   install_pacman   "$file" ;;
+        flatpak)  install_flatpak  "$file" ;;
+        tar)      install_tar      "$file" ;;
+        deb|rpm)
+            err "$(type_label "$t") no es un formato nativo de Arch/CachyOS."
+            err "Busca la versión .pkg.tar.zst (AUR), Flatpak o AppImage de esta app."
+            return 3 ;;
+        *)
+            err "Formato no reconocido. Extensiones soportadas: AppImage, pkg.tar.*, flatpak, tar.*"
+            return 3 ;;
+    esac
+}
+
+# ===========================================================================
+# App management (edit name/icon · uninstall) over .desktop entries
+# ===========================================================================
+APP_DIRS=(
+    "$HOME/.local/share/applications"
+    "$HOME/.local/share/flatpak/exports/share/applications"
+    "/var/lib/flatpak/exports/share/applications"
+    "/usr/share/applications"
+    "/usr/local/share/applications"
+)
+
+# read a key from the [Desktop Entry] group (first match)
+dget() {
+    local file="$1" key="$2"
+    awk -F= -v k="$key" '
+        /^\[/{ ent = ($0 ~ /^\[Desktop Entry\]/) ? 1 : 0; next }
+        ent && $1 == k { sub(/^[^=]*=/, ""); print; exit }
+    ' "$file"
+}
+
+# The meaningful program invoked by an Exec line, unwrapping `env`,
+# leading VAR=value assignments, field codes and quotes.
+exec_bin() {
+    local e="$1" t
+    read -ra _toks <<< "$e"
+    local i=0
+    while [[ $i -lt ${#_toks[@]} ]]; do
+        t="${_toks[$i]//\"/}"
+        case "$t" in
+            env)  ((i++)); continue ;;   # skip the env wrapper
+            *=*)  ((i++)); continue ;;   # skip VAR=value assignments
+            %*)   ((i++)); continue ;;   # skip field codes
+            *)    break ;;
+        esac
+    done
+    echo "${_toks[$i]//\"/}"
+}
+
+# packages that are generic wrappers, never the "app" itself
+is_wrapper_pkg() {
+    case "$1" in
+        coreutils|bash|sh|dash|zsh|filesystem|glibc|systemd|util-linux|\
+        which|env|sudo|wine|wine-staging|wine-stable|proton|dosbox|dosbox-staging|dosbox-x)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# resolve an Icon= value (name or path) to an actual file, or empty
+resolve_icon() {
+    local ic="$1"
+    [[ -z "$ic" ]] && return
+    if [[ "$ic" = /* && -f "$ic" ]]; then echo "$ic"; return; fi
+    local d s
+    for d in "$HOME/.local/share/icons" /usr/share/icons/hicolor/256x256/apps \
+             /usr/share/icons/hicolor/128x128/apps /usr/share/icons/hicolor/scalable/apps \
+             /usr/share/pixmaps; do
+        for s in png svg svgz xpm; do
+            [[ -f "$d/$ic.$s" ]] && { echo "$d/$ic.$s"; return; }
+        done
+    done
+    # last resort: first hit anywhere in hicolor
+    find /usr/share/icons/hicolor -type f -name "$ic.*" 2>/dev/null | head -1
+}
+
+# fast icon resolver for the list — direct dir/ext checks only, no find fallback
+resolve_icon_fast() {
+    local ic="$1"; [[ -z "$ic" ]] && return
+    if [[ "$ic" = /* ]]; then [[ -f "$ic" ]] && echo "$ic"; return; fi
+    local d s
+    for d in "$HOME/.local/share/icons" \
+             "$HOME/.local/share/flatpak/exports/share/icons/hicolor/scalable/apps" \
+             "$HOME/.local/share/flatpak/exports/share/icons/hicolor/256x256/apps" \
+             "$HOME/.local/share/flatpak/exports/share/icons/hicolor/128x128/apps" \
+             /var/lib/flatpak/exports/share/icons/hicolor/scalable/apps \
+             /var/lib/flatpak/exports/share/icons/hicolor/256x256/apps \
+             /var/lib/flatpak/exports/share/icons/hicolor/128x128/apps \
+             /usr/share/icons/hicolor/scalable/apps \
+             /usr/share/icons/hicolor/256x256/apps \
+             /usr/share/icons/hicolor/128x128/apps \
+             /usr/share/icons/hicolor/64x64/apps \
+             /usr/share/icons/hicolor/48x48/apps \
+             /usr/share/pixmaps; do
+        for s in png svg xpm; do
+            [[ -f "$d/$ic.$s" ]] && { echo "$d/$ic.$s"; return; }
+        done
+    done
+}
+
+# coarse source for the list (no pacman lookup — kept fast)
+coarse_source() {
+    local path="$1" exec="$2"
+    case "$path" in
+        *"/flatpak/exports/share/applications/"*) echo flatpak; return ;;
+    esac
+    [[ "$exec" == *"flatpak run"* ]] && { echo flatpak; return; }
+    grep -q "^X-Created-By=install-any" "$path" 2>/dev/null && { echo appimage; return; }
+    case "$path" in
+        "$HOME/"*) echo user ;;
+        *)         echo system ;;
+    esac
+}
+
+# refined source (used on selection / uninstall) — may hit pacman
+refine_source() {
+    local path="$1" exec="$2" cs
+    cs="$(coarse_source "$path" "$exec")"
+    if [[ "$cs" == flatpak || "$cs" == appimage ]]; then echo "$cs"; return; fi
+    # game/store shortcuts launch a shared client — don't map them to that package
+    case "$exec" in
+        *steam://*|*lutris:*|*heroic://*|*com.heroicgameslauncher*) echo user; return ;;
+    esac
+    local bin; bin="$(exec_bin "$exec")"
+    # Wine / Proton / DOSBox launchers → not a native package
+    case "$exec" in *WINEPREFIX=*|*.exe*|*.lnk*) echo wine; return ;; esac
+    case "$bin" in wine|wine64|*/wine|*/wine64) echo wine; return ;; esac
+    case "$bin" in dosbox|dosbox-x|*/dosbox|*/dosbox-x) echo dosbox; return ;; esac
+    # native binary → owning package (ignoring generic wrappers like coreutils/bash)
+    [[ "$bin" != /* ]] && bin="$(command -v "$bin" 2>/dev/null)"
+    if [[ -n "$bin" ]]; then
+        local pkg; pkg="$(pacman -Qoq "$bin" 2>/dev/null)"
+        if [[ -n "$pkg" ]] && ! is_wrapper_pkg "$pkg"; then echo pacman; return; fi
+    fi
+    echo "$cs"
+}
+
+# Manual removal fallback: launcher + icon + (home-local) executable
+manual_remove() {
+    local f="$1" exec bin icon
+    exec="$(dget "$f" Exec)"; bin="$(exec_bin "$exec")"; icon="$(dget "$f" Icon)"
+    [[ "$bin" != /* ]] && bin="$(command -v "$bin" 2>/dev/null)"
+    rm -f "$f"; log "→ borrado lanzador $(basename "$f")"
+    [[ "$icon" = "$HOME/.local/share/icons/"* && -f "$icon" ]] && { rm -f "$icon"; log "→ borrado icono"; }
+    if [[ "$bin" = "$HOME/"* && -f "$bin" ]]; then
+        rm -f "$bin"; log "→ borrado ejecutable $bin"
+    fi
+    update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1
+    log "✔ Limpieza manual completada."
+}
+
+flatpak_appid() {
+    local path="$1" exec="$2"
+    # try the appid embedded in the Exec line
+    local id; id="$(grep -oE 'flatpak run [^ ]*[[:space:]-]*([A-Za-z0-9_]+\.[A-Za-z0-9_.]+)' <<<"$exec" \
+                    | grep -oE '[A-Za-z0-9_]+\.[A-Za-z0-9_.]+' | tail -1)"
+    [[ -n "$id" ]] && { echo "$id"; return; }
+    # fall back to the .desktop basename (flatpak names them by appid)
+    basename "$path" .desktop
+}
+
+# --- list: JSON array of visible application entries -----------------------
+cmd_list() {
+    local seen="" f name exec icon nodisp type src
+    {
+        echo "["
+        local first=1
+        for dir in "${APP_DIRS[@]}"; do
+            [[ -d "$dir" ]] || continue
+            for f in "$dir"/*.desktop; do
+                [[ -f "$f" ]] || continue
+                local bn; bn="$(basename "$f")"
+                case " $seen " in *" $bn "*) continue ;; esac   # user overrides win
+                seen="$seen $bn"
+                type="$(dget "$f" Type)"
+                [[ "$type" == "Application" || -z "$type" ]] || continue
+                nodisp="$(dget "$f" NoDisplay)"
+                [[ "${nodisp,,}" == "true" ]] && continue
+                name="$(dget "$f" Name)"; [[ -z "$name" ]] && name="$bn"
+                exec="$(dget "$f" Exec)"
+                icon="$(dget "$f" Icon)"
+                src="$(coarse_source "$f" "$exec")"
+                local resolved; resolved="$(resolve_icon_fast "$icon")"
+                [[ $first -eq 0 ]] && echo ","
+                first=0
+                jq -n --arg n "$name" --arg p "$f" --arg i "$icon" \
+                      --arg e "$exec" --arg s "$src" --arg r "$resolved" \
+                      '{name:$n,path:$p,icon:$i,exec:$e,source:$s,resolved:$r}'
+            done
+        done
+        echo "]"
+    }
+}
+
+# --- appinfo: KEY=VALUE detail for one .desktop ----------------------------
+cmd_appinfo() {
+    local f="$1"
+    [[ -f "$f" ]] || { err "no existe: $f"; return 2; }
+    local name exec icon src pkg appimg
+    name="$(dget "$f" Name)"
+    exec="$(dget "$f" Exec)"
+    icon="$(dget "$f" Icon)"
+    src="$(refine_source "$f" "$exec")"
+    printf 'NAME=%s\n' "$name"
+    printf 'EXEC=%s\n' "$exec"
+    printf 'ICON=%s\n' "$icon"
+    printf 'RESOLVED_ICON=%s\n' "$(resolve_icon "$icon")"
+    printf 'SOURCE=%s\n' "$src"
+    case "$src" in
+        pacman)
+            local bin; bin="$(exec_bin "$exec")"
+            [[ "$bin" != /* ]] && bin="$(command -v "$bin" 2>/dev/null)"
+            pkg="$(pacman -Qoq "$bin" 2>/dev/null)"
+            printf 'PKG=%s\n' "$pkg"
+            printf 'ACTION=Elimina el paquete %s con pacman -Rns (pedirá contraseña).\n' "$pkg" ;;
+        flatpak)
+            printf 'APPID=%s\n' "$(flatpak_appid "$f" "$exec")"
+            printf 'ACTION=Desinstala el bundle Flatpak (usuario).\n' ;;
+        appimage)
+            appimg="$(exec_bin "$exec")"
+            printf 'APPIMAGE=%s\n' "$appimg"
+            printf 'ACTION=Borra el AppImage, su icono y el lanzador.\n' ;;
+        wine)
+            printf 'ACTION=App de Wine: quita el acceso directo del menú. El programa sigue en el WINEPREFIX (usa «wine uninstaller» para borrarlo del todo).\n' ;;
+        dosbox)
+            printf 'ACTION=Juego DOSBox: quita el lanzador y, si los archivos están en tu carpeta personal, el ejecutable.\n' ;;
+        user)
+            printf 'ACTION=Elimina el lanzador .desktop de tu usuario.\n' ;;
+        system)
+            printf 'ACTION=Entrada del sistema sin paquete asociado: no se puede desinstalar de forma segura.\n' ;;
+    esac
+}
+
+# Make an icon persistent: copy a chosen file into our managed icon dir so
+# it survives even if the original source file is later moved/deleted.
+# Prints the value to store in Icon= on stdout; progress goes to stderr.
+persist_icon() {
+    local target="$1" icon="$2"
+    [[ -z "$icon" ]] && { echo ""; return; }
+    # themed icon name (not a path) → already persistent via the icon theme
+    [[ "$icon" != /* ]] && { echo "$icon"; return; }
+    local icondir="$HOME/.local/share/icons"
+    # already inside our managed dir → nothing to do
+    case "$icon" in "$icondir/"*) echo "$icon"; return ;; esac
+    if [[ ! -f "$icon" ]]; then
+        printf '⚠ icono no encontrado: %s (se guarda la ruta tal cual)\n' "$icon" >&2
+        echo "$icon"; return
+    fi
+    mkdir -p "$icondir"
+    local slug ext dest
+    slug="$(basename "$target" .desktop | tr ' /:' '___')"
+    ext="${icon##*.}"; [[ "$ext" == "$icon" ]] && ext="png"
+    dest="$icondir/install-any-$slug.$ext"
+    if cp -f "$icon" "$dest" 2>/dev/null; then
+        printf '→ icono copiado a %s (persistente)\n' "$dest" >&2
+        echo "$dest"
+    else
+        printf '⚠ no se pudo copiar el icono; se guarda la ruta original\n' >&2
+        echo "$icon"
+    fi
+}
+
+# --- edit: change Name / Icon (writes to the user dir, overriding system) --
+cmd_edit() {
+    local f="$1" newname="$2" newicon="$3"
+    [[ -f "$f" ]] || { err "no existe: $f"; return 2; }
+
+    local target="$f"
+    case "$f" in
+        "$HOME/"*) : ;;  # already writable by user
+        *) target="$HOME/.local/share/applications/$(basename "$f")"
+           log "→ Entrada del sistema: creando copia editable en $target" ;;
+    esac
+
+    # copy the icon into our store so it doesn't break if the source is removed
+    local iconval; iconval="$(persist_icon "$target" "$newicon")"
+
+    mkdir -p "$HOME/.local/share/applications"
+    local tmp; tmp="$(mktemp)"
+    awk -v name="$newname" -v icon="$iconval" '
+        BEGIN{ ent=0; dn=0; di=0 }
+        /^\[/{
+            if (ent) {
+                if (!dn && name!="") { print "Name=" name; dn=1 }
+                if (!di && icon!="") { print "Icon=" icon; di=1 }
+            }
+            ent = ($0 ~ /^\[Desktop Entry\]/) ? 1 : 0
+            print; next
+        }
+        {
+            if (ent && $0 ~ /^Name=/  && name!="") { if(!dn){print "Name=" name; dn=1}; next }
+            if (ent && $0 ~ /^Icon=/  && icon!="") { if(!di){print "Icon=" icon; di=1}; next }
+            print
+        }
+        END{
+            if (ent) {
+                if (!dn && name!="") print "Name=" name
+                if (!di && icon!="") print "Icon=" icon
+            }
+        }
+    ' "$f" > "$tmp" || { err "fallo al procesar"; rm -f "$tmp"; return 4; }
+
+    mv "$tmp" "$target"
+    chmod +x "$target" 2>/dev/null
+    update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1
+    log "✔ Guardado: $(basename "$target")"
+    [[ -n "$newname" ]] && log "  Nombre: $newname"
+    [[ -n "$iconval" ]] && log "  Icono:  $iconval"
+}
+
+# --- uninstall: remove the app according to its source ---------------------
+cmd_uninstall() {
+    local f="$1"
+    [[ -f "$f" ]] || { err "no existe: $f"; return 2; }
+    local exec src; exec="$(dget "$f" Exec)"; src="$(refine_source "$f" "$exec")"
+    log "Desinstalando: $(basename "$f")"
+    log "Origen: $src"
+    log "─────────────────────────────────────────"
+
+    case "$src" in
+        flatpak)
+            local id; id="$(flatpak_appid "$f" "$exec")"
+            log "→ flatpak uninstall $id"
+            flatpak uninstall -y "$id" || { err "flatpak uninstall falló"; return 4; }
+            log "✔ Flatpak desinstalado." ;;
+        appimage)
+            local img icon; img="$(exec_bin "$exec")"; icon="$(dget "$f" Icon)"
+            [[ -f "$img" ]] && { rm -f "$img"; log "→ borrado $img"; }
+            [[ "$icon" = "$HOME/.local/share/icons/"* && -f "$icon" ]] && \
+                { rm -f "$icon"; log "→ borrado icono $icon"; }
+            rm -f "$f"; log "→ borrado lanzador $(basename "$f")"
+            log "✔ AppImage desinstalado." ;;
+        pacman)
+            local bin pkg; bin="$(exec_bin "$exec")"
+            [[ "$bin" != /* ]] && bin="$(command -v "$bin" 2>/dev/null)"
+            pkg="$(pacman -Qoq "$bin" 2>/dev/null)"
+            if [[ -z "$pkg" ]]; then
+                err "no se pudo determinar el paquete; probando limpieza manual…"
+                manual_remove "$f"; return 0
+            fi
+            log "→ pkexec pacman -Rns $pkg (autorización requerida)"
+            if pkexec pacman -Rns --noconfirm "$pkg"; then
+                log "✔ Paquete $pkg eliminado."
+            else
+                err "pacman -Rns falló (dependencias en uso o cancelado)."
+                log "→ probando otra vía: limpieza manual del lanzador…"
+                manual_remove "$f"
+            fi ;;
+        wine)
+            rm -f "$f"; log "→ borrado acceso directo $(basename "$f")"
+            update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1
+            log "✔ Quitado del menú. El programa Windows sigue instalado en el WINEPREFIX."
+            log "  Para borrarlo del todo:  wine uninstaller   (o WINEPREFIX=<ruta> wine uninstaller)" ;;
+        dosbox)
+            manual_remove "$f" ;;
+        user)
+            manual_remove "$f" ;;
+        system)
+            err "Entrada del sistema sin paquete asociado: no se desinstala por seguridad."
+            return 3 ;;
+        *) err "origen desconocido"; return 4 ;;
+    esac
+    update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1
+}
+
+# --- pickfile: native file chooser (zenity), prints chosen path ------------
+cmd_pickfile() {
+    local title="${1:-Selecciona un archivo}"
+    if command -v zenity >/dev/null; then
+        zenity --file-selection --title="$title" 2>/dev/null
+    elif command -v kdialog >/dev/null; then
+        kdialog --getopenfilename "$HOME" 2>/dev/null
+    else
+        err "no hay selector de archivos (instala zenity)"; return 1
+    fi
+}
+
+# --- rmpreview: show what `pacman -Rns` would remove (Feature 1) -----------
+cmd_rmpreview() {
+    local f="$1"
+    [[ -f "$f" ]] || { err "no existe: $f"; return 2; }
+    local exec src; exec="$(dget "$f" Exec)"; src="$(refine_source "$f" "$exec")"
+    if [[ "$src" != pacman ]]; then
+        echo "No es un paquete pacman — nada que previsualizar."
+        return 0
+    fi
+    local bin pkg; bin="$(exec_bin "$exec")"
+    [[ "$bin" != /* ]] && bin="$(command -v "$bin" 2>/dev/null)"
+    pkg="$(pacman -Qoq "$bin" 2>/dev/null)"
+    [[ -z "$pkg" ]] && { echo "No se pudo determinar el paquete."; return 0; }
+    echo "Se ejecutará:  pacman -Rns $pkg"
+    echo "Paquetes que se eliminarían:"
+    # -Rs (recursive) for the preview; real removal uses -Rns
+    local out
+    if out="$(pacman -Rs --print --print-format '  • %n %v' "$pkg" 2>&1)"; then
+        printf '%s\n' "$out"
+        echo "Total: $(grep -c '•' <<<"$out") paquete(s)."
+    else
+        echo "⚠ pacman no puede eliminarlo directamente:"
+        printf '%s\n' "$out"
+    fi
+}
+
+# --- detectmany / installmany: batch queue (Feature 6) ---------------------
+cmd_detectmany() {
+    echo "["
+    local first=1 f t
+    for f in "$@"; do
+        t="$(detect_type "$f")"
+        [[ $first -eq 0 ]] && echo ","
+        first=0
+        jq -n --arg p "$f" --arg n "$(basename "$f")" --arg t "$t" \
+              --arg l "$(type_label "$t")" \
+              --arg s "$(is_supported "$t" && echo yes || echo no)" \
+              '{path:$p,name:$n,type:$t,label:$l,supported:$s}'
+    done
+    echo "]"
+}
+
+cmd_installmany() {
+    local total=$# ok=0 fail=0 f rc
+    log "Cola de instalación: $total archivo(s)"
+    log "═════════════════════════════════════════"
+    for f in "$@"; do
+        log ""
+        log "▶ $(basename "$f")"
+        if cmd_install "$f"; then ((ok++)); else ((fail++)); fi
+    done
+    log ""
+    log "═════════════════════════════════════════"
+    log "Resumen: $ok correcto(s), $fail con error."
+    notify "Instalación en lote" "$ok correcto(s), $fail con error"
+    [[ $fail -eq 0 ]]
+}
+
+# ===========================================================================
+# Search & install by name — repos (pacman) · AUR · Flatpak (Feature 8)
+# ===========================================================================
+
+# pick a terminal emulator for interactive AUR builds
+term_cmd() {
+    local t
+    for t in "$TERMINAL" kitty alacritty foot wezterm xterm; do
+        [[ -n "$t" ]] && command -v "$t" >/dev/null 2>&1 && { echo "$t"; return; }
+    done
+}
+
+search_repo() {
+    local q="$1" ipkgs="$2" count=0 header="" line first repo name ver inst desc seen=""
+    while IFS= read -r line; do
+        if [[ "$line" == [!$' \t']* ]]; then
+            header="$line"
+        else
+            [[ -z "$header" ]] && continue
+            desc="${line#"${line%%[![:space:]]*}"}"
+            first="${header%% *}"; repo="${first%%/*}"; name="${first#*/}"
+            case " $seen " in *" $name "*) header=""; continue ;; esac  # dedup across repos
+            seen="$seen $name"
+            ver="$(awk '{print $2}' <<<"$header")"
+            inst=false; grep -qxF "$name" <<<"$ipkgs" && inst=true
+            jq -c -n --arg s repo --arg n "$name" --arg id "$name" \
+               --arg v "$ver" --arg d "$desc" --arg r "$repo" --argjson inst "$inst" \
+               '{source:$s,name:$n,id:$id,version:$v,desc:$d,remote:$r,installed:$inst}'
+            header=""
+            ((count++)); [[ $count -ge 30 ]] && break
+        fi
+    done < <(pacman -Ss -- "$q" 2>/dev/null)
+}
+
+search_aur() {
+    local q="$1" ipkgs="$2" names uri
+    names="$(printf '%s' "$ipkgs" | jq -R . | jq -s .)"
+    uri="$(jq -rn --arg x "$q" '$x|@uri')"
+    curl -s --max-time 8 "https://aur.archlinux.org/rpc/?v=5&type=search&arg=$uri" 2>/dev/null \
+    | jq -c --arg s aur --argjson names "$names" '
+        (.results // []) | sort_by(-(.Popularity // 0))[:30][] | .Name as $n |
+        {source:$s, name:$n, id:$n, version:.Version,
+         desc:(.Description // ""), remote:"aur",
+         installed: (($names | index($n)) != null)}' 2>/dev/null
+}
+
+search_flatpak() {
+    local q="$1" iflat="$2" count=0 name appid ver desc remotes remote inst
+    while IFS=$'\t' read -r name appid ver desc remotes; do
+        [[ -z "$appid" || "$appid" == "Application ID" ]] && continue
+        remote="${remotes%%,*}"
+        inst=false; grep -qxF "$appid" <<<"$iflat" && inst=true
+        jq -c -n --arg s flatpak --arg n "$name" --arg id "$appid" \
+           --arg v "$ver" --arg d "$desc" --arg r "$remote" --argjson inst "$inst" \
+           '{source:$s,name:$n,id:$id,version:$v,desc:$d,remote:$r,installed:$inst}'
+        ((count++)); [[ $count -ge 30 ]] && break
+    done < <(flatpak search --columns=name,application,version,description,remotes "$q" 2>/dev/null)
+}
+
+cmd_search() {
+    local q="$1"
+    [[ -z "$q" ]] && { echo "[]"; return 0; }
+    local ipkgs iflat
+    ipkgs="$(pacman -Qq 2>/dev/null)"
+    iflat="$(flatpak list --columns=application 2>/dev/null)"
+    {
+        search_repo    "$q" "$ipkgs"
+        search_aur     "$q" "$ipkgs"
+        search_flatpak "$q" "$iflat"
+    } | jq -s '.'
+}
+
+install_aur() {
+    local id="$1" helper term
+    helper="$(command -v paru || command -v yay)"
+    [[ -z "$helper" ]] && { err "no hay helper de AUR (instala paru o yay)"; return 4; }
+    term="$(term_cmd)"
+    [[ -z "$term" ]] && { err "no se encontró un terminal para compilar"; return 4; }
+    log "→ Abriendo terminal para compilar '$id' desde AUR con $(basename "$helper")…"
+    setsid "$term" -e bash -c \
+        "$helper -S --needed -- $(printf '%q' "$id"); echo; read -n1 -rp 'Terminado. Pulsa una tecla para cerrar…'" \
+        >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    log "✔ Terminal abierto. Sigue ahí el progreso (pedirá tu contraseña sudo)."
+}
+
+cmd_installpkg() {
+    local src="$1" id="$2" remote="$3"
+    [[ -n "$id" ]] || { err "falta el nombre del paquete"; return 2; }
+    case "$src" in
+        repo)
+            log "→ pkexec pacman -S $id (autorización requerida)"
+            if pkexec pacman -S --needed --noconfirm -- "$id"; then
+                log "✔ $id instalado desde los repos."
+            else err "pacman -S falló (cancelado o conflicto)."; return 4; fi ;;
+        aur)
+            install_aur "$id" ;;
+        flatpak)
+            log "→ flatpak install --user $remote $id"
+            local ok=1
+            if [[ -n "$remote" && "$remote" != "aur" ]]; then
+                flatpak install --user -y --noninteractive "$remote" "$id" && ok=0
+            else
+                flatpak install --user -y --noninteractive "$id" && ok=0
+            fi
+            if [[ $ok -eq 0 ]]; then log "✔ $id instalado (Flatpak)."
+            else err "flatpak install falló."; return 4; fi ;;
+        *) err "origen desconocido: $src"; return 2 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+main() {
+    local sub="$1"; shift 2>/dev/null
+    case "$sub" in
+        detect)  [[ -n "$1" ]] || { err "falta el archivo"; exit 2; }; cmd_detect  "$1" ;;
+        install)
+            [[ -n "$1" ]] || { err "falta el archivo"; exit 2; }
+            cmd_install "$1"; rc=$?
+            if [[ $rc -eq 0 ]]; then notify "Instalado ✓" "$(basename "$1")"
+            else notify "Fallo al instalar ✗" "$(basename "$1")" dialog-error; fi
+            exit $rc ;;
+        installmany)
+            [[ -n "$1" ]] || { err "faltan archivos"; exit 2; }
+            cmd_installmany "$@"; exit $? ;;
+        detectmany) cmd_detectmany "$@" ;;
+        list)    cmd_list ;;
+        appinfo) [[ -n "$1" ]] || { err "falta el .desktop"; exit 2; }; cmd_appinfo "$1" ;;
+        rmpreview) [[ -n "$1" ]] || { err "falta el .desktop"; exit 2; }; cmd_rmpreview "$1" ;;
+        edit)
+            [[ -n "$1" ]] || { err "falta el .desktop"; exit 2; }
+            cmd_edit "$1" "$2" "$3"; rc=$?
+            [[ $rc -eq 0 ]] && notify "Guardado ✓" "$2"
+            exit $rc ;;
+        uninstall)
+            [[ -n "$1" ]] || { err "falta el .desktop"; exit 2; }
+            cmd_uninstall "$1"; rc=$?
+            if [[ $rc -eq 0 ]]; then notify "Desinstalado ✓" "$(basename "$1" .desktop)"
+            else notify "Fallo al desinstalar ✗" "$(basename "$1" .desktop)" dialog-error; fi
+            exit $rc ;;
+        pickfile) cmd_pickfile "$1" ;;
+        search)   cmd_search "$1" ;;
+        installpkg)
+            [[ -n "$2" ]] || { err "faltan argumentos (source id [remote])"; exit 2; }
+            cmd_installpkg "$1" "$2" "$3"; rc=$?
+            if [[ "$1" != aur ]]; then
+                if [[ $rc -eq 0 ]]; then notify "Instalado ✓" "$2"
+                else notify "Fallo al instalar ✗" "$2" dialog-error; fi
+            fi
+            exit $rc ;;
+        ""|-h|--help)
+            cat <<EOF
+install-any — instalador universal (Arch/CachyOS)
+Uso:
+  install-any detect  <archivo>   Muestra tipo detectado y si es instalable
+  install-any install <archivo>   Instala el archivo
+Formatos: .AppImage  .pkg.tar.{zst,xz,gz}  .flatpak  .tar[.gz|.xz|.zst|.bz2]
+No nativos (solo aviso): .deb  .rpm
+EOF
+            ;;
+        *) err "subcomando desconocido: $sub"; exit 2 ;;
+    esac
+}
+main "$@"

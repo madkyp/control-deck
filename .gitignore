@@ -1,0 +1,4 @@
+# nothing to build; ignore editor/OS cruft
+*.swp
+*~
+.DS_Store
