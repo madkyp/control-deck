@@ -25,6 +25,13 @@ HISTORY_FILE="$STATE_DIR/history.tsv"
 TRASH_DIR="$STATE_DIR/trash"
 DL_DIR="$CACHE_HOME/control-deck/downloads"
 AUR_URL="${CONTROL_DECK_AUR_URL:-https://aur.archlinux.org}"
+NEWS_URL="${CONTROL_DECK_NEWS_URL:-https://archlinux.org/feeds/news/}"
+PACMAN_LOG="${CONTROL_DECK_PACMAN_LOG:-/var/log/pacman.log}"
+PACMAN_DB="${CONTROL_DECK_PACMAN_DB:-/var/lib/pacman/local}"
+SNAPPER_CONFIG="${CONTROL_DECK_SNAPPER_CONFIG:-root}"
+SNAPPER_CONFIG_DIR="${CONTROL_DECK_SNAPPER_DIR:-/etc/snapper/configs}"
+SNAPSHOTS_DIR="${CONTROL_DECK_SNAPSHOTS_DIR:-/.snapshots}"
+INSTALL_INFO="$STATE_DIR/install.env"     # written by install.sh
 MARK="control-deck"      # X-Created-By of our launchers ("install-any" = legacy)
 SEP=$'\x1f'              # field separator for internal records (never collapses)
 
@@ -62,6 +69,29 @@ run_in_terminal() {
     disown 2>/dev/null || true
 }
 aur_helper() { command -v paru || command -v yay; }
+
+# ---------------------------------------------------------------------------
+# Snapshots before pacman changes. snap-pac already takes pre/post snapshots
+# of every pacman transaction; only when it's missing (and snapper has a
+# config) does the deck take one itself — inside the same pkexec call, so
+# there's still a single password prompt.
+# ---------------------------------------------------------------------------
+snapper_ready()      { have snapper && [[ -f "$SNAPPER_CONFIG_DIR/$SNAPPER_CONFIG" ]]; }
+snap_pac_installed() { pacman -Q snap-pac >/dev/null 2>&1; }
+needs_snapshot()     { [[ -z "${CONTROL_DECK_NO_SNAPSHOT:-}" ]] && snapper_ready && ! snap_pac_installed; }
+
+pk_pacman() {
+    if needs_snapshot; then
+        log "→ taking a snapshot first (snap-pac is not installed)"
+        # shellcheck disable=SC2016
+        pkexec sh -c 'snapper -c "$1" create -c number -d "$2" -u important=yes \
+                          || echo "⚠ snapshot failed, continuing" >&2
+                      shift 2; exec pacman "$@"' \
+            sh "$SNAPPER_CONFIG" "Control Deck: before pacman $*" "$@"
+    else
+        pkexec pacman "$@"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Format detection — returns a type keyword on stdout.
@@ -542,7 +572,7 @@ install_appimage() {
 install_pacman() {
     local src="$1"
     log "→ Installing with pacman (admin authorization required)…"
-    if pkexec pacman -U --noconfirm -- "$src"; then
+    if pk_pacman -U --noconfirm -- "$src"; then
         log "✔ Package installed with pacman."
     else
         err "pacman failed (missing dependencies or authorization cancelled)."
@@ -1138,7 +1168,7 @@ uninstall_app() {
                 manual_remove "$f"
             else
                 log "→ pkexec pacman -Rns $pkg (authorization required)"
-                if pkexec pacman -Rns --noconfirm "$pkg"; then
+                if pk_pacman -Rns --noconfirm "$pkg"; then
                     log "✔ Package $pkg removed."
                     # a user copy made by `edit` would keep a dead entry in the menu
                     [[ "$f" == "$DESKTOP_DIR/"* && -f "$f" ]] && rm -f "$f"
@@ -1453,7 +1483,7 @@ cmd_fix() {
     case "$kind" in
         repo:*)
             log "→ pkexec pacman -S ${kind#repo:}"
-            pkexec pacman -S --needed --noconfirm -- "${kind#repo:}" || { err "pacman -S failed"; rc=4; } ;;
+            pk_pacman -S --needed --noconfirm -- "${kind#repo:}" || { err "pacman -S failed"; rc=4; } ;;
         chmod)
             file="$(dget "$f" X-ControlDeck-File)"; [[ -z "$file" ]] && file="$(exec_path "$exec")"
             if chmod +x "$file"; then log "→ chmod +x $file"; else rc=4; fi ;;
@@ -1816,7 +1846,7 @@ installpkg() {
     case "$src" in
         repo)
             log "→ pkexec pacman -S $id (authorization required)"
-            if pkexec pacman -S --needed --noconfirm -- "$id"; then
+            if pk_pacman -S --needed --noconfirm -- "$id"; then
                 log "✔ $id installed from the repos."
             else err "pacman -S failed (cancelled or conflict)."; return 4; fi ;;
         aur)
@@ -1903,15 +1933,16 @@ cmd_updates() {
     upd_aur      > "$tmp/2" &
     upd_flatpak  > "$tmp/3" &
     upd_appimage > "$tmp/4" &
+    upd_self     > "$tmp/5" &
     wait
-    cat "$tmp"/[1-4] | jq -Rn '[inputs] as $l | [range(0; $l|length; 5) as $i |
+    cat "$tmp"/[1-5] | jq -Rn '[inputs] as $l | [range(0; $l|length; 5) as $i |
         {source:$l[$i], id:$l[$i+1], name:$l[$i+2], old:$l[$i+3], new:$l[$i+4]}]'
     rm -rf "$tmp"
 }
 
 system_upgrade() {
     log "→ pkexec pacman -Syu (full system upgrade)"
-    if pkexec pacman -Syu --noconfirm; then log "✔ System upgraded."
+    if pk_pacman -Syu --noconfirm; then log "✔ System upgraded."
     else err "pacman -Syu failed (cancelled or conflict: try it in a terminal)."; return 4; fi
 }
 
@@ -1926,6 +1957,7 @@ update_one() {
             flatpak update -y --noninteractive "$id" || { err "flatpak update failed"; return 4; }
             log "✔ $id updated." ;;
         github)  gh_update_launcher "$id" ;;
+        deck)    cmd_selfupdate ;;
         appimage)
             have appimageupdatetool || { err "appimageupdatetool is not installed"; return 4; }
             file="$(dget "$id" X-ControlDeck-File)"; [[ -z "$file" ]] && file="$(exec_bin "$(dget "$id" Exec)")"
@@ -1949,8 +1981,10 @@ cmd_updateall() {
     local n; n="$(jq length <<<"$list")"
     [[ "$n" -eq 0 ]] && { log "✔ Everything is up to date."; return 0; }
     log "  $n pending update(s)"
-    local fail=0 src id
+    local fail=0 src id news
     if [[ "$(jq '[.[] | select(.source == "repo")] | length' <<<"$list")" -gt 0 ]]; then
+        news="$(cmd_news 2>/dev/null | jq -r '.[] | select(.unread) | "  · \(.date)  \(.title)"')"
+        [[ -n "$news" ]] && { log "⚠ Arch news since your last upgrade:"; log "$news"; }
         cmd_update repo system || ((fail++))
     fi
     if [[ "$(jq '[.[] | select(.source == "flatpak")] | length' <<<"$list")" -gt 0 ]]; then
@@ -1961,6 +1995,10 @@ cmd_updateall() {
     while IFS=$'\t' read -r src id; do
         cmd_update "$src" "$id" || ((fail++))
     done < <(jq -r '.[] | select(.source == "github" or .source == "appimage") | [.source, .id] | @tsv' <<<"$list")
+    # the deck itself goes last: installing it reloads the GUI
+    if [[ "$(jq '[.[] | select(.source == "deck")] | length' <<<"$list")" -gt 0 ]]; then
+        cmd_update deck control-deck || ((fail++))
+    fi
     local aur; aur="$(jq -r '.[] | select(.source == "aur") | .id' <<<"$list")"
     if [[ -n "$aur" ]]; then
         # shellcheck disable=SC2086
@@ -2043,6 +2081,164 @@ EOF
             if systemctl --user is-enabled --quiet "$TIMER_NAME.timer" 2>/dev/null; then echo on; else echo off; fi ;;
         *) err "use: timer on [hours]|off|status"; return 2 ;;
     esac
+}
+
+# ===========================================================================
+# Arch news — read them before a system upgrade
+# ===========================================================================
+last_upgrade_epoch() {
+    local l; l="$(grep -F 'starting full system upgrade' "$PACMAN_LOG" 2>/dev/null | tail -1)"
+    l="${l#\[}"; l="${l%%\]*}"
+    [[ -n "$l" ]] && date -d "$l" +%s 2>/dev/null || echo 0
+}
+
+html_decode() { sed -e 's/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#39;/'"'"'/g; s/&#x27;/'"'"'/g; s/&amp;/\&/g'; }
+
+# JSON [{title, link, date, epoch, summary, unread}] — unread = published
+# after the last full system upgrade recorded in pacman.log
+cmd_news() {
+    local rss last it title link pub desc epoch
+    rss="$(curl -fsS --max-time 10 "$NEWS_URL")" || { err "could not fetch the Arch news"; echo "[]"; return 4; }
+    last="$(last_upgrade_epoch)"
+    tr '\n' ' ' <<<"$rss" | sed 's/<item>/\n<item>/g' | grep '^<item>' | head -10 |
+    while IFS= read -r it; do
+        title="$(sed -nE 's|.*<title>([^<]*)</title>.*|\1|p' <<<"$it" | html_decode)"
+        link="$(sed -nE 's|.*<link>([^<]*)</link>.*|\1|p' <<<"$it")"
+        pub="$(sed -nE 's|.*<pubDate>([^<]*)</pubDate>.*|\1|p' <<<"$it")"
+        desc="$(sed -nE 's|.*<description>([^<]*)</description>.*|\1|p' <<<"$it" | html_decode \
+                | sed -E 's/<[^>]*>//g' | html_decode | tr -s ' ' | cut -c1-280)"
+        epoch="$(date -d "$pub" +%s 2>/dev/null || echo 0)"
+        printf '%s\n' "$title" "$link" "$(date -d "@$epoch" +%F)" "$epoch" "$desc" "$(( epoch > last ))"
+    done | jq -Rn '[inputs] as $l | [range(0; $l|length; 6) as $i |
+        {title:$l[$i], link:$l[$i+1], date:$l[$i+2], epoch:($l[$i+3]|tonumber),
+         summary:$l[$i+4], unread:($l[$i+5] == "1")}]'
+}
+
+# ===========================================================================
+# Self-update — the deck checks GitHub for a newer version of itself.
+# install.sh records where it was installed from (repo, branch, commit).
+# ===========================================================================
+install_info() { [[ -f "$INSTALL_INFO" ]] && sed -n "s/^$1=//p" "$INSTALL_INFO" | head -1; }
+
+cmd_version() {
+    local c; c="$(install_info COMMIT)"
+    printf 'COMMIT=%s\nSHORT=%s\nREPO=%s\nSRC=%s\nDATE=%s\n' "$c" "${c:0:7}" \
+        "$(install_info REPO)" "$(install_info SRC)" "$(install_info DATE)"
+}
+
+# pending self-update as an update record (same 5-line format as upd_*)
+upd_self() {
+    local repo commit branch cmp
+    repo="$(install_info REPO)"; commit="$(install_info COMMIT)"; branch="$(install_info BRANCH)"
+    [[ -n "$repo" && -n "$commit" ]] || return 0
+    cmp="$(gh_api "repos/$repo/compare/$commit...${branch:-main}" 2>/dev/null)" || return 0
+    # "ahead": GitHub has commits the installed version doesn't
+    jq -e '.status == "ahead" or .status == "diverged"' <<<"$cmp" >/dev/null 2>&1 || return 0
+    printf '%s\n' deck control-deck "Control Deck" "${commit:0:7}" \
+        "$(jq -r '"\(.commits | last | .sha[0:7]) (+\(.ahead_by))"' <<<"$cmp")"
+}
+
+cmd_selfupdate() {
+    local src repo branch tmp sha
+    src="$(install_info SRC)"; repo="$(install_info REPO)"; branch="$(install_info BRANCH)"
+    repo="${repo:-madkyp/control-deck}"; branch="${branch:-main}"
+    if [[ -n "$src" ]] && git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+        log "→ git pull in $src"
+        git -C "$src" pull --ff-only || { err "git pull failed (local changes?): update $src by hand"; return 4; }
+        log "→ reinstalling"
+        "$src/install.sh" --no-deps || return 4
+    else
+        # installed from a copy that isn't a git clone: fetch the branch tarball
+        sha="$(gh_api "repos/$repo/commits/$branch" | jq -r '.sha // empty')"
+        tmp="$(mktemp -d)"
+        log "→ downloading $repo@$branch"
+        curl -fsSL --max-time 60 "https://codeload.github.com/$repo/tar.gz/refs/heads/$branch" \
+            | tar xz -C "$tmp" --strip-components=1 || { err "download failed"; rm -rf "$tmp"; return 4; }
+        CONTROL_DECK_COMMIT="$sha" CONTROL_DECK_REPO="$repo" "$tmp/install.sh" --no-deps || { rm -rf "$tmp"; return 4; }
+        rm -rf "$tmp"
+    fi
+    history_add update deck "control-deck $(install_info COMMIT | cut -c1-7)" 0
+    log "✔ Control Deck updated to $(install_info COMMIT | cut -c1-7). The window reloads by itself."
+}
+
+# ===========================================================================
+# Snapshots (snapper) — list, create, package diff, permission helper
+# ===========================================================================
+snapper_can_list() { snapper -c "$SNAPPER_CONFIG" --jsonout list >/dev/null 2>&1; }
+
+cmd_snapstatus() {
+    local ready=false canlist=false pac=false grub=false assist=false
+    snapper_ready && ready=true
+    [[ $ready == true ]] && snapper_can_list && canlist=true
+    snap_pac_installed && pac=true
+    pacman -Q grub-btrfs >/dev/null 2>&1 && grub=true
+    have btrfs-assistant && assist=true
+    jq -n --argjson r "$ready" --argjson c "$canlist" --argjson p "$pac" --argjson g "$grub" \
+          --argjson a "$assist" --arg cfg "$SNAPPER_CONFIG" \
+        '{snapper:$r, config:$cfg, canlist:$c, snappac:$p, grubbtrfs:$g, assistant:$a}'
+}
+
+# snapper's JSON → [{num,type,pre,date,user,cleanup,desc,important}], newest first
+snap_json() {
+    jq --arg c "$SNAPPER_CONFIG" '(.[$c] // []) | map(select(.number != 0)) | reverse | map({
+        num:.number, type:(.type // "single"), pre:(.["pre-number"] // null), date:(.date // ""),
+        user:(.user // ""), cleanup:(.cleanup // ""), desc:(.description // ""),
+        important:((.userdata // {}).important == "yes")})'
+}
+
+cmd_snaplist() {
+    local out
+    snapper_ready || { err "snapper has no '$SNAPPER_CONFIG' config"; echo "[]"; return 3; }
+    if [[ "$1" == --root ]]; then
+        out="$(pkexec snapper -c "$SNAPPER_CONFIG" --jsonout list)" || { echo "[]"; return 4; }
+    else
+        out="$(snapper -c "$SNAPPER_CONFIG" --jsonout list 2>/dev/null)" \
+            || { err "listing snapshots needs root (or ALLOW_USERS)"; echo "[]"; return 3; }
+    fi
+    snap_json <<<"$out"
+}
+
+cmd_snapcreate() {
+    local desc="${1:-manual snapshot}" n
+    snapper_ready || { err "snapper has no '$SNAPPER_CONFIG' config"; return 3; }
+    log "→ pkexec snapper create \"Control Deck: $desc\""
+    n="$(pkexec snapper -c "$SNAPPER_CONFIG" create -c number -p -d "Control Deck: $desc" -u important=yes)" \
+        || { err "could not create the snapshot"; return 4; }
+    log "✔ Snapshot #$n created."
+    history_add snapshot "$SNAPPER_CONFIG" "#$n $desc" 0
+}
+
+# let the current user list snapshots without a password (opt-in, one-time)
+cmd_snapallow() {
+    local cur users
+    snapper_ready || { err "snapper has no '$SNAPPER_CONFIG' config"; return 3; }
+    cur="$(sed -n 's/^ALLOW_USERS="\(.*\)"/\1/p' "$SNAPPER_CONFIG_DIR/$SNAPPER_CONFIG")"
+    users="$(tr ' ' '\n' <<<"$cur $USER" | awk 'NF && !seen[$0]++' | paste -sd' ')"
+    log "→ pkexec snapper set-config ALLOW_USERS=\"$users\" SYNC_ACL=yes"
+    pkexec snapper -c "$SNAPPER_CONFIG" set-config "ALLOW_USERS=$users" "SYNC_ACL=yes" \
+        || { err "snapper set-config failed"; return 4; }
+    log "✔ $USER can now list snapshots without a password."
+    history_add "snapshots allow" "$SNAPPER_CONFIG" "$USER" 0
+}
+
+# packages (name<TAB>version) from a pacman local db listing on stdin
+db_pkgs() { awk 'NF { n = $0; sub(/-[^-]+-[^-]+$/, "", n); print n "\t" substr($0, length(n) + 2) }' | sort; }
+
+# which packages changed between a snapshot and now
+cmd_snapdiff() {
+    local n="$1" db old new
+    [[ "$n" =~ ^[0-9]+$ ]] || { err "use: snapdiff <snapshot number>"; return 2; }
+    db="$SNAPSHOTS_DIR/$n/snapshot${PACMAN_DB}"
+    if [[ -r "$db" ]]; then old="$(ls "$db")"
+    else old="$(pkexec ls "$db")" || { err "could not read snapshot #$n"; return 4; }; fi
+    new="$(ls "$PACMAN_DB")"
+    log "Packages changed since snapshot #$n:"
+    join -t $'\t' -a1 -a2 -e '' -o 0,1.2,2.2 <(db_pkgs <<<"$old") <(db_pkgs <<<"$new") |
+    awk -F'\t' '
+        $2 == ""  { a++; print "  + " $1 " " $3; next }
+        $3 == ""  { r++; print "  - " $1 " " $2; next }
+        $2 != $3  { c++; print "  ~ " $1 "  " $2 " → " $3 }
+        END { printf "Total: %d added, %d removed, %d changed.\n", a, r, c }'
 }
 
 # ===========================================================================
@@ -2131,7 +2327,7 @@ clean_one() {
             [[ -z "$list" ]] && { log "✔ No orphans."; return 0; }
             log "→ pkexec pacman -Rns $(tr '\n' ' ' <<<"$list")"
             # shellcheck disable=SC2086
-            pkexec pacman -Rns --noconfirm $list || { err "pacman -Rns failed"; return 4; }
+            pk_pacman -Rns --noconfirm $list || { err "pacman -Rns failed"; return 4; }
             log "✔ Orphans removed." ;;
         pkgcache)
             have paccache || { err "install pacman-contrib (paccache)"; return 4; }
@@ -2222,7 +2418,7 @@ cmd_restore() {
     if [[ -n "$missing" ]]; then
         log "→ Repos: $(wc -l <<<"$missing") package(s) to install"
         # shellcheck disable=SC2086
-        pkexec pacman -S --needed --noconfirm $missing || { err "pacman -S failed"; ((fail++)); }
+        pk_pacman -S --needed --noconfirm $missing || { err "pacman -S failed"; ((fail++)); }
     else log "✔ Repos: nothing to install"; fi
 
     # flatpak apps
@@ -2332,6 +2528,12 @@ Maintain
   cleanscan / clean <id>        Clean-up: orphans pkgcache flatpak aurcache downloads broken
   export [file] / restore <file>   Backup of your apps
   history                       Operation history (JSON)
+  news                          Recent Arch news; unread = since your last upgrade (JSON)
+  snapstatus / snaplist [--root]   Snapper status / snapshots (JSON)
+  snapcreate <description>      Create a snapshot (pkexec)
+  snapdiff <number>             Packages changed since a snapshot
+  snapallow                     Let your user list snapshots without a password (opt-in)
+  version / selfupdate          Installed version · update Control Deck itself
 EOF
 }
 
@@ -2394,6 +2596,14 @@ main() {
         export)      cmd_export "$1" ;;
         restore)     need "$1" "missing file"; cmd_restore "$1" ;;
         history)     cmd_history ;;
+        news)        cmd_news ;;
+        snapstatus)  cmd_snapstatus ;;
+        snaplist)    cmd_snaplist "$1" ;;
+        snapcreate)  cmd_snapcreate "$1" ;;
+        snapdiff)    need "$1" "missing snapshot number"; cmd_snapdiff "$1" ;;
+        snapallow)   cmd_snapallow ;;
+        version)     cmd_version ;;
+        selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;
         *) err "unknown command: $sub"; exit 2 ;;
     esac

@@ -79,9 +79,6 @@ echo "== Installing Control Deck =="
 echo "→ backend   ~/.local/bin/control-deck"
 install -Dm755 "$SRC/bin/control-deck" "$HOME/.local/bin/control-deck"
 
-echo "→ GUI       ~/.config/quickshell/control-deck/shell.qml"
-install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/control-deck/shell.qml"
-
 echo "→ icon      ~/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
 install -Dm644 "$SRC/icons/control-deck.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
 gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
@@ -89,6 +86,22 @@ gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 ||
 echo "→ launcher  ~/.local/share/applications/control-deck.desktop"
 install -Dm644 "$SRC/control-deck.desktop" "$HOME/.local/share/applications/control-deck.desktop"
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+
+# version info, used by the deck to spot a newer version of itself on GitHub
+commit="${CONTROL_DECK_COMMIT:-$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)}"
+gh_repo="${CONTROL_DECK_REPO:-$(git -C "$SRC" remote get-url origin 2>/dev/null \
+        | sed -nE 's#.*github\.com[:/]([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//' || true)}"
+branch="$(git -C "$SRC" branch --show-current 2>/dev/null || true)"
+src="$SRC"; git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 || src=""
+mkdir -p "$HOME/.local/share/control-deck"
+printf 'SRC=%s\nREPO=%s\nBRANCH=%s\nCOMMIT=%s\nDATE=%s\n' \
+    "$src" "${gh_repo:-madkyp/control-deck}" "${branch:-main}" "$commit" "$(date -Is)" \
+    > "$HOME/.local/share/control-deck/install.env"
+echo "→ version   ${commit:0:7}"
+
+# the GUI goes last: a running deck reloads as soon as shell.qml changes
+echo "→ GUI       ~/.config/quickshell/control-deck/shell.qml"
+install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/control-deck/shell.qml"
 
 echo
 echo "✔ Installed."

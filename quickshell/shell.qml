@@ -38,6 +38,7 @@ ShellRoot {
         property string view: Quickshell.env("CONTROL_DECK_VIEW") || "install"
         Component.onCompleted: {
             timerStatusProc.running = true;
+            versionProc.running = true;
             if (view === "manage") refreshApps();
             if (view === "updates") checkUpdates();
             if (view === "system") openSystem(sysView);
@@ -50,6 +51,7 @@ ShellRoot {
                 case "flatpak":  return pal.sky;
                 case "github":   return pal.amber;
                 case "appimage": return pal.ok;
+                case "deck":     return pal.accentHi;
                 default:         return pal.dim;
             }
         }
@@ -246,11 +248,28 @@ ShellRoot {
         property bool   updChecked: false
         property bool   autoCheck: false
         property bool   updBusy: checkProc.running || updProc.running || timerProc.running
+        property var    news: []            // Arch news; unread = since the last full upgrade
+        property var    unreadNews: news.filter(function (n) { return n.unread; })
+        property bool   newsAck: false      // user saw the news warning for this check
+        property string deckVersion: ""
+        property bool   deckUpdate: updates.some(function (u) { return u.source === "deck"; })
 
-        function checkUpdates() { updates = []; updStatus = "CHECKING…"; checkProc.running = true; }
+        function checkUpdates() {
+            updates = []; updStatus = "CHECKING…"; newsAck = false;
+            checkProc.running = true; newsProc.running = true;
+        }
         function runUpdate(args, label) {
             updArgs = args; updLog = "";
             updStatus = label; updProc.running = true;
+        }
+        // a system upgrade with unread Arch news needs a second click
+        function guardedUpdate(args, label, touchesRepos) {
+            if (touchesRepos && unreadNews.length > 0 && !newsAck) {
+                newsAck = true;
+                updStatus = "READ THE ARCH NEWS FIRST · CLICK AGAIN";
+                return;
+            }
+            runUpdate(args, label);
         }
 
         // ---- system state (clean · backup · history) --------------------
@@ -262,6 +281,11 @@ ShellRoot {
         property string sysStatus: ""
         property bool   confirmRestore: false
         property bool   sysBusy: scanProc.running || sysProc.running || histProc.running
+                                 || snapListProc.running || snapStatusProc.running
+        property var    snapStatus: ({})
+        property var    snapshots: []
+        property int    selSnap: -1
+        property var    snapListArgs: ["snaplist"]
 
         function runSys(args, label) {
             sysArgs = args; sysLog = ""; sysStatus = label;
@@ -272,6 +296,11 @@ ShellRoot {
             sysView = sub;
             if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
             if (sub === "history") histProc.running = true;
+            if (sub === "snapshots") snapStatusProc.running = true;
+        }
+        function loadSnapshots(asRoot) {
+            snapListArgs = asRoot ? ["snaplist", "--root"] : ["snaplist"];
+            snapListProc.running = true;
         }
 
         // ---- backend processes: install ---------------------------------
@@ -513,6 +542,23 @@ ShellRoot {
             }
         }
         Process {
+            id: newsProc
+            command: [win.scriptPath, "news"]
+            stdout: StdioCollector {
+                onStreamFinished: { try { win.news = JSON.parse(text); } catch (e) { win.news = []; } }
+            }
+        }
+        Process {
+            id: versionProc
+            command: [win.scriptPath, "version"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    var m = text.match(/^SHORT=(.*)$/m);
+                    win.deckVersion = m ? m[1] : "";
+                }
+            }
+        }
+        Process {
             id: timerStatusProc
             command: [win.scriptPath, "timer", "status"]
             stdout: StdioCollector { onStreamFinished: win.autoCheck = text.trim() === "on" }
@@ -548,6 +594,8 @@ ShellRoot {
                 win.confirmRestore = false;
                 if (win.sysArgs[0] === "clean") scanProc.running = true;
                 if (win.sysArgs[0] === "restore") win.apps = [];
+                if (win.sysArgs[0] === "snapcreate") win.loadSnapshots(!win.snapStatus.canlist);
+                if (win.sysArgs[0] === "snapallow") snapStatusProc.running = true;
                 histProc.running = true;
             }
         }
@@ -560,6 +608,32 @@ ShellRoot {
                     catch (e) { win.history = []; }
                 }
             }
+        }
+        Process {
+            id: snapStatusProc
+            command: [win.scriptPath, "snapstatus"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.snapStatus = JSON.parse(text); } catch (e) { win.snapStatus = {}; }
+                    if (win.snapStatus.canlist) win.loadSnapshots(false);
+                }
+            }
+        }
+        Process {
+            id: snapListProc
+            command: [win.scriptPath].concat(win.snapListArgs)
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.snapshots = JSON.parse(text); } catch (e) { win.snapshots = []; }
+                    win.selSnap = -1;
+                    if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + " SNAPSHOTS";
+                }
+            }
+            stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
+        }
+        Process {
+            id: assistantProc
+            command: ["setsid", "-f", "btrfs-assistant-launcher"]
         }
         Process {
             id: pickRestoreProc
@@ -818,6 +892,20 @@ ShellRoot {
                 Text {
                     text: "CONTROL DECK"; color: pal.text; font.family: win.mono
                     font.pixelSize: 16; font.letterSpacing: 6; font.bold: true
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    visible: win.deckUpdate
+                    text: "● NEW VERSION"; color: pal.amber; font.family: win.mono
+                    font.pixelSize: 10; font.letterSpacing: 2; font.bold: true
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: win.view = "updates"
+                    }
+                }
+                Text {
+                    visible: win.deckVersion !== ""
+                    text: win.deckVersion; color: pal.dim; font.family: win.mono; font.pixelSize: 10
                 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
@@ -1641,6 +1729,45 @@ ShellRoot {
                     }
                 }
 
+                // Arch news published since the last full upgrade
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: win.unreadNews.length > 0
+                    implicitHeight: newsCol.implicitHeight + 18
+                    radius: 8; color: "#1a150c"; border.color: pal.amber; border.width: 1
+                    ColumnLayout {
+                        id: newsCol
+                        anchors.fill: parent; anchors.margins: 9; spacing: 6
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            text: "\uf1ea  " + win.unreadNews.length + " Arch news since your last upgrade — some need manual steps. Read them before updating:"
+                            color: pal.amber; font.family: win.mono; font.pixelSize: 10; font.bold: true
+                        }
+                        Repeater {
+                            model: win.unreadNews
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true; spacing: 1
+                                Text {
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: modelData.date + "  " + modelData.title
+                                    color: pal.text; font.family: win.mono; font.pixelSize: 11; font.underline: newsMa.containsMouse
+                                    MouseArea {
+                                        id: newsMa
+                                        anchors.fill: parent; hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: Qt.openUrlExternally(modelData.link)
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight
+                                    text: modelData.summary; color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
@@ -1686,8 +1813,9 @@ ShellRoot {
                                     label: modelData.source === "repo" ? "SYSTEM" : "UPDATE"
                                     primary: modelData.source !== "repo"
                                     on: !win.updBusy
-                                    onClicked: win.runUpdate(["update", modelData.source, modelData.id],
-                                                             "UPDATING " + modelData.name + "…")
+                                    onClicked: win.guardedUpdate(["update", modelData.source, modelData.id],
+                                                                 "UPDATING " + modelData.name + "…",
+                                                                 modelData.source === "repo")
                                 }
                             }
                         }
@@ -1719,7 +1847,8 @@ ShellRoot {
                         glyph: ""; label: updProc.running ? "WORKING" : "UPDATE ALL"
                         boxed: true
                         on: win.updates.length > 0 && !win.updBusy
-                        onClicked: win.runUpdate(["updateall"], "UPDATING ALL…")
+                        onClicked: win.guardedUpdate(["updateall"], "UPDATING ALL…",
+                                                     win.updates.some(function (u) { return u.source === "repo"; }))
                     }
                 }
             } // ================= end UPDATES VIEW =================
@@ -1736,6 +1865,7 @@ ShellRoot {
                     Chip { label: "CLEAN";   active: win.sysView === "clean";   onClicked: win.openSystem("clean") }
                     Chip { label: "BACKUP";  active: win.sysView === "backup";  onClicked: win.openSystem("backup") }
                     Chip { label: "HISTORY"; active: win.sysView === "history"; onClicked: win.openSystem("history") }
+                    Chip { label: "SNAPSHOTS"; active: win.sysView === "snapshots"; onClicked: win.openSystem("snapshots") }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.sysStatus; color: pal.dim; font.family: win.mono
@@ -1898,6 +2028,129 @@ ShellRoot {
                                 color: modelData.result === "ok" ? pal.ok : pal.bad
                                 font.family: win.mono; font.pixelSize: 11
                             }
+                        }
+                    }
+                }
+
+                // ---- SNAPSHOTS ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.sysView === "snapshots"
+                    spacing: 10
+
+                    Hint {
+                        text: !win.snapStatus.snapper
+                              ? "snapper has no '" + (win.snapStatus.config || "root") + "' config on this system: nothing to show."
+                              : (win.snapStatus.snappac
+                                 ? "snap-pac is installed: every pacman operation already gets a pre/post snapshot."
+                                 : "snap-pac is not installed: the deck takes a snapshot itself before pacman changes.")
+                    }
+
+                    // listing needs root unless the user was allowed (opt-in)
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.snapStatus.snapper === true && !win.snapStatus.canlist && win.snapshots.length === 0
+                        implicitHeight: permCol.implicitHeight + 20
+                        radius: 8; color: pal.panel; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            id: permCol
+                            anchors.fill: parent; anchors.margins: 10; spacing: 8
+                            Hint {
+                                text: "Your snapper config only lets root list snapshots. Load them once with your password, or allow your user to list them (adds you to ALLOW_USERS — reading only; creating still asks for the password)."
+                            }
+                            RowLayout {
+                                spacing: 8
+                                MiniBtn { width: 130; label: "LOAD (PASSWORD)"; on: !win.sysBusy; onClicked: win.loadSnapshots(true) }
+                                MiniBtn { width: 120; label: "ALLOW MY USER"; primary: false; on: !win.sysBusy
+                                          onClicked: win.runSys(["snapallow"], "ALLOWING…") }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        visible: win.snapStatus.snapper === true
+                        radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+
+                        EmptyHint {
+                            visible: win.snapshots.length === 0
+                            title: snapListProc.running ? "LOADING SNAPSHOTS…" : "NO SNAPSHOTS LOADED"
+                        }
+
+                        ListView {
+                            id: snapList
+                            anchors.fill: parent; anchors.margins: 4
+                            clip: true; spacing: 2
+                            model: win.snapshots
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: snapList.width - 8; height: 30; radius: 6
+                                color: win.selSnap === modelData.num ? pal.cardHi : "transparent"
+                                RowLayout {
+                                    anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
+                                    Text {
+                                        Layout.preferredWidth: 44
+                                        text: "#" + modelData.num; color: pal.accent
+                                        font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                    }
+                                    Text {
+                                        Layout.preferredWidth: 118
+                                        text: modelData.date.substring(0, 16); color: pal.dim
+                                        font.family: win.mono; font.pixelSize: 10
+                                    }
+                                    Text {
+                                        Layout.preferredWidth: 44
+                                        text: modelData.type; color: modelData.type === "single" ? pal.amber : pal.dim
+                                        font.family: win.mono; font.pixelSize: 9
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                        text: (modelData.important ? "★ " : "") + modelData.desc
+                                        color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: win.selSnap = modelData.num
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.snapStatus.snapper === true
+                        Field {
+                            id: snapDescField
+                            Layout.fillWidth: true
+                            placeholderText: "description for a new snapshot…"
+                        }
+                        MiniBtn {
+                            width: 84; height: 34; label: "CREATE"
+                            on: !win.sysBusy
+                            onClicked: { win.runSys(["snapcreate", snapDescField.text.trim() || "manual snapshot"], "SNAPSHOTTING…"); snapDescField.text = ""; }
+                        }
+                        MiniBtn {
+                            width: 110; height: 34; primary: false
+                            label: win.selSnap >= 0 ? "DIFF #" + win.selSnap + " → NOW" : "DIFF → NOW"
+                            on: win.selSnap >= 0 && !win.sysBusy
+                            onClicked: win.runSys(["snapdiff", String(win.selSnap)], "COMPARING…")
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.snapStatus.snapper === true
+                        Hint {
+                            text: win.snapStatus.grubbtrfs
+                                  ? "To go back: reboot, open \"Arch Linux snapshots\" in GRUB (grub-btrfs), boot the snapshot and check everything works, then run  sudo snapper rollback  and reboot."
+                                  : "To go back: boot the snapshot from your boot menu (or a live USB), then run  sudo snapper rollback  and reboot."
+                        }
+                        Chip {
+                            visible: win.snapStatus.assistant === true
+                            label: "BTRFS ASSISTANT"
+                            onClicked: assistantProc.running = true
                         }
                     }
                 }

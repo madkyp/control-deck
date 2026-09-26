@@ -23,14 +23,25 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin
 stub pkexec 'echo "pkexec $*" >> "'"$T"'/pkexec.log"; exit 1'
 stub notify-send 'echo "notify-send $*" >> "'"$T"'/notify.log"'
 stub update-desktop-database 'exit 0'
-stub curl 'exit 7'
+stub curl 'for a in "$@"; do url="$a"; done
+case "$url" in
+    file://*)    cat "${url#file://}" ;;
+    */compare/*) [[ -n "${FAKE_COMPARE:-}" ]] && cat "$FAKE_COMPARE" || exit 22 ;;
+    *)           exit 7 ;;
+esac'
 stub yay 'exit 0'
 stub paru 'exit 0'
 stub gio 'exit 0'
+stub snapper 'echo "snapper $*" >> "'"$T"'/snapper.log"
+case "$*" in
+    *"--jsonout list"*) [[ -n "${FAKE_SNAPLIST:-}" ]] && cat "$FAKE_SNAPLIST" ;;
+esac'
+stub gtk-update-icon-cache 'exit 0'
 stub xdg-open 'exit 0'
 stub checkupdates 'printf "%s" "${FAKE_UPDATES:-}"'
 stub ldconfig '[[ "${FAKE_FUSE2:-1}" == 1 ]] && echo "	libfuse.so.2 (libc6,x86-64) => /usr/lib/libfuse.so.2"; exit 0'
 stub pacman 'case "$1" in
+    -Q)  [[ "$2" == snap-pac && "${FAKE_SNAPPAC:-1}" == 1 ]]; exit $? ;;
     -Fq) [[ "$2" == libgtk-3.so.0 ]] && echo extra/gtk3 ;;
     -Si) [[ "$2" == python-requests ]] && exit 0; exit 1 ;;
     -Qoq) exit 1 ;;
@@ -231,7 +242,7 @@ desktop "$A/envapp.desktop" envapp "env FOO=1 $T/fake/good %U"
 eq "--no-sandbox with an env prefix" "$(key "$A/envapp.desktop" Exec)" "env FOO=1 $T/fake/good --no-sandbox %U"
 "$CD" fix "$A/fuse.desktop" extractrun >/dev/null
 has "extract-and-run prefix" "$(key "$A/fuse.desktop" Exec)" "env APPIMAGE_EXTRACT_AND_RUN=1 "
-"$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1; eq "repo fix fails when pkexec is cancelled" "$?" 4
+FAKE_SNAPPAC=1 "$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1; eq "repo fix fails when pkexec is cancelled" "$?" 4
 has "repo fix goes through pkexec" "$(cat "$T/pkexec.log")" "pacman -S --needed --noconfirm -- gtk3"
 
 section "FUSE 2 detection without running the app"
@@ -360,6 +371,74 @@ H="$("$CD" history)"
 yes "history is newest first" "[[ \$(jq -r '.[0].action' <<<'$H') == restore ]]"
 yes "history recorded installs and uninstalls" "jq -e 'any(.[]; .action == \"install\") and any(.[]; .action == \"uninstall purge\")' <<<'$H' >/dev/null"
 
+
+# ==========================================================================
+section "Arch news"
+cat > "$T/news.xml" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><title>Arch Linux: Recent news updates</title>
+<item><title>Foo &gt;= 2.0 requires manual intervention</title><link>https://archlinux.org/news/foo/</link><description>&lt;p&gt;Run &lt;code&gt;pacman -Syu foo&lt;/code&gt; before
+the upgrade.&lt;/p&gt;</description><pubDate>Tue, 22 Sep 2026 09:09:27 +0000</pubDate></item>
+<item><title>Old news</title><link>https://archlinux.org/news/old/</link><description>&lt;p&gt;Nothing to do.&lt;/p&gt;</description><pubDate>Mon, 01 Jun 2026 10:00:00 +0000</pubDate></item>
+</channel></rss>
+EOF
+echo '[2026-08-01T10:00:00+0200] [PACMAN] starting full system upgrade' > "$T/pacman.log"
+N="$(CONTROL_DECK_NEWS_URL="file://$T/news.xml" CONTROL_DECK_PACMAN_LOG="$T/pacman.log" "$CD" news)"
+eq "two news items" "$(jq length <<<"$N")" 2
+eq "entities decoded" "$(jq -r '.[0].title' <<<"$N")" "Foo >= 2.0 requires manual intervention"
+eq "summary is plain text" "$(jq -r '.[0].summary' <<<"$N")" "Run pacman -Syu foo before the upgrade."
+eq "news after the last upgrade is unread" "$(jq -r '.[0].unread' <<<"$N")" true
+eq "older news is read" "$(jq -r '.[1].unread' <<<"$N")" false
+
+section "Version & self-update"
+PATH="$T/bin:$PATH" "$ROOT/install.sh" --no-deps >/dev/null 2>&1; eq "install.sh works in a clean HOME" "$?" 0
+eq "installed commit recorded" "$("$CD" version | key /dev/stdin COMMIT)" "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"
+eq "source repo recorded" "$("$CD" version | key /dev/stdin SRC)" "$ROOT"
+yes "GUI is installed last" "[[ \"$(grep -n 'shell.qml\" \"\$HOME' "$ROOT/install.sh" | cut -d: -f1)\" -gt \"$(grep -n 'install.env\"$' "$ROOT/install.sh" | cut -d: -f1)\" ]]"
+printf '{"status":"ahead","ahead_by":2,"commits":[{"sha":"aaaaaaa111"},{"sha":"bbbbbbb222"}]}' > "$T/compare.json"
+U="$(FAKE_COMPARE="$T/compare.json" "$CD" updates)"
+eq "newer version on GitHub is offered" "$(jq -r '.[] | select(.source == "deck") | .new' <<<"$U")" "bbbbbbb (+2)"
+printf '{"status":"identical","ahead_by":0,"commits":[]}' > "$T/compare.json"
+eq "nothing offered when up to date" "$(FAKE_COMPARE="$T/compare.json" "$CD" updates | jq '[.[] | select(.source == "deck")] | length')" 0
+
+section "Snapshots"
+mkdir -p "$T/snapcfg"; echo 'ALLOW_USERS=""' > "$T/snapcfg/root"
+export CONTROL_DECK_SNAPPER_DIR="$T/snapcfg"
+ST="$(FAKE_SNAPPAC=1 "$CD" snapstatus)"
+eq "snapper detected" "$(jq -r .snapper <<<"$ST")" true
+eq "can't list without permission" "$(jq -r .canlist <<<"$ST")" false
+eq "snap-pac detected" "$(jq -r .snappac <<<"$ST")" true
+eq "snap-pac missing detected" "$(FAKE_SNAPPAC=0 "$CD" snapstatus | jq -r .snappac)" false
+cat > "$T/snaplist.json" <<'EOF'
+{"root":[{"number":0,"type":"single","date":"","description":"current","userdata":null},
+ {"number":41,"type":"pre","date":"2026-09-26 11:41:30","description":"pacman -Syu","userdata":null},
+ {"number":42,"type":"single","date":"2026-09-26 12:00:00","description":"Control Deck: before fun","userdata":{"important":"yes"}}]}
+EOF
+SL="$(FAKE_SNAPLIST="$T/snaplist.json" "$CD" snaplist)"
+eq "snapshot 0 (current) is skipped" "$(jq length <<<"$SL")" 2
+eq "newest first" "$(jq -r '.[0].num' <<<"$SL")" 42
+eq "important flag" "$(jq -r '.[0].important' <<<"$SL")" true
+"$CD" snaplist >/dev/null 2>&1; eq "no permission → exit 3" "$?" 3
+rm -f "$T/pkexec.log"
+FAKE_SNAPPAC=0 "$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1
+has "without snap-pac a snapshot is taken in the same pkexec call" "$(cat "$T/pkexec.log")" "snapper -c"
+rm -f "$T/pkexec.log"
+FAKE_SNAPPAC=1 "$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1
+hasnt "with snap-pac the deck doesn't duplicate it" "$(cat "$T/pkexec.log")" "snapper"
+unset CONTROL_DECK_SNAPPER_DIR
+
+export CONTROL_DECK_PACMAN_DB="$T/pacdb" CONTROL_DECK_SNAPSHOTS_DIR="$T/snaps"
+mkdir -p "$T/pacdb" "$T/snaps/7/snapshot$T/pacdb"
+for p in foo-1.1-1 bar-2.0-1 newpkg-3-2 lib32-foo-bar-1.2-3; do mkdir "$T/pacdb/$p"; done
+for p in foo-1.0-1 bar-2.0-1 gone-1-1 lib32-foo-bar-1.2-3; do mkdir "$T/snaps/7/snapshot$T/pacdb/$p"; done
+D="$("$CD" snapdiff 7)"
+has "changed package"  "$D" "~ foo  1.0-1 → 1.1-1"
+has "removed package"  "$D" "- gone 1-1"
+has "added package"    "$D" "+ newpkg 3-2"
+hasnt "unchanged package (dashes in the name) not listed" "$D" "lib32-foo-bar"
+has "summary" "$D" "Total: 1 added, 1 removed, 1 changed."
+"$CD" snapdiff nope >/dev/null 2>&1; eq "bad snapshot number → exit 2" "$?" 2
+unset CONTROL_DECK_PACMAN_DB CONTROL_DECK_SNAPSHOTS_DIR
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

@@ -73,11 +73,16 @@ The window has five tabs:
 - Everything pending in one view: **repos** (`checkupdates`), **AUR** (`paru`/`yay -Qua`), **Flatpak** and **AppImages/tarballs** (GitHub releases or `appimageupdatetool`).
 - **UPDATE ALL** or one at a time. Repo packages update together (`pacman -Syu`): Arch doesn't support partial upgrades.
 - **AUTO-CHECK** *(opt-in)*: a systemd user timer checks every 6 hours **even with the deck closed** and sends a notification (once per set of updates); clicking it opens the deck on this tab.
+- **Arch news first**: news published on archlinux.org since your last full upgrade is shown above the list (some need manual steps before upgrading). While there is unread news, a system upgrade needs a second click.
+- **Control Deck updates itself**: when GitHub has a newer version of the deck it shows up here (and as *● NEW VERSION* in the header, next to the installed version). Updating runs `git pull` + `install.sh` in your clone — or downloads the latest code if you didn't install from a clone — and the window reloads by itself.
 
 ### 🧹 SYSTEM — clean-up, backup and history
 - **CLEAN**: orphan packages, pacman cache (`paccache`), unused Flatpak runtimes, AUR cache, deck downloads and **broken launchers** (moved to a trash folder, not deleted) — with the space each one takes.
 - **BACKUP**: exports your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to a `.json`; **RESTORE** reinstalls whatever is missing on another machine or after a reinstall.
 - **HISTORY**: a log of everything you installed, edited, updated, cleaned or removed.
+- **SNAPSHOTS** (snapper): list your snapshots, **create** one before trying something risky, see **which packages changed** since any snapshot (added / removed / upgraded) and how to roll back (with a shortcut to *Btrfs Assistant* when installed).
+  - If your snapper config only lets root list snapshots, load them with your password or — opt-in — allow your user to list them (`ALLOW_USERS`).
+  - With **snap-pac** installed every pacman operation already gets pre/post snapshots, so the deck doesn't add more. Without snap-pac, the deck takes a snapshot itself before any pacman change it makes (same password prompt).
 
 > 🔔 Desktop notifications (`notify-send`) when each operation finishes.
 
@@ -117,6 +122,8 @@ The window has five tabs:
 - `wl-clipboard` — copy an app's command
 - `appimageupdatetool` (AUR) — update AppImages that don't come from GitHub
 - `debtap` (AUR) — install `.deb` files (then run `sudo debtap -u` once)
+- `snapper` (+ `snap-pac`, `grub-btrfs`, `btrfs-assistant`) — SNAPSHOTS tab and snapshots before pacman changes
+- `git` — the deck updating itself from your clone
 
 ---
 
@@ -142,13 +149,16 @@ cd control-deck
 Make sure `~/.local/bin` is in your `PATH`.
 
 ### Update
+The easy way: when a new version is out, it appears in the **UPDATES** tab (and as *● NEW VERSION* in the header) — hit **UPDATE**.
+
+By hand:
 ```bash
 cd ~/control-deck
 git pull
 ./install.sh --no-deps
 ```
 
-Then close and reopen the deck to load the new UI. Your history, logs, edited launchers and the background update check (if you turned it on) are kept. If a new version needs extra dependencies, run `./install.sh` without `--no-deps`.
+A running deck reloads its window by itself when the new UI is installed. Your history, logs, edited launchers and the background update check (if you turned it on) are kept. If a new version needs extra dependencies, run `./install.sh` without `--no-deps`.
 
 ### Uninstall
 ```bash
@@ -217,6 +227,7 @@ The suite runs the backend in a throw-away `$HOME` with stubbed system tools (`p
 - System entries with no owning package are never uninstalled.
 - Broken launchers are **moved** to `~/.local/share/control-deck/trash/`, not deleted.
 - Autostart and the background update check are **opt-in**: nothing runs at login unless you turn it on.
+- Arch news published since your last upgrade is shown before a system upgrade, and needs an extra click to go ahead.
 
 ---
 
