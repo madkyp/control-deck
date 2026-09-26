@@ -87,7 +87,15 @@ The window has five tabs:
 
 | INSTALL | MANAGE | STORE |
 |---|---|---|
-| ![INSTALL](screenshots/install.png) | ![MANAGE](screenshots/manage.png) | ![STORE](screenshots/store.png) |
+| ![INSTALL — drop zone and supported formats](screenshots/install.png) | ![MANAGE — apps with source and disk usage](screenshots/manage.png) | ![STORE — search across repos, AUR and Flatpak](screenshots/store.png) |
+
+| UPDATES | SYSTEM · CLEAN |
+|---|---|
+| ![UPDATES — pending updates and the opt-in auto-check](screenshots/updates.png) | ![SYSTEM — clean-up with the space each item takes](screenshots/clean.png) |
+
+| SYSTEM · BACKUP | SYSTEM · HISTORY |
+|---|---|
+| ![SYSTEM — backup export and restore](screenshots/backup.png) | ![SYSTEM — operation history](screenshots/history.png) |
 
 ---
 
