@@ -12,7 +12,7 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed bash coreutils findutils grep sed gawk util-linux procps-ng jq libarchive shellcheck git
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: ShellCheck
         run: shellcheck -x -S warning bin/control-deck install.sh uninstall.sh tests/run.sh
