@@ -392,7 +392,9 @@ eq "older news is read" "$(jq -r '.[1].unread' <<<"$N")" false
 
 section "Version & self-update"
 PATH="$T/bin:$PATH" "$ROOT/install.sh" --no-deps >/dev/null 2>&1; eq "install.sh works in a clean HOME" "$?" 0
-eq "installed commit recorded" "$("$CD" version | key /dev/stdin COMMIT)" "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"
+HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"
+yes "the test checkout is a readable git repo" "[[ -n '$HEAD_SHA' ]]"
+eq "installed commit recorded" "$("$CD" version | key /dev/stdin COMMIT)" "$HEAD_SHA"
 eq "source repo recorded" "$("$CD" version | key /dev/stdin SRC)" "$ROOT"
 yes "GUI is installed last" "[[ \"$(grep -n 'shell.qml\" \"\$HOME' "$ROOT/install.sh" | cut -d: -f1)\" -gt \"$(grep -n 'install.env\"$' "$ROOT/install.sh" | cut -d: -f1)\" ]]"
 printf '{"status":"ahead","ahead_by":2,"commits":[{"sha":"aaaaaaa111"},{"sha":"bbbbbbb222"}]}' > "$T/compare.json"
