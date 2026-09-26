@@ -99,9 +99,9 @@ The window has five tabs:
 |---|---|
 | ![UPDATES — pending updates and the opt-in auto-check](screenshots/updates.png) | ![SYSTEM — clean-up with the space each item takes](screenshots/clean.png) |
 
-| SYSTEM · BACKUP | SYSTEM · HISTORY |
-|---|---|
-| ![SYSTEM — backup export and restore](screenshots/backup.png) | ![SYSTEM — operation history](screenshots/history.png) |
+| SYSTEM · BACKUP | SYSTEM · HISTORY | SYSTEM · SNAPSHOTS |
+|---|---|---|
+| ![SYSTEM — backup export and restore](screenshots/backup.png) | ![SYSTEM — operation history](screenshots/history.png) | ![SYSTEM — snapper snapshots: create, diff, delete, cleanup](screenshots/snapshots.png) |
 
 ---
 
