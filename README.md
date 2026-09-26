@@ -141,6 +141,15 @@ cd control-deck
 
 Make sure `~/.local/bin` is in your `PATH`.
 
+### Update
+```bash
+cd ~/control-deck
+git pull
+./install.sh --no-deps
+```
+
+Then close and reopen the deck to load the new UI. Your history, logs, edited launchers and the background update check (if you turned it on) are kept. If a new version needs extra dependencies, run `./install.sh` without `--no-deps`.
+
 ### Uninstall
 ```bash
 ./uninstall.sh
