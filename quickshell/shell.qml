@@ -7,9 +7,9 @@ import QtQuick.Layouts
 ShellRoot {
     FloatingWindow {
         id: win
-        title: "Install Deck"
-        implicitWidth: 600
-        implicitHeight: 680
+        title: "Control Deck"
+        implicitWidth: 660
+        implicitHeight: 760
         color: pal.bg
 
         // ---- palette (CONTROL DECK) -------------------------------------
@@ -27,24 +27,59 @@ ShellRoot {
             readonly property color dim:      "#6a6580"
             readonly property color ok:       "#a6e3a1"
             readonly property color bad:      "#f38ba8"
+            readonly property color sky:      "#7dcfff"
+            readonly property color amber:    "#e0af68"
+            readonly property color logBg:    "#07070c"
         }
         readonly property string mono: "JetBrainsMono Nerd Font"
+        readonly property string home: Quickshell.env("HOME")
+        property string scriptPath: Quickshell.env("CONTROL_DECK_BIN") || (home + "/.local/bin/control-deck")
+        // CONTROL_DECK_VIEW=manage|store|updates|system opens straight on a tab
+        property string view: Quickshell.env("CONTROL_DECK_VIEW") || "install"
+        Component.onCompleted: {
+            timerStatusProc.running = true;
+            if (view === "manage") refreshApps();
+            if (view === "updates") checkUpdates();
+            if (view === "system") openSystem(sysView);
+        }
+
+        function srcColor(s) {
+            switch (s) {
+                case "repo":     return pal.accent;
+                case "aur":      return pal.pink;
+                case "flatpak":  return pal.sky;
+                case "github":   return pal.amber;
+                case "appimage": return pal.ok;
+                default:         return pal.dim;
+            }
+        }
+        function riskColor(r) { return r === "high" ? pal.bad : (r === "medium" ? pal.amber : pal.ok); }
+        function expandHome(p) { return p.charAt(0) === "~" ? home + p.substring(1) : p; }
+        function human(b) {
+            if (!b) return "";
+            var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+            while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+            return (i === 0 ? b : b.toFixed(b < 10 ? 1 : 0)) + " " + u[i];
+        }
 
         // ---- install state (queue) --------------------------------------
-        property string scriptPath: Quickshell.env("HOME") + "/.local/bin/install-any"
         property var    queue: []          // [{path,name,type,label,supported}]
         property var    queuePaths: []     // paths awaiting detection
         property var    installPaths: []   // supported paths sent to install
+        property string fetchUrl: ""
+        property string fetchedPath: ""
         readonly property var formats: [
             { t: "APPIMAGE", e: ".AppImage  .appimage" },
             { t: "PACMAN",   e: ".pkg.tar.zst  .pkg.tar.xz  .pkg.tar.gz  .pkg.tar" },
             { t: "FLATPAK",  e: ".flatpak" },
-            { t: "TAR",      e: ".tar  .tar.gz  .tgz  .tar.xz  .tar.zst  .tar.bz2" }
+            { t: "TAR",      e: ".tar  .tar.gz  .tgz  .tar.xz  .tar.zst  .tar.bz2" },
+            { t: "DEB",      e: ".deb  (with debtap)" },
+            { t: "URL",      e: "https://…  ·  github.com/user/repo" }
         ]
         property string logText: ""
         property string status: "AWAITING FILE"
         property color  statusColor: pal.dim
-        property bool   busy: installProc.running || detectManyProc.running
+        property bool   busy: installProc.running || detectManyProc.running || fetchProc.running
 
         function typeShort(t) {
             switch (t) {
@@ -74,11 +109,30 @@ ShellRoot {
             detectManyProc.running = true;
         }
         function loadFile(p) { if (p) loadFiles([p]); }
+        // path field: local path · direct download URL · GitHub repo
+        function submitInput(t) {
+            t = t.trim();
+            if (!t) return;
+            var isUrl = /^https?:\/\//.test(t);
+            var isRepoPage = t.indexOf("github.com/") >= 0 && t.indexOf("/releases/download/") < 0;
+            var isRepoSpec = !isUrl && t.charAt(0) !== "/" && t.charAt(0) !== "~"
+                             && /^[\w.-]+\/[\w.-]+$/.test(t);
+            if (isRepoPage || isRepoSpec) {
+                view = "store"; queryField.text = t; runSearch(t);
+            } else if (isUrl) {
+                fetchUrl = t; fetchedPath = ""; logText = ""; queue = [];
+                status = "DOWNLOADING…"; statusColor = pal.pink;
+                fetchProc.running = true;
+            } else {
+                loadFile(expandHome(t));
+            }
+        }
 
         // ---- manage state -----------------------------------------------
-        property string view: "install"
         property var apps: []
         property var appsFiltered: []
+        property var sizes: ({})           // {path: {app, data}}
+        property bool sortBySize: false
         property string searchText: ""
         property string selPath: ""
         property string selName: ""
@@ -86,54 +140,141 @@ ShellRoot {
         property string selResolvedIcon: ""
         property string selSource: ""
         property string selPkg: ""
+        property string selAppId: ""
         property string selAction: ""
+        property string selGithub: ""
+        property bool   selHidden: false
+        property bool   selTerminal: false
+        property bool   selAutostart: false
+        property string selIssue: ""       // diagnosis (static or after a failed launch)
+        property var    selFixes: []       // [{kind,label}]
+        property var    fpPerms: []        // flatpak permissions of the selected app
+        property string fixKind: ""
+        property var    autostartArgs: []
+        property var    fpArgs: []
+        property bool   showAdvanced: false
+        property bool   purge: false
+        property var    editArgs: []
+        property var    uninstallArgs: []
         property string manageLog: ""
         property string manageStatus: "SELECT AN APP"
         property bool confirmUninstall: false
         property bool manageBusy: editProc.running || uninstallProc.running
                                   || listProc.running || infoProc.running
+                                  || launchProc.running || fixProc.running
+                                  || autostartProc.running || fpSetProc.running
 
         property string appsInfo: "0 / 0"
         onAppsChanged: applyFilter()
         onSearchTextChanged: applyFilter()
+        onSortBySizeChanged: applyFilter()
+        onSizesChanged: if (sortBySize) applyFilter()
+        onPurgeChanged: { confirmUninstall = false; manageLog = ""; }
+        function sizeOf(p) { var s = sizes[p]; return s ? s.app + s.data : 0; }
         function applyFilter() {
             var q = searchText.toLowerCase();
-            if (!q) appsFiltered = apps;
-            else appsFiltered = apps.filter(function(a){ return a.name.toLowerCase().indexOf(q) >= 0; });
+            var l = !q ? apps.slice() : apps.filter(function(a){ return a.name.toLowerCase().indexOf(q) >= 0; });
+            if (sortBySize) l.sort(function (a, b) { return sizeOf(b.path) - sizeOf(a.path); });
+            appsFiltered = l;
             appsInfo = appsFiltered.length + " / " + apps.length;
         }
         function refreshApps() {
-            selPath = ""; selName = ""; selIcon = ""; selResolvedIcon = "";
-            selSource = ""; selPkg = ""; selAction = ""; confirmUninstall = false;
+            selPath = ""; selName = ""; selIcon = ""; selResolvedIcon = ""; selAppId = "";
+            selSource = ""; selPkg = ""; selAction = ""; selGithub = ""; fpPerms = [];
+            confirmUninstall = false; purge = false;
             listProc.running = true;
         }
-        function selectApp(p) { confirmUninstall = false; manageLog = ""; selPath = p; infoProc.running = true; }
+        function selectApp(p) { confirmUninstall = false; purge = false; manageLog = ""; selPath = p; infoProc.running = true; }
+        function runQuick(proc) { manageLog = ""; proc.running = true; }
+        // ISSUE= / FIX=kind|LABEL lines from the backend
+        function takeDiag(line) {
+            if (line.indexOf("ISSUE=") === 0) { selIssue = line.substring(6); return true; }
+            if (line.indexOf("FIX=") === 0) {
+                var v = line.substring(4), i = v.indexOf("|");
+                selFixes = selFixes.concat([{ kind: v.substring(0, i), label: v.substring(i + 1) }]);
+                return true;
+            }
+            return false;
+        }
+        function applyFix(kind) { fixKind = kind; manageLog = ""; manageStatus = "FIXING…"; fixProc.running = true; }
+        // Electron/Chromium flags for native Wayland, inserted before field codes
+        function withWaylandFlags(e) {
+            if (e.indexOf("ozone-platform") >= 0) return e;
+            var f = "--enable-features=UseOzonePlatform --ozone-platform=wayland";
+            var m = e.match(/\s%[fFuUdDnNickvm]/);
+            return m ? e.slice(0, m.index) + " " + f + e.slice(m.index) : e + " " + f;
+        }
 
         // ---- store state (search & install by name) ---------------------
         property string storeQuery: ""
         property var    results: []
         property var    installArgs: []
         property string storeLog: ""
-        property string storeStatus: "BUSCA UNA APP"
-        property bool   storeBusy: searchProc.running || storeInstallProc.running
+        property string storeStatus: "SEARCH FOR AN APP"
+        property var    review: null        // AUR review shown before building
+        property string reviewPkg: ""
+        property bool   confirmRisky: false
+        property bool   storeBusy: searchProc.running || storeInstallProc.running || reviewProc.running
 
-        function srcColor(s) {
-            return s === "repo" ? pal.accent : (s === "aur" ? pal.pink : "#7dcfff");
-        }
         function runSearch(q) {
             if (!q || q.trim() === "") return;
-            storeQuery = q.trim(); results = []; storeLog = "";
-            storeStatus = "BUSCANDO…";
+            storeQuery = q.trim(); results = []; storeLog = ""; review = null;
+            storeStatus = "SEARCHING…";
             searchProc.running = true;
         }
         function installPkg(src, id, remote) {
+            if (src === "aur" && (!review || review.name !== id)) {
+                // AUR packages are reviewed before they are built
+                reviewPkg = id; review = null; confirmRisky = false; storeLog = "";
+                storeStatus = "REVIEWING " + id + "…";
+                reviewProc.running = true;
+                return;
+            }
             installArgs = [src, id, remote || ""];
-            storeLog = "";
-            storeStatus = "INSTALANDO " + id + "…";
+            storeLog = ""; review = null;
+            storeStatus = "INSTALLING " + (src === "github" ? id.split("/").pop() : id) + "…";
             storeInstallProc.running = true;
         }
+        function dateOf(epoch) { return epoch ? new Date(epoch * 1000).toISOString().substring(0, 10) : "?"; }
 
-        // ---- backend processes ------------------------------------------
+        // ---- updates state ----------------------------------------------
+        property var    updates: []
+        property var    updArgs: []
+        property var    timerArgs: []
+        property string updLog: ""
+        property string updStatus: "NOT CHECKED"
+        property bool   updChecked: false
+        property bool   autoCheck: false
+        property bool   updBusy: checkProc.running || updProc.running || timerProc.running
+
+        function checkUpdates() { updates = []; updStatus = "CHECKING…"; checkProc.running = true; }
+        function runUpdate(args, label) {
+            updArgs = args; updLog = "";
+            updStatus = label; updProc.running = true;
+        }
+
+        // ---- system state (clean · backup · history) --------------------
+        property string sysView: "clean"
+        property var    cleanItems: []
+        property var    history: []
+        property var    sysArgs: []
+        property string sysLog: ""
+        property string sysStatus: ""
+        property bool   confirmRestore: false
+        property bool   sysBusy: scanProc.running || sysProc.running || histProc.running
+
+        function runSys(args, label) {
+            sysArgs = args; sysLog = ""; sysStatus = label;
+            sysProc.running = true;
+        }
+        function scanClean() { cleanItems = []; sysStatus = "SCANNING…"; scanProc.running = true; }
+        function openSystem(sub) {
+            sysView = sub;
+            if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
+            if (sub === "history") histProc.running = true;
+        }
+
+        // ---- backend processes: install ---------------------------------
         Process {
             id: detectManyProc
             command: [win.scriptPath, "detectmany"].concat(win.queuePaths)
@@ -156,12 +297,30 @@ ShellRoot {
             onExited: (code, st) => {
                 if (code === 0) { win.status = "DONE ✓"; win.statusColor = pal.ok; }
                 else            { win.status = "DONE WITH ERRORS"; win.statusColor = pal.bad; }
+                win.apps = [];   // MANAGE reloads on next visit
+            }
+        }
+        Process {
+            id: fetchProc
+            command: [win.scriptPath, "fetch", win.fetchUrl]
+            stdout: SplitParser {
+                onRead: (l) => {
+                    if (l.indexOf("FILE=") === 0) win.fetchedPath = l.substring(5);
+                    else win.logText += l + "\n";
+                }
+            }
+            stderr: SplitParser { onRead: (l) => win.logText += l + "\n" }
+            onExited: (c, s) => {
+                if (c === 0 && win.fetchedPath) win.loadFile(win.fetchedPath);
+                else { win.status = "DOWNLOAD FAILED"; win.statusColor = pal.bad; }
             }
         }
         Process {
             id: openProc
-            command: ["xdg-open", Quickshell.env("HOME") + "/Applications"]
+            command: ["xdg-open", win.home + "/Applications"]
         }
+
+        // ---- backend processes: manage ----------------------------------
         Process {
             id: listProc
             command: [win.scriptPath, "list"]
@@ -170,7 +329,15 @@ ShellRoot {
                     try { win.apps = JSON.parse(text); }
                     catch (e) { win.apps = []; }
                     win.manageStatus = win.apps.length + " APPS";
+                    sizesProc.running = true;   // slower: fills in afterwards
                 }
+            }
+        }
+        Process {
+            id: sizesProc
+            command: [win.scriptPath, "sizes"]
+            stdout: StdioCollector {
+                onStreamFinished: { try { win.sizes = JSON.parse(text); } catch (e) {} }
             }
         }
         Process {
@@ -178,39 +345,47 @@ ShellRoot {
             command: [win.scriptPath, "appinfo", win.selPath]
             stdout: StdioCollector {
                 onStreamFinished: {
-                    var n = "", ic = "", ri = "", sc = "", pk = "", ac = "";
+                    var m = {};
                     var L = text.split("\n");
+                    win.selIssue = ""; win.selFixes = [];
                     for (var i = 0; i < L.length; i++) {
+                        if (win.takeDiag(L[i])) continue;
                         var idx = L[i].indexOf("="); if (idx < 0) continue;
-                        var k = L[i].substring(0, idx), v = L[i].substring(idx + 1);
-                        if (k === "NAME") n = v; else if (k === "ICON") ic = v;
-                        else if (k === "RESOLVED_ICON") ri = v; else if (k === "SOURCE") sc = v;
-                        else if (k === "PKG") pk = v; else if (k === "ACTION") ac = v;
+                        m[L[i].substring(0, idx)] = L[i].substring(idx + 1);
                     }
-                    win.selName = n; win.selIcon = ic; win.selResolvedIcon = ri;
-                    win.selSource = sc; win.selPkg = pk; win.selAction = ac;
-                    nameEdit.text = n; iconEdit.text = ic;
-                    win.manageStatus = sc.toUpperCase();
+                    win.selName = m.NAME || ""; win.selIcon = m.ICON || "";
+                    win.selResolvedIcon = m.RESOLVED_ICON || ""; win.selSource = m.SOURCE || "";
+                    win.selPkg = m.PKG || ""; win.selAction = m.ACTION || "";
+                    win.selGithub = m.GITHUB || ""; win.selAppId = m.APPID || "";
+                    win.selHidden = m.NODISPLAY === "true";
+                    win.selTerminal = m.TERMINAL === "true";
+                    win.selAutostart = m.AUTOSTART === "true";
+                    nameEdit.text = win.selName; iconEdit.text = win.selIcon;
+                    execEdit.text = m.EXEC || ""; catEdit.text = m.CATEGORIES || "";
+                    win.manageStatus = win.selSource.toUpperCase()
+                                       + (win.selGithub ? " · " + win.selGithub : "");
+                    win.fpPerms = [];
+                    if (win.selSource === "flatpak" && win.selAppId) fpProc.running = true;
                 }
             }
         }
         Process {
             id: editProc
-            command: [win.scriptPath, "edit", win.selPath, nameEdit.text, iconEdit.text]
+            command: [win.scriptPath, "edit"].concat(win.editArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             onExited: (c, s) => { win.manageStatus = c === 0 ? "SAVED ✓" : "SAVE FAILED"; win.refreshApps(); }
         }
         Process {
             id: uninstallProc
-            command: [win.scriptPath, "uninstall", win.selPath]
+            command: [win.scriptPath, "uninstall"].concat(win.uninstallArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             onExited: (c, s) => { win.manageStatus = c === 0 ? "REMOVED ✓" : "FAILED · " + c; win.confirmUninstall = false; win.refreshApps(); }
         }
         Process {
             id: pickProc
-            command: [win.scriptPath, "pickfile", "Elige un icono"]
+            command: [win.scriptPath, "pickfile", "Choose an icon"]
             stdout: StdioCollector { onStreamFinished: { var p = text.trim(); if (p) iconEdit.text = p; } }
         }
         Process {
@@ -218,7 +393,67 @@ ShellRoot {
             command: [win.scriptPath, "rmpreview", win.selPath]
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            onExited: (c, s) => { if (win.purge) leftoverProc.running = true; }
         }
+        Process {
+            id: leftoverProc
+            command: [win.scriptPath, "leftovers", win.selPath]
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+        }
+        Process {
+            id: launchProc
+            command: [win.scriptPath, "launch", win.selPath]
+            stdout: SplitParser { onRead: (l) => { if (!win.takeDiag(l)) win.manageLog += l + "\n"; } }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            onStarted: { win.selIssue = ""; win.selFixes = []; win.manageStatus = "LAUNCHING…"; }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? "RUNNING ▶" : "LAUNCH FAILED ✗"; }
+        }
+        Process {
+            id: fixProc
+            command: [win.scriptPath, "fix", win.selPath, win.fixKind]
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            onExited: (c, s) => {
+                win.manageStatus = c === 0 ? "FIXED ✓" : "FIX FAILED";
+                infoProc.running = true;   // re-check the app
+            }
+        }
+        Process {
+            id: autostartProc
+            command: [win.scriptPath, "autostart"].concat(win.autostartArgs)
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            onExited: (c, s) => { infoProc.running = true; }
+        }
+        Process {
+            id: fpProc
+            command: [win.scriptPath, "fpperms", win.selAppId]
+            stdout: StdioCollector {
+                onStreamFinished: { try { win.fpPerms = JSON.parse(text); } catch (e) { win.fpPerms = []; } }
+            }
+        }
+        Process {
+            id: fpSetProc
+            command: [win.scriptPath].concat(win.fpArgs)
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            onExited: (c, s) => { fpProc.running = true; }
+        }
+        Process {
+            id: dirProc
+            command: [win.scriptPath, "opendir", win.selPath]
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+        }
+        Process {
+            id: copyProc
+            command: [win.scriptPath, "copyexec", win.selPath]
+            stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
+        }
+
+        // ---- backend processes: store -----------------------------------
         Process {
             id: searchProc
             command: [win.scriptPath, "search", win.storeQuery]
@@ -231,6 +466,17 @@ ShellRoot {
             }
         }
         Process {
+            id: reviewProc
+            command: [win.scriptPath, "aurreview", win.reviewPkg]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.review = JSON.parse(text); } catch (e) { win.review = null; }
+                    win.storeStatus = win.review ? "RISK: " + win.review.risk.toUpperCase() : "REVIEW FAILED";
+                }
+            }
+            stderr: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
+        }
+        Process {
             id: storeInstallProc
             command: [win.scriptPath, "installpkg"].concat(win.installArgs)
             stdout: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
@@ -238,7 +484,87 @@ ShellRoot {
             onExited: (c, s) => {
                 if (c === 0) { win.storeStatus = "DONE ✓"; }
                 else { win.storeStatus = "FAILED · " + c; }
+                win.apps = [];
             }
+        }
+
+        // ---- backend processes: updates ---------------------------------
+        Process {
+            id: checkProc
+            command: [win.scriptPath, "updates"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.updates = JSON.parse(text); }
+                    catch (e) { win.updates = []; }
+                    win.updChecked = true;
+                    win.updStatus = win.updates.length === 0 ? "UP TO DATE ✓" : win.updates.length + " PENDING";
+                }
+            }
+        }
+        Process {
+            id: updProc
+            command: [win.scriptPath].concat(win.updArgs)
+            stdout: SplitParser { onRead: (l) => win.updLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.updLog += l + "\n" }
+            onExited: (c, s) => {
+                win.updStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
+                // AUR builds keep going in their terminal; everything else is re-checked
+                if (!(win.updArgs[0] === "update" && win.updArgs[1] === "aur")) win.checkUpdates();
+            }
+        }
+        Process {
+            id: timerStatusProc
+            command: [win.scriptPath, "timer", "status"]
+            stdout: StdioCollector { onStreamFinished: win.autoCheck = text.trim() === "on" }
+        }
+        Process {
+            id: timerProc
+            command: [win.scriptPath, "timer"].concat(win.timerArgs)
+            stdout: SplitParser { onRead: (l) => win.updLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.updLog += l + "\n" }
+            onExited: (c, s) => { timerStatusProc.running = true; }
+        }
+
+        // ---- backend processes: system ----------------------------------
+        Process {
+            id: scanProc
+            command: [win.scriptPath, "cleanscan"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.cleanItems = JSON.parse(text); }
+                    catch (e) { win.cleanItems = []; }
+                    var n = win.cleanItems.filter(function (i) { return i.count > 0; }).length;
+                    win.sysStatus = n === 0 ? "ALL CLEAN ✓" : n + " TO CLEAN";
+                }
+            }
+        }
+        Process {
+            id: sysProc
+            command: [win.scriptPath].concat(win.sysArgs)
+            stdout: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
+            onExited: (c, s) => {
+                win.sysStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
+                win.confirmRestore = false;
+                if (win.sysArgs[0] === "clean") scanProc.running = true;
+                if (win.sysArgs[0] === "restore") win.apps = [];
+                histProc.running = true;
+            }
+        }
+        Process {
+            id: histProc
+            command: [win.scriptPath, "history"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.history = JSON.parse(text); }
+                    catch (e) { win.history = []; }
+                }
+            }
+        }
+        Process {
+            id: pickRestoreProc
+            command: [win.scriptPath, "pickfile", "Choose a Control Deck backup (.json)"]
+            stdout: StdioCollector { onStreamFinished: { var p = text.trim(); if (p) restoreField.text = p; } }
         }
 
         // ---- reusable bits ----------------------------------------------
@@ -304,6 +630,8 @@ ShellRoot {
             }
         }
 
+        component BarSep: Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+
         component NavTab: Item {
             property string label
             property string key
@@ -323,8 +651,158 @@ ShellRoot {
             }
             MouseArea {
                 anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                onClicked: { win.view = key; if (key === "manage" && win.apps.length === 0) win.refreshApps(); }
+                onClicked: {
+                    win.view = key;
+                    if (key === "manage" && win.apps.length === 0) win.refreshApps();
+                    if (key === "updates" && !win.updChecked && !win.updBusy) win.checkUpdates();
+                    if (key === "system") win.openSystem(win.sysView);
+                }
             }
+        }
+
+        // small toggle / button chip
+        component Chip: Rectangle {
+            id: chip
+            property string label
+            property bool active: false
+            property bool on: true
+            property color tint: pal.accent
+            signal clicked
+            implicitWidth: ct.implicitWidth + 16
+            implicitHeight: 26
+            radius: 5
+            opacity: on ? 1.0 : 0.35
+            color: active ? pal.cardHi : "transparent"
+            border.color: active ? tint : pal.border
+            border.width: 1
+            Text {
+                id: ct
+                anchors.centerIn: parent
+                text: chip.label; font.family: win.mono; font.pixelSize: 9
+                font.bold: true; font.letterSpacing: 1
+                color: chip.active ? chip.tint : pal.dim
+            }
+            MouseArea {
+                anchors.fill: parent; enabled: chip.on
+                cursorShape: Qt.PointingHandCursor
+                onClicked: chip.clicked()
+            }
+        }
+
+        // source badge
+        component Badge: Rectangle {
+            property string label
+            property color tint: pal.accent
+            width: 62; height: 20; radius: 4
+            color: "transparent"
+            border.color: tint; border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: label.toUpperCase(); color: tint
+                font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
+            }
+        }
+
+        component Field: TextField {
+            placeholderTextColor: pal.dim
+            color: pal.text; font.family: win.mono; font.pixelSize: 12; leftPadding: 10
+            background: Rectangle { color: "transparent"; border.color: pal.border; border.width: 1; radius: 6 }
+        }
+
+        // small boxed button (row actions)
+        component MiniBtn: Rectangle {
+            id: mb
+            property string label
+            property bool on: true
+            property bool primary: true
+            property color tint: pal.accent
+            signal clicked
+            width: 76; height: 30; radius: 6
+            color: primary && on ? pal.cardHi : "transparent"
+            border.color: primary && on ? tint : pal.border
+            border.width: 1
+            opacity: on ? 1.0 : 0.4
+            Text {
+                anchors.centerIn: parent
+                text: mb.label
+                color: mb.primary && mb.on ? pal.accentHi : pal.dim
+                font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
+            }
+            MouseArea {
+                anchors.fill: parent; enabled: mb.on
+                cursorShape: Qt.PointingHandCursor
+                onClicked: mb.clicked()
+            }
+        }
+
+        component LogBox: Rectangle {
+            id: lb
+            property string content: ""
+            property string placeholder: "// log output"
+            property int base: 170
+            property bool expanded: false
+            Layout.preferredHeight: expanded ? Math.max(base * 2.5, 420) : base
+            Layout.minimumHeight: 60
+            radius: 8; color: pal.logBg
+            border.color: pal.border; border.width: 1
+            ScrollView {
+                anchors.fill: parent
+                anchors.margins: 8
+                anchors.rightMargin: 30
+                clip: true
+                TextArea {
+                    readOnly: true
+                    text: lb.content || lb.placeholder
+                    color: lb.content ? pal.text : pal.dim
+                    font.family: win.mono; font.pixelSize: 11
+                    wrapMode: TextArea.WordWrap
+                    background: null
+                    onTextChanged: cursorPosition = length
+                }
+            }
+            // expand / shrink
+            Rectangle {
+                anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 6
+                width: 22; height: 22; radius: 4
+                color: expandMa.containsMouse ? pal.cardHi : "transparent"
+                Text {
+                    anchors.centerIn: parent
+                    text: lb.expanded ? "" : ""
+                    color: pal.dim; font.family: win.mono; font.pixelSize: 11
+                }
+                MouseArea {
+                    id: expandMa
+                    anchors.fill: parent; hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: lb.expanded = !lb.expanded
+                }
+            }
+        }
+
+        // centered placeholder for empty panels
+        component EmptyHint: ColumnLayout {
+            property string title
+            property string sub: ""
+            anchors.centerIn: parent
+            spacing: 8
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: "力"; color: "#141127"; font.pixelSize: 96; font.bold: true
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                text: title; color: pal.dim; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 2
+            }
+            Text {
+                Layout.alignment: Qt.AlignHCenter
+                visible: sub !== ""
+                text: sub; color: pal.dim; font.family: win.mono; font.pixelSize: 10
+            }
+        }
+
+        component Hint: Text {
+            Layout.fillWidth: true
+            color: pal.dim; font.family: win.mono; font.pixelSize: 10; wrapMode: Text.WordWrap
         }
 
         // ---- layout ------------------------------------------------------
@@ -346,10 +824,12 @@ ShellRoot {
 
             // nav
             RowLayout {
-                spacing: 26
+                spacing: 22
                 NavTab { label: "INSTALL"; key: "install" }
                 NavTab { label: "MANAGE";  key: "manage" }
                 NavTab { label: "STORE";   key: "store" }
+                NavTab { label: "UPDATES"; key: "updates" }
+                NavTab { label: "SYSTEM";  key: "system" }
             }
 
             // ================= INSTALL VIEW =================
@@ -371,6 +851,7 @@ ShellRoot {
                 id: dropZone
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: 100
                 radius: 10
                 color: dropArea.containsDrag ? pal.cardHi : pal.panel
                 border.color: dropArea.containsDrag ? pal.accent : pal.border
@@ -409,9 +890,9 @@ ShellRoot {
                     font.pixelSize: 12; font.letterSpacing: 3
                 }
 
-                // supported formats (shown while the queue is empty)
+                // supported formats (shown while the queue is empty and there's room)
                 ColumnLayout {
-                    visible: win.queue.length === 0
+                    visible: win.queue.length === 0 && dropZone.height >= 280
                     anchors.bottom: parent.bottom
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottomMargin: 16
@@ -514,23 +995,17 @@ ShellRoot {
                 }
             }
 
-            // manual path fallback (Wayland DnD safety net)
+            // manual path / URL / GitHub repo (also the Wayland DnD safety net)
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 10
                 Text { text: ">"; color: pal.accent; font.family: win.mono; font.pixelSize: 13 }
-                TextField {
+                Field {
                     id: pathField
                     Layout.fillWidth: true
-                    placeholderText: "paste path…"
-                    placeholderTextColor: pal.dim
-                    color: pal.text; font.family: win.mono; font.pixelSize: 12
-                    background: Rectangle {
-                        color: "transparent"
-                        border.color: pal.border; border.width: 1; radius: 6
-                    }
-                    leftPadding: 10
-                    onAccepted: if (text.trim()) win.loadFile(text.trim())
+                    placeholderText: "path, download URL or github.com/user/repo…"
+                    enabled: !win.busy
+                    onAccepted: win.submitInput(text)
                 }
             }
 
@@ -539,32 +1014,12 @@ ShellRoot {
             Text {
                 Layout.fillWidth: true
                 visible: win.queue.length > 0 && win.supportedCount() < win.queue.length
-                text: (win.queue.length - win.supportedCount()) + " archivo(s) no instalable(s) se omitirán (deb/rpm/desconocido)."
+                text: (win.queue.length - win.supportedCount()) + " file(s) can't be installed and will be skipped (rpm / deb without debtap / unknown)."
                 color: pal.bad; font.family: win.mono; font.pixelSize: 11
                 wrapMode: Text.WordWrap
             }
 
-            // log
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 150
-                radius: 8; color: "#07070c"
-                border.color: pal.border; border.width: 1
-                ScrollView {
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    clip: true
-                    TextArea {
-                        readOnly: true
-                        text: win.logText || "// log output"
-                        color: win.logText ? pal.text : pal.dim
-                        font.family: win.mono; font.pixelSize: 11
-                        wrapMode: TextArea.WordWrap
-                        background: null
-                        onTextChanged: cursorPosition = length
-                    }
-                }
-            }
+            LogBox { Layout.fillWidth: true; base: 190; content: win.logText }
 
             Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
 
@@ -577,13 +1032,13 @@ ShellRoot {
                     on: win.queue.length > 0 && !win.busy
                     onClicked: { win.reset(); pathField.text = ""; }
                 }
-                Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+                BarSep {}
                 ActBtn {
                     glyph: ""; label: "FOLDER"
                     on: !win.busy
                     onClicked: openProc.running = true
                 }
-                Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+                BarSep {}
                 ActBtn {
                     glyph: ""; label: win.busy ? "WORKING" : (win.queue.length > 1 ? "INSTALL ALL" : "INSTALL")
                     boxed: true
@@ -609,23 +1064,24 @@ ShellRoot {
 
                 Section { Layout.fillWidth: true; label: "APPS"; info: win.appsInfo }
 
-                // search
+                // search + sort
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
                     Text { text: ""; color: pal.accent; font.family: win.mono; font.pixelSize: 12 }
-                    TextField {
+                    Field {
                         id: searchField
                         Layout.fillWidth: true
-                        placeholderText: "filter…"; placeholderTextColor: pal.dim
-                        color: pal.text; font.family: win.mono; font.pixelSize: 12; leftPadding: 10
-                        background: Rectangle { color: "transparent"; border.color: pal.border; border.width: 1; radius: 6 }
+                        placeholderText: "filter…"
                         onTextChanged: win.searchText = text
                     }
+                    Chip { label: "A–Z";  active: !win.sortBySize; onClicked: win.sortBySize = false }
+                    Chip { label: "SIZE"; active: win.sortBySize;  onClicked: win.sortBySize = true }
                 }
 
                 // app list
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
+                    Layout.minimumHeight: 120
                     radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
                     ListView {
                         id: appList
@@ -640,6 +1096,7 @@ ShellRoot {
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                opacity: modelData.hidden ? 0.45 : 1.0
                                 Item {
                                     width: 22; height: 22
                                     Rectangle {
@@ -663,6 +1120,18 @@ ShellRoot {
                                     font.pixelSize: 12; elide: Text.ElideRight
                                 }
                                 Text {
+                                    visible: modelData.hidden
+                                    text: "HIDDEN"; color: pal.pink
+                                    font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                }
+                                Text {
+                                    Layout.preferredWidth: 58; horizontalAlignment: Text.AlignRight
+                                    text: win.human(win.sizeOf(modelData.path))
+                                    color: win.sortBySize ? pal.amber : pal.dim
+                                    font.family: win.mono; font.pixelSize: 9
+                                }
+                                Text {
+                                    Layout.preferredWidth: 58; horizontalAlignment: Text.AlignRight
                                     text: modelData.source.toUpperCase(); color: pal.dim
                                     font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                                 }
@@ -677,7 +1146,7 @@ ShellRoot {
 
                 // editor — only appears once an app is selected
                 ColumnLayout {
-                    Layout.fillWidth: true; spacing: 12
+                    Layout.fillWidth: true; spacing: 10
                     visible: win.selPath !== ""
 
                 Section { Layout.fillWidth: true; label: "EDIT"; info: win.manageStatus }
@@ -707,21 +1176,17 @@ ShellRoot {
                     }
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 8
-                        TextField {
+                        Field {
                             id: nameEdit
                             Layout.fillWidth: true; enabled: win.selPath !== ""
-                            placeholderText: "app name"; placeholderTextColor: pal.dim
-                            color: pal.text; font.family: win.mono; font.pixelSize: 13; leftPadding: 10
-                            background: Rectangle { color: "transparent"; border.color: pal.border; border.width: 1; radius: 6 }
+                            placeholderText: "app name"; font.pixelSize: 13
                         }
                         RowLayout {
                             Layout.fillWidth: true; spacing: 8
-                            TextField {
+                            Field {
                                 id: iconEdit
                                 Layout.fillWidth: true; enabled: win.selPath !== ""
-                                placeholderText: "icon name or /path"; placeholderTextColor: pal.dim
-                                color: pal.text; font.family: win.mono; font.pixelSize: 12; leftPadding: 10
-                                background: Rectangle { color: "transparent"; border.color: pal.border; border.width: 1; radius: 6 }
+                                placeholderText: "icon name or /path"
                             }
                             Rectangle {
                                 width: 40; height: 34; radius: 6
@@ -736,30 +1201,144 @@ ShellRoot {
                     }
                 }
 
-                Text {
-                    Layout.fillWidth: true; visible: win.selAction !== ""
-                    text: win.selAction
-                    color: win.selSource === "system" ? pal.bad : pal.dim
-                    font.family: win.mono; font.pixelSize: 11; wrapMode: Text.WordWrap
+                // advanced fields: Exec · categories · flags
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    visible: win.showAdvanced
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: "EXEC"; Layout.preferredWidth: 38; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Field {
+                            id: execEdit
+                            Layout.fillWidth: true
+                            placeholderText: "program %U   ·   env VAR=1 program --flag"
+                            font.pixelSize: 11
+                        }
+                        Chip { label: "WAYLAND"; tint: pal.sky; onClicked: execEdit.text = win.withWaylandFlags(execEdit.text) }
+                        Chip { label: "COPY"; onClicked: win.runQuick(copyProc) }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: "CATS"; Layout.preferredWidth: 38; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Field {
+                            id: catEdit
+                            Layout.fillWidth: true
+                            placeholderText: "Game;Utility;Development;…"
+                            font.pixelSize: 11
+                        }
+                        Chip { label: "HIDDEN"; tint: pal.pink; active: win.selHidden; onClicked: win.selHidden = !win.selHidden }
+                        Chip { label: "TERMINAL"; active: win.selTerminal; onClicked: win.selTerminal = !win.selTerminal }
+                    }
+                }
+
+                // flatpak permissions (toggle = user override)
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    visible: win.selSource === "flatpak" && win.fpPerms.length > 0
+                    Text {
+                        Layout.alignment: Qt.AlignTop; Layout.topMargin: 6
+                        text: "PERMS"; Layout.preferredWidth: 38; color: pal.dim
+                        font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                    }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 6
+                        Repeater {
+                            model: win.fpPerms
+                            delegate: Chip {
+                                required property var modelData
+                                label: (modelData.granted ? "✓ " : "") + modelData.label.toUpperCase()
+                                active: modelData.granted; tint: pal.sky
+                                on: !win.manageBusy
+                                onClicked: {
+                                    win.manageLog = "";
+                                    win.fpArgs = ["fpset", win.selAppId, modelData.key, modelData.granted ? "off" : "on"];
+                                    fpSetProc.running = true;
+                                }
+                            }
+                        }
+                        Chip {
+                            label: "RESET"; tint: pal.bad
+                            on: !win.manageBusy
+                            onClicked: { win.manageLog = ""; win.fpArgs = ["fpreset", win.selAppId]; fpSetProc.running = true; }
+                        }
+                    }
+                }
+
+                // diagnosis: why it doesn't start + one-click fixes
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: win.selIssue !== ""
+                    implicitHeight: issueRow.implicitHeight + 16
+                    radius: 6; color: "#1a0f16"; border.color: pal.bad; border.width: 1
+                    RowLayout {
+                        id: issueRow
+                        anchors.fill: parent; anchors.margins: 8; spacing: 8
+                        Text { text: ""; color: pal.bad; font.family: win.mono; font.pixelSize: 13 }
+                        Text {
+                            Layout.fillWidth: true
+                            text: win.selIssue; color: pal.text; wrapMode: Text.WordWrap
+                            font.family: win.mono; font.pixelSize: 10
+                        }
+                        Repeater {
+                            model: win.selFixes
+                            delegate: Chip {
+                                required property var modelData
+                                label: modelData.label; tint: pal.ok; active: true
+                                on: !win.manageBusy
+                                onClicked: win.applyFix(modelData.kind)
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 2
+                        Text {
+                            Layout.fillWidth: true
+                            text: win.selAction
+                            color: win.selSource === "system" ? pal.bad : pal.dim
+                            font.family: win.mono; font.pixelSize: 10; wrapMode: Text.WordWrap
+                            maximumLineCount: 2; elide: Text.ElideRight
+                        }
+                        Text {
+                            visible: win.sizes[win.selPath] !== undefined
+                            text: {
+                                var s = win.sizes[win.selPath];
+                                return s ? "  app " + (win.human(s.app) || "–") + "  ·  data " + (win.human(s.data) || "–") : "";
+                            }
+                            color: pal.amber; font.family: win.mono; font.pixelSize: 10
+                        }
+                    }
+                    Chip {
+                        label: win.selAutostart ? "✓ AUTOSTART" : "AUTOSTART"
+                        tint: pal.ok; active: win.selAutostart
+                        on: !win.manageBusy
+                        onClicked: {
+                            win.manageLog = "";
+                            win.autostartArgs = [win.selPath, win.selAutostart ? "off" : "on"];
+                            autostartProc.running = true;
+                        }
+                    }
+                    Chip {
+                        label: win.purge ? "✓ DELETE DATA" : "+ DELETE DATA"
+                        tint: pal.bad; active: win.purge
+                        on: win.selSource !== "system" && win.selSource !== "wine" && !win.manageBusy
+                        onClicked: win.purge = !win.purge
+                    }
+                    Chip {
+                        label: win.showAdvanced ? "LESS ▴" : "MORE ▾"
+                        active: win.showAdvanced
+                        onClicked: win.showAdvanced = !win.showAdvanced
+                    }
                 }
                 } // end editor panel
 
-                // manage log
-                Rectangle {
-                    Layout.fillWidth: true; Layout.preferredHeight: 84
+                LogBox {
+                    Layout.fillWidth: true; base: 150
                     visible: win.manageLog !== ""
-                    radius: 8; color: "#07070c"; border.color: pal.border; border.width: 1
-                    ScrollView {
-                        anchors.fill: parent; anchors.margins: 8; clip: true
-                        TextArea {
-                            readOnly: true
-                            text: win.manageLog || "// output"
-                            color: win.manageLog ? pal.text : pal.dim
-                            font.family: win.mono; font.pixelSize: 11
-                            wrapMode: TextArea.WordWrap; background: null
-                            onTextChanged: cursorPosition = length
-                        }
-                    }
+                    content: win.manageLog
                 }
 
                 Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
@@ -772,13 +1351,33 @@ ShellRoot {
                         on: !win.manageBusy
                         onClicked: { win.searchText = ""; searchField.text = ""; win.refreshApps(); }
                     }
-                    Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: "LAUNCH"
+                        on: win.selPath !== "" && !win.manageBusy
+                        onClicked: win.runQuick(launchProc)
+                    }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: "FOLDER"
+                        on: win.selPath !== "" && !win.manageBusy
+                        onClicked: win.runQuick(dirProc)
+                    }
+                    BarSep {}
                     ActBtn {
                         glyph: ""; label: "SAVE"; boxed: true
                         on: win.selPath !== "" && !win.manageBusy
-                        onClicked: { win.manageLog = ""; editProc.running = true; }
+                        onClicked: {
+                            var a = [win.selPath, "NAME=" + nameEdit.text, "ICON=" + iconEdit.text];
+                            if (win.showAdvanced)
+                                a = a.concat(["EXEC=" + execEdit.text, "CATEGORIES=" + catEdit.text]);
+                            a = a.concat(["NODISPLAY=" + win.selHidden, "TERMINAL=" + win.selTerminal]);
+                            win.editArgs = a;
+                            win.manageLog = "";
+                            editProc.running = true;
+                        }
                     }
-                    Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+                    BarSep {}
                     ActBtn {
                         glyph: ""
                         label: win.confirmUninstall ? "CONFIRM?" : "UNINSTALL"
@@ -788,12 +1387,16 @@ ShellRoot {
                                 win.confirmUninstall = true;
                                 win.manageLog = "";
                                 if (win.selSource === "pacman") {
-                                    win.manageStatus = "REVISA Y CONFIRMA";
-                                    previewProc.running = true;   // show what pacman -Rns removes
+                                    win.manageStatus = "REVIEW AND CONFIRM";
+                                    previewProc.running = true;   // pacman -Rns preview (+ leftovers)
+                                } else if (win.purge) {
+                                    win.manageStatus = "REVIEW AND CONFIRM";
+                                    leftoverProc.running = true;
                                 } else {
                                     win.manageStatus = "CLICK AGAIN TO CONFIRM";
                                 }
                             } else {
+                                win.uninstallArgs = win.purge ? [win.selPath, "--purge"] : [win.selPath];
                                 uninstallProc.running = true;
                             }
                         }
@@ -813,63 +1416,35 @@ ShellRoot {
                 // query
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
-                    Text { text: ""; color: pal.accent; font.family: win.mono; font.pixelSize: 12 }
-                    TextField {
+                    Text { text: ""; color: pal.accent; font.family: win.mono; font.pixelSize: 12 }
+                    Field {
                         id: queryField
                         Layout.fillWidth: true
-                        placeholderText: "buscar app en repos · AUR · flatpak…"
-                        placeholderTextColor: pal.dim
-                        color: pal.text; font.family: win.mono; font.pixelSize: 12; leftPadding: 10
+                        placeholderText: "search repos · AUR · flatpak…  or  github.com/user/repo"
                         enabled: !win.storeBusy
-                        background: Rectangle { color: "transparent"; border.color: pal.border; border.width: 1; radius: 6 }
                         onAccepted: win.runSearch(text)
                     }
-                    Rectangle {
-                        Layout.preferredWidth: 78; Layout.preferredHeight: 34
-                        radius: 6
-                        color: win.storeBusy ? pal.card : pal.cardHi
-                        border.color: pal.accent; border.width: 1
-                        Text {
-                            anchors.centerIn: parent
-                            text: win.storeBusy ? "…" : "SEARCH"
-                            color: pal.accentHi; font.family: win.mono; font.pixelSize: 10; font.letterSpacing: 1
-                        }
-                        MouseArea {
-                            anchors.fill: parent; enabled: !win.storeBusy
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: win.runSearch(queryField.text)
-                        }
+                    MiniBtn {
+                        width: 78; height: 34
+                        label: win.storeBusy ? "…" : "SEARCH"
+                        on: !win.storeBusy
+                        onClicked: win.runSearch(queryField.text)
                     }
                 }
 
                 // results
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.review === null && !reviewProc.running
                     radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
 
-                    // empty / loading hint
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: 8
+                    EmptyHint {
                         visible: win.results.length === 0
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: "力"
-                            color: "#141127"; font.pixelSize: 96; font.bold: true
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: win.storeBusy ? "BUSCANDO…"
-                                 : (win.storeQuery === "" ? "ESCRIBE UNA APP Y PULSA ENTER"
-                                                          : "SIN RESULTADOS PARA «" + win.storeQuery + "»")
-                            color: pal.dim; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 2
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            visible: win.storeQuery === "" && !win.storeBusy
-                            text: "busca en repos oficiales · AUR · Flatpak"
-                            color: pal.dim; font.family: win.mono; font.pixelSize: 10
-                        }
+                        title: win.storeBusy ? "SEARCHING…"
+                             : (win.storeQuery === "" ? "TYPE AN APP AND PRESS ENTER"
+                                                      : "NO RESULTS FOR «" + win.storeQuery + "»")
+                        sub: win.storeQuery === "" && !win.storeBusy
+                             ? "official repos · AUR · Flatpak · GitHub releases" : ""
                     }
 
                     ListView {
@@ -885,18 +1460,9 @@ ShellRoot {
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
-                                // source badge
-                                Rectangle {
+                                Badge {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: 62; height: 20; radius: 4
-                                    color: "transparent"
-                                    border.color: win.srcColor(modelData.source); border.width: 1
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: modelData.source.toUpperCase()
-                                        color: win.srcColor(modelData.source)
-                                        font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
-                                    }
+                                    label: modelData.source; tint: win.srcColor(modelData.source)
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true; spacing: 1
@@ -918,56 +1484,452 @@ ShellRoot {
                                         font.pixelSize: 10; elide: Text.ElideRight; maximumLineCount: 1
                                     }
                                 }
-                                // install / installed
-                                Rectangle {
+                                MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: 68; height: 30; radius: 6
-                                    color: modelData.installed ? "transparent" : pal.cardHi
-                                    border.color: modelData.installed ? pal.border : pal.accent
-                                    border.width: 1
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: modelData.installed ? "INSTALLED" : "INSTALL"
-                                        color: modelData.installed ? pal.dim : pal.accentHi
-                                        font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
-                                    }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        enabled: !modelData.installed && !win.storeBusy
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: win.installPkg(modelData.source, modelData.id, modelData.remote)
-                                    }
+                                    width: 68
+                                    label: modelData.installed ? "INSTALLED" : (modelData.source === "aur" ? "REVIEW" : "INSTALL")
+                                    primary: !modelData.installed
+                                    on: !modelData.installed && !win.storeBusy
+                                    onClicked: win.installPkg(modelData.source, modelData.id, modelData.remote)
                                 }
                             }
                         }
                     }
                 }
 
-                // hint for AUR
-                Text {
-                    Layout.fillWidth: true
-                    visible: win.storeLog === ""
-                    text: "Repos/Flatpak se instalan aquí. AUR abre un terminal para compilar (pide sudo)."
-                    color: pal.dim; font.family: win.mono; font.pixelSize: 10; wrapMode: Text.WordWrap
-                }
-
-                // install log
+                // AUR review: shown before building a package
                 Rectangle {
-                    Layout.fillWidth: true; Layout.preferredHeight: 96
-                    visible: win.storeLog !== ""
-                    radius: 8; color: "#07070c"; border.color: pal.border; border.width: 1
-                    ScrollView {
-                        anchors.fill: parent; anchors.margins: 8; clip: true
-                        TextArea {
-                            readOnly: true
-                            text: win.storeLog
-                            color: pal.text; font.family: win.mono; font.pixelSize: 11
-                            wrapMode: TextArea.WordWrap; background: null
-                            onTextChanged: cursorPosition = length
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.review !== null || reviewProc.running
+                    radius: 8; color: pal.panel; clip: true
+                    border.color: win.review ? win.riskColor(win.review.risk) : pal.border; border.width: 1
+
+                    EmptyHint { visible: reviewProc.running; title: "READING THE PKGBUILD…" }
+
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 12; spacing: 8
+                        visible: win.review !== null
+
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 10
+                            Text {
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                                text: win.review ? win.review.name + "  " + win.review.version : ""
+                                color: pal.text; font.family: win.mono; font.pixelSize: 13; font.bold: true
+                            }
+                            Badge {
+                                width: 84
+                                label: win.review ? win.review.risk + " risk" : ""
+                                tint: win.review ? win.riskColor(win.review.risk) : pal.dim
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            text: !win.review ? "" :
+                                  (win.review.maintainer ? "maintainer " + win.review.maintainer : "ORPHANED (no maintainer)")
+                                  + "  ·  " + win.review.votes + " votes"
+                                  + "  ·  since " + win.dateOf(win.review.submitted)
+                                  + "  ·  updated " + win.dateOf(win.review.modified)
+                            color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                        }
+
+                        // findings
+                        Text {
+                            visible: win.review !== null && win.review.flags.length === 0
+                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            text: "✓ No suspicious patterns found. Still, only build packages you trust."
+                            color: pal.ok; font.family: win.mono; font.pixelSize: 10
+                        }
+                        Repeater {
+                            model: win.review ? win.review.flags : []
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true; spacing: 8
+                                Text {
+                                    Layout.preferredWidth: 58
+                                    text: "● " + modelData.level.toUpperCase()
+                                    color: win.riskColor(modelData.level)
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true
+                                }
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    text: modelData.text; color: pal.text
+                                    font.family: win.mono; font.pixelSize: 10
+                                }
+                                Text {
+                                    text: modelData.where; color: pal.dim
+                                    font.family: win.mono; font.pixelSize: 9
+                                }
+                            }
+                        }
+
+                        // the PKGBUILD itself
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            radius: 6; color: pal.logBg; border.color: pal.border; border.width: 1
+                            ScrollView {
+                                anchors.fill: parent; anchors.margins: 8; clip: true
+                                TextArea {
+                                    readOnly: true
+                                    text: !win.review ? "" : win.review.pkgbuild
+                                          + (win.review.install ? "\n# ─────────── .install ───────────\n" + win.review.install : "")
+                                    color: pal.text; font.family: win.mono; font.pixelSize: 10
+                                    wrapMode: TextArea.NoWrap; background: null
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 10
+                            Hint {
+                                text: "Building runs the PKGBUILD on your machine. Read it if anything is flagged."
+                            }
+                            MiniBtn {
+                                width: 76; label: "CANCEL"; primary: false
+                                onClicked: { win.review = null; win.storeStatus = win.results.length + " RESULTS"; }
+                            }
+                            MiniBtn {
+                                width: 120
+                                tint: win.review ? win.riskColor(win.review.risk) : pal.accent
+                                label: !win.review ? "" : (win.review.risk === "high"
+                                       ? (win.confirmRisky ? "REALLY BUILD?" : "BUILD ANYWAY")
+                                       : "BUILD & INSTALL")
+                                on: !win.storeBusy
+                                onClicked: {
+                                    if (win.review.risk === "high" && !win.confirmRisky) { win.confirmRisky = true; return; }
+                                    win.installPkg("aur", win.review.name, "aur");
+                                }
+                            }
                         }
                     }
                 }
+
+                Hint {
+                    visible: win.storeLog === ""
+                    text: "Repos/Flatpak/GitHub install here. AUR packages are reviewed first, then built in a terminal. GitHub installs update from UPDATES."
+                }
+
+                LogBox {
+                    Layout.fillWidth: true; base: 170
+                    visible: win.storeLog !== ""
+                    content: win.storeLog
+                }
             } // ================= end STORE VIEW =================
+
+            // ================= UPDATES VIEW =================
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: win.view === "updates"
+                spacing: 12
+
+                Section { Layout.fillWidth: true; label: "UPDATES"; info: win.updStatus }
+
+                // opt-in background check
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 10
+                    Chip {
+                        label: win.autoCheck ? "✓ AUTO-CHECK ON" : "AUTO-CHECK OFF"
+                        tint: pal.ok; active: win.autoCheck
+                        on: !win.updBusy
+                        onClicked: { win.updLog = ""; win.timerArgs = win.autoCheck ? ["off"] : ["on"]; timerProc.running = true; }
+                    }
+                    Hint {
+                        text: win.autoCheck
+                              ? "Checked every 6 h in the background: you get a notification, even with the deck closed."
+                              : "Turn on to get a notification when updates are available (the deck doesn't need to be open)."
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+
+                    EmptyHint {
+                        visible: win.updates.length === 0
+                        title: checkProc.running ? "CHECKING FOR UPDATES…"
+                             : (win.updChecked ? "ALL UP TO DATE ✓" : "PRESS CHECK")
+                        sub: "repos · AUR · Flatpak · AppImage/GitHub"
+                    }
+
+                    ListView {
+                        id: updList
+                        anchors.fill: parent; anchors.margins: 4
+                        clip: true; spacing: 3
+                        model: win.updates
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: updList.width - 8; height: 46; radius: 8
+                            color: pal.card; border.color: pal.border; border.width: 1
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
+                                Badge {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    label: modelData.source; tint: win.srcColor(modelData.source)
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.name; color: pal.text; font.family: win.mono
+                                    font.pixelSize: 12; font.bold: true; elide: Text.ElideRight
+                                }
+                                Text {
+                                    Layout.maximumWidth: 220
+                                    text: (modelData.old ? modelData.old + "  →  " : "→  ") + modelData.new
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    elide: Text.ElideLeft
+                                }
+                                MiniBtn {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    width: 68
+                                    label: modelData.source === "repo" ? "SYSTEM" : "UPDATE"
+                                    primary: modelData.source !== "repo"
+                                    on: !win.updBusy
+                                    onClicked: win.runUpdate(["update", modelData.source, modelData.id],
+                                                             "UPDATING " + modelData.name + "…")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Hint {
+                    visible: win.updLog === ""
+                    text: "Arch doesn't support partial upgrades: repo packages are updated together (pacman -Syu). AUR opens a terminal."
+                }
+
+                LogBox {
+                    Layout.fillWidth: true; base: 210
+                    visible: win.updLog !== ""
+                    content: win.updLog
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 0
+                    ActBtn {
+                        glyph: ""; label: checkProc.running ? "CHECKING" : "CHECK"
+                        on: !win.updBusy
+                        onClicked: { win.updLog = ""; win.checkUpdates(); }
+                    }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: updProc.running ? "WORKING" : "UPDATE ALL"
+                        boxed: true
+                        on: win.updates.length > 0 && !win.updBusy
+                        onClicked: win.runUpdate(["updateall"], "UPDATING ALL…")
+                    }
+                }
+            } // ================= end UPDATES VIEW =================
+
+            // ================= SYSTEM VIEW =================
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: win.view === "system"
+                spacing: 12
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    Chip { label: "CLEAN";   active: win.sysView === "clean";   onClicked: win.openSystem("clean") }
+                    Chip { label: "BACKUP";  active: win.sysView === "backup";  onClicked: win.openSystem("backup") }
+                    Chip { label: "HISTORY"; active: win.sysView === "history"; onClicked: win.openSystem("history") }
+                    Text {
+                        Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
+                        text: win.sysStatus; color: pal.dim; font.family: win.mono
+                        font.pixelSize: 12; font.letterSpacing: 2; elide: Text.ElideLeft
+                    }
+                }
+
+                // ---- CLEAN ----
+                Rectangle {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.sysView === "clean"
+                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+
+                    EmptyHint {
+                        visible: win.cleanItems.length === 0
+                        title: scanProc.running ? "SCANNING THE SYSTEM…" : "PRESS RESCAN"
+                    }
+
+                    ListView {
+                        id: cleanList
+                        anchors.fill: parent; anchors.margins: 4
+                        clip: true; spacing: 3
+                        model: win.cleanItems
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: cleanList.width - 8; height: 62; radius: 8
+                            color: pal.card; border.color: pal.border; border.width: 1
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12; anchors.rightMargin: 10; spacing: 10
+                                ColumnLayout {
+                                    Layout.fillWidth: true; spacing: 2
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        Text {
+                                            text: modelData.title; color: pal.text; font.family: win.mono
+                                            font.pixelSize: 12; font.bold: true
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.count + (modelData.size ? "  ·  " + modelData.size : "")
+                                            color: modelData.count > 0 ? pal.amber : pal.dim
+                                            font.family: win.mono; font.pixelSize: 10
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelData.details ? modelData.details : modelData.desc
+                                        color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                        elide: Text.ElideRight; maximumLineCount: 1
+                                    }
+                                }
+                                MiniBtn {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    width: 68
+                                    label: modelData.count > 0 ? "CLEAN" : "OK ✓"
+                                    primary: modelData.count > 0
+                                    on: modelData.count > 0 && !win.sysBusy
+                                    onClicked: win.runSys(["clean", modelData.id], "CLEANING…")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- BACKUP ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.sysView === "backup"
+                    spacing: 12
+
+                    Section { Layout.fillWidth: true; label: "EXPORT" }
+                    Hint {
+                        text: "Saves your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to ~/control-deck-backup-<date>.json."
+                    }
+                    MiniBtn {
+                        width: 120; height: 34
+                        label: "EXPORT BACKUP"
+                        on: !win.sysBusy
+                        onClicked: win.runSys(["export"], "EXPORTING…")
+                    }
+
+                    Section { Layout.fillWidth: true; label: "RESTORE" }
+                    Hint {
+                        text: "Installs whatever is missing from a backup: repo packages with pacman, Flatpaks, GitHub AppImages and launchers. AUR packages are built in a terminal."
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Field {
+                            id: restoreField
+                            Layout.fillWidth: true
+                            placeholderText: "~/control-deck-backup-….json"
+                            onTextChanged: win.confirmRestore = false
+                        }
+                        Rectangle {
+                            width: 40; height: 34; radius: 6
+                            color: pal.card; border.color: pal.border; border.width: 1
+                            Text { anchors.centerIn: parent; text: ""; font.family: win.mono; font.pixelSize: 15; color: pal.accent }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: pickRestoreProc.running = true
+                            }
+                        }
+                        MiniBtn {
+                            width: 92; height: 34
+                            label: win.confirmRestore ? "CONFIRM?" : "RESTORE"
+                            on: restoreField.text.trim() !== "" && !win.sysBusy
+                            onClicked: {
+                                if (!win.confirmRestore) { win.confirmRestore = true; return; }
+                                win.runSys(["restore", win.expandHome(restoreField.text.trim())], "RESTORING…");
+                            }
+                        }
+                    }
+                    Item { Layout.fillHeight: true }
+                }
+
+                // ---- HISTORY ----
+                Rectangle {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.sysView === "history"
+                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+
+                    EmptyHint {
+                        visible: win.history.length === 0
+                        title: "NO OPERATIONS YET"
+                    }
+
+                    ListView {
+                        id: histList
+                        anchors.fill: parent; anchors.margins: 6
+                        clip: true; spacing: 1
+                        model: win.history
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: RowLayout {
+                            required property var modelData
+                            width: histList.width - 12; height: 26; spacing: 10
+                            Text {
+                                text: modelData.date.substring(5, 16); color: pal.dim
+                                font.family: win.mono; font.pixelSize: 10
+                            }
+                            Text {
+                                Layout.preferredWidth: 110
+                                text: modelData.action.toUpperCase(); elide: Text.ElideRight
+                                color: modelData.result === "ok" ? pal.accent : pal.bad
+                                font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                            }
+                            Text {
+                                Layout.preferredWidth: 64
+                                text: modelData.source; color: win.srcColor(modelData.source)
+                                font.family: win.mono; font.pixelSize: 9; elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: modelData.target; color: pal.text
+                                font.family: win.mono; font.pixelSize: 11; elide: Text.ElideMiddle
+                            }
+                            Text {
+                                text: modelData.result === "ok" ? "✓" : "✗"
+                                color: modelData.result === "ok" ? pal.ok : pal.bad
+                                font.family: win.mono; font.pixelSize: 11
+                            }
+                        }
+                    }
+                }
+
+                LogBox {
+                    Layout.fillWidth: true; base: 210
+                    visible: win.sysLog !== ""
+                    content: win.sysLog
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 0
+                    ActBtn {
+                        glyph: ""; label: "RESCAN"
+                        on: !win.sysBusy
+                        onClicked: { win.sysLog = ""; win.openSystem("clean"); win.scanClean(); }
+                    }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: "HISTORY"
+                        on: !win.sysBusy
+                        onClicked: win.openSystem("history")
+                    }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: "APPS DIR"
+                        onClicked: openProc.running = true
+                    }
+                }
+            } // ================= end SYSTEM VIEW =================
         }
     }
 }

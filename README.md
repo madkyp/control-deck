@@ -1,58 +1,89 @@
-# 力 Install Deck
+<p align="center"><img src="icons/control-deck.svg" width="112" alt="Control Deck icon"></p>
 
+# 力 Control Deck
+
+[![tests](https://github.com/madkyp/control-deck/actions/workflows/tests.yml/badge.svg)](https://github.com/madkyp/control-deck/actions/workflows/tests.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Arch / CachyOS](https://img.shields.io/badge/Arch%20%2F%20CachyOS-Hyprland-1793d1)
 ![QuickShell 0.3+](https://img.shields.io/badge/QuickShell-0.3%2B-b9a3e3)
 ![Wayland](https://img.shields.io/badge/Wayland-1c1b2e)
 
-**Instalador y gestor universal de aplicaciones de un clic para Arch / CachyOS**, con interfaz [QuickShell](https://quickshell.outfoxxed.me/) (Wayland / Hyprland) y estética *CONTROL DECK*.
+**A one-click app installer and manager for Arch / CachyOS**, with a [QuickShell](https://quickshell.outfoxxed.me/) UI (Wayland / Hyprland) and a *CONTROL DECK* look.
 
-Arrastra un paquete y se instala solo, gestiona/edita/desinstala las apps de tu menú, y busca e instala software por nombre desde los repos, AUR y Flatpak — todo desde una misma ventana.
+Drop a package and it installs itself; manage, edit and uninstall the apps in your menu; search and install by name from the repos, the AUR, Flatpak or GitHub releases; keep everything updated and your system clean — all from one window.
 
-> Inspirado en el [post de r/unixporn](https://www.reddit.com/r/unixporn/comments/1ugobnt/oc_install_any_app_with_just_one_click/) *"install any app with just one click"*.
+> Inspired by the [r/unixporn post](https://www.reddit.com/r/unixporn/comments/1ugobnt/oc_install_any_app_with_just_one_click/) *"install any app with just one click"*.
+
+> 🤖 **This project was built with the help of AI.** See the [disclaimer](#-disclaimer) below.
 
 ---
 
-## ✨ Características
+## ✨ Features
 
-La ventana tiene tres pestañas:
+The window has five tabs:
 
-### 📥 INSTALL — instalar desde archivo
-- **Arrastra y suelta** uno o varios paquetes (cola multi‑archivo) y pulsa **INSTALL ALL**.
-- Detecta el formato automáticamente y actúa según corresponda:
+### 📥 INSTALL — from a file or a URL
+- **Drag and drop** one or more packages (multi-file queue) and hit **INSTALL ALL**.
+- Or type a **path**, a direct **download URL** or a **GitHub repo** (`github.com/user/repo` or `user/repo`, which opens its releases in STORE).
 
-| Formato | Qué hace |
+| Format | What happens |
 |---|---|
-| `.AppImage` `.appimage` | Copia a `~/Applications`, lo hace ejecutable y crea un lanzador con su icono |
-| `.pkg.tar.zst` `.pkg.tar.xz` `.pkg.tar.gz` `.pkg.tar` | `pacman -U` (vía `pkexec`) |
+| `.AppImage` | Stored as `~/Applications/<app>.AppImage` with a launcher that uses the **real name, icon, categories, WM class and MIME types** shipped inside it. Installing a newer version **replaces** the old one and **keeps your edits** |
+| `.pkg.tar.zst` `.xz` `.gz` `.pkg.tar` | `pacman -U` (via `pkexec`) |
 | `.flatpak` | `flatpak install --user` |
-| `.tar` `.tar.gz` `.tgz` `.tar.xz` `.tar.zst` `.tar.bz2` | Extrae a `~/Applications/<nombre>` |
+| `.tar` `.tar.gz` `.tgz` `.tar.xz` `.tar.zst` `.tar.bz2` | Extracted to `~/Applications/<app>`; the main executable and its icon are detected and **a launcher is created** |
+| `.deb` | With [`debtap`](https://aur.archlinux.org/packages/debtap) installed, converted to an Arch package and installed with pacman |
 
-> `.deb` y `.rpm` se detectan pero **solo avisan** (no son nativos de Arch).
+> `.rpm` is detected but only produces a warning (not native to Arch).
 
-### 🗂️ MANAGE — gestionar apps instaladas
-- **Listado** de todas las apps de tu menú (con icono, buscador y origen).
-- **Editar nombre e icono** de cualquier app. El icono se **copia a un directorio gestionado**, así que sigue funcionando aunque borres el archivo original.
-- **Desinstalar** de forma segura según el origen:
-  - **Flatpak** → `flatpak uninstall`
-  - **AppImage** → borra el AppImage + icono + lanzador
-  - **Paquete pacman** → `pacman -Rns` (con **previsualización** de lo que se eliminaría)
-  - **Wine / DOSBox** → quita el acceso directo del menú
-  - **Accesos de Steam / Lutris / Heroic** → solo quitan el acceso directo, **nunca** el cliente
+### 🗂️ MANAGE — installed apps
+- **Every app in your menu** with icon, filter, source and **disk usage** (program + user data) — sort by **A–Z** or **SIZE**.
+- **Edit** name and icon (the icon is copied to a managed folder) and, under **MORE ▾**:
+  - the **Exec** line (arguments, `env VAR=1 …`) with a **WAYLAND** button that adds the Ozone flags for Electron/Chromium apps,
+  - **categories**, **hide from the menu** (without uninstalling; hidden apps stay listed here so you can bring them back) and **terminal**.
+- **Quick actions**: ▶ launch, 📂 open the app's folder, 📋 copy its command.
+- **Why won't it start?** LAUNCH runs the app with its output captured; if it dies on start-up the deck explains why and offers a one-click fix:
 
-### 🛒 STORE — instalar por nombre
-- Busca en **repos oficiales (pacman)**, **AUR** y **Flatpak** a la vez.
-- Resultados unificados con badge de origen, versión y descripción.
-- Instala con un clic:
-  - **Repos** → `pkexec pacman -S`
-  - **Flatpak** → `flatpak install --user`
-  - **AUR** → abre un terminal con `paru`/`yay` para el build interactivo
+  | Problem | Fix offered |
+  |---|---|
+  | Missing FUSE 2 (old AppImage runtimes) — detected **before** launching | **INSTALL fuse2** or **RUN WITHOUT FUSE** (extract-and-run) |
+  | Missing shared library | Finds the package that ships it → **INSTALL** |
+  | Chromium/Electron sandbox failure | **ADD --no-sandbox** |
+  | Missing Qt Wayland plugin | **INSTALL qt6-wayland** / qt5 |
+  | Missing Python module | **INSTALL python-…** |
+  | Broken launcher, wrong architecture, permissions, old glibc | Explained (and fixed when possible) |
 
-> 🔔 Notificaciones de escritorio (`notify-send`) al terminar cualquier instalación o desinstalación.
+- **AUTOSTART** *(opt-in, per app)*: start the app when you log in (XDG autostart entry). Nothing is enabled unless you switch it on.
+- **Flatpak permissions** (a tiny Flatseal): network, Wayland, X11, audio, Bluetooth, devices, home folder, whole filesystem, Downloads — toggled as user overrides, with **RESET**.
+- **Safe uninstall** depending on the source:
+  - **Flatpak** → `flatpak uninstall` (in the right installation: user or system)
+  - **AppImage / tar** → deletes the file or folder + icon + launcher
+  - **pacman package** → `pacman -Rns` (with a **preview** of what would be removed)
+  - **Wine / DOSBox** → removes the menu shortcut
+  - **Steam / Lutris / Heroic shortcuts** → only the shortcut, **never** the client
+- **+ DELETE DATA**: also deletes the app's config, data and cache (`~/.config/<app>`, `~/.local/share/<app>`, `~/.cache/<app>`, `~/.var/app/<id>`), **showing the exact folders first**. Never offered for games, Wine or shared folders.
+
+### 🛒 STORE — install by name
+- Searches the **official repos (pacman)**, the **AUR** and **Flatpak** at once.
+- Type `github.com/user/repo` to see the installable files of its **latest release** (filtered for your architecture). Things installed from GitHub stay linked to their repo so they can be updated.
+- **AUR packages are reviewed before they are built**: maintainer, votes, age and the full PKGBUILD (+ `.install`), with a **risk level** and findings such as `curl | sh`, base64-decoded payloads, `sudo` in the build, reverse-shell patterns, downloads from raw IPs / paste sites / plain HTTP, skipped checksums, `.install` scripts that download things, orphaned or brand-new packages. High-risk packages need a second confirmation.
+- One click to install: repos → `pkexec pacman -S` · Flatpak → `flatpak install --user` · AUR → review, then a terminal with `paru`/`yay` · GitHub → download + install.
+
+### ⬆️ UPDATES
+- Everything pending in one view: **repos** (`checkupdates`), **AUR** (`paru`/`yay -Qua`), **Flatpak** and **AppImages/tarballs** (GitHub releases or `appimageupdatetool`).
+- **UPDATE ALL** or one at a time. Repo packages update together (`pacman -Syu`): Arch doesn't support partial upgrades.
+- **AUTO-CHECK** *(opt-in)*: a systemd user timer checks every 6 hours **even with the deck closed** and sends a notification (once per set of updates); clicking it opens the deck on this tab.
+
+### 🧹 SYSTEM — clean-up, backup and history
+- **CLEAN**: orphan packages, pacman cache (`paccache`), unused Flatpak runtimes, AUR cache, deck downloads and **broken launchers** (moved to a trash folder, not deleted) — with the space each one takes.
+- **BACKUP**: exports your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to a `.json`; **RESTORE** reinstalls whatever is missing on another machine or after a reinstall.
+- **HISTORY**: a log of everything you installed, edited, updated, cleaned or removed.
+
+> 🔔 Desktop notifications (`notify-send`) when each operation finishes.
 
 ---
 
-## 📸 Capturas
+## 📸 Screenshots
 
 | INSTALL | MANAGE | STORE |
 |---|---|---|
@@ -60,100 +91,130 @@ La ventana tiene tres pestañas:
 
 ---
 
-## 🧩 Requisitos
+## 🧩 Requirements
 
-**Imprescindibles:**
+**Required:**
 - [`quickshell`](https://quickshell.outfoxxed.me/) `>= 0.3`
 - `bash`, `coreutils`, `jq`, `libarchive` (`bsdtar`), `pacman`
-- `polkit` + un agente gráfico (p. ej. `hyprpolkitagent`) — para el `pkexec` de pacman
-- Una **Nerd Font** (el proyecto usa *JetBrainsMono Nerd Font* para los iconos)
+- `polkit` + a graphical agent (e.g. `hyprpolkitagent`) — for pacman's `pkexec`
+- A **Nerd Font** (the UI uses *JetBrainsMono Nerd Font* for its icons)
 
-**Opcionales (según lo que uses):**
-- `flatpak` con el remoto `flathub` — para instalar/buscar Flatpaks
-- `libnotify` (`notify-send`) — notificaciones al terminar
-- `curl` — búsqueda en el AUR
-- `paru` o `yay` + un terminal (`kitty`, `alacritty`…) — para instalar del AUR
-- `zenity` — selector gráfico de iconos en MANAGE
+**Optional (depending on what you use):**
+- `flatpak` with the `flathub` remote — install/search/update Flatpaks
+- `libnotify` (`notify-send`) — notifications
+- `curl` — AUR, GitHub and URL downloads
+- `pacman-contrib` — `checkupdates` and `paccache` (UPDATES and CLEAN)
+- `paru` or `yay` + a terminal (`kitty`, `alacritty`…) — AUR
+- `zenity` — file pickers (icons, backup restore)
+- `wl-clipboard` — copy an app's command
+- `appimageupdatetool` (AUR) — update AppImages that don't come from GitHub
+- `debtap` (AUR) — install `.deb` files (then run `sudo debtap -u` once)
 
 ---
 
-## 🚀 Instalación
+## 🚀 Installation
 
 ```bash
-git clone https://github.com/madkyp/app_install.git
-cd app_install
+git clone https://github.com/madkyp/control-deck.git
+cd control-deck
 ./install.sh
 ```
 
 `install.sh`:
-1. **Comprueba e instala las dependencias que falten** (repos con `pacman`, AUR con `paru`/`yay` si hace falta). No fuerza la Nerd Font si ya tienes alguna instalada.
-2. Copia los archivos:
-   - `bin/install-any` → `~/.local/bin/install-any` (lógica en bash)
-   - `quickshell/shell.qml` → `~/.config/quickshell/install-any/shell.qml` (GUI)
-   - `install-any.desktop` → `~/.local/share/applications/` (lanzador)
+1. **Checks for and installs missing dependencies** (repo packages with `pacman`, AUR ones with `paru`/`yay`). It won't force the Nerd Font if you already have one.
+2. Removes the previous version (**Install Deck / `install-any`**) if present. Your apps and launchers keep working: old AppImage launchers are recognised and migrated to the new format the next time you reinstall or update them.
+3. Copies the files:
+   - `bin/control-deck` → `~/.local/bin/control-deck` (bash backend)
+   - `quickshell/shell.qml` → `~/.config/quickshell/control-deck/shell.qml` (GUI)
+   - `control-deck.desktop` → `~/.local/share/applications/` (launcher)
+   - `icons/control-deck.svg` → `~/.local/share/icons/hicolor/scalable/apps/` (icon)
 
-> ¿Solo copiar sin tocar dependencias? → `./install.sh --no-deps`
+> Only copy the files, don't touch dependencies → `./install.sh --no-deps`
 
-Asegúrate de tener `~/.local/bin` en tu `PATH`.
+Make sure `~/.local/bin` is in your `PATH`.
 
-### Desinstalar
+### Uninstall
 ```bash
 ./uninstall.sh
 ```
 
 ---
 
-## 🖱️ Uso
+## 🖱️ Usage
 
-- Desde tu lanzador de aplicaciones: **"Install Any"**.
-- Desde terminal: `qs -c install-any`
-- También funciona en modo CLI: `install-any install <archivo>`, `install-any search <nombre>`, etc.
+- From your app launcher: **"Control Deck"**.
+- From a terminal: `qs -c control-deck`
+- Open straight on a tab: `CONTROL_DECK_VIEW=updates qs -c control-deck` (`manage`, `store`, `updates`, `system`).
+- Full CLI: `control-deck help` (e.g. `control-deck install <file>`, `control-deck updates`, `control-deck aurreview <pkg>`, `control-deck export`).
 
-### Atajo de Hyprland (opcional)
-Añade a tu `~/.config/hypr/keybindings.conf` (o `hyprland.conf`):
+### Hyprland keybind (optional)
+Add to your `~/.config/hypr/keybindings.conf` (or `hyprland.conf`):
 
 ```ini
-bind = SUPER SHIFT, I, exec, pkill -xf "qs -c install-any" || qs -c install-any
+bind = SUPER SHIFT, I, exec, pkill -xf "qs -c control-deck" || qs -c control-deck
 ```
 
-Abre/cierra el deck con **SUPER + SHIFT + I**.
+Toggles the deck with **SUPER + SHIFT + I**. If Hyprland tiles it, add a **floating** window rule for the title `Control Deck` (660×760 works well) using your Hyprland version's syntax.
 
 ---
 
-## ❓ Instalar una app desde un repo de GitHub
+## ❓ Installing an app from a GitHub repo
 
-El deck instala **paquetes**, no repositorios. Cuando encuentres un proyecto en GitHub, mira **qué ofrece**:
+Type the repo (`github.com/user/repo` or `user/repo`) in **STORE** or in the **INSTALL** bar: the deck lists the installable files of its latest release and installs them with one click, linked for **UPDATES**.
 
-| Lo que publica el proyecto | Cómo instalarlo |
+| What the project publishes | How to install it |
 |---|---|
-| Está en el **AUR** | Pestaña **STORE** → buscar → **INSTALL** |
-| Tiene **releases** con `.AppImage` / `.flatpak` / `.tar.*` / `.pkg.tar.*` | Descarga el asset → pestaña **INSTALL** (arrástralo) |
-| Solo **código fuente** con un `PKGBUILD` | `git clone` + `makepkg -si` (a mano) |
-| Solo código con `install.sh` / Makefile | Sigue el README del propio proyecto |
+| Releases with `.AppImage` / `.flatpak` / `.tar.*` / `.pkg.tar.*` / `.deb` | **STORE** → `user/repo` → **INSTALL** |
+| It's in the **AUR** | **STORE** → search → **REVIEW** → **BUILD & INSTALL** |
+| Only **source code** with a `PKGBUILD` | `git clone` + `makepkg -si` (by hand) |
+| Only source with an `install.sh` / Makefile | Follow the project's own README |
 
-Es decir: si algo **no está en repos/AUR/Flatpak ni publica un binario**, hay que compilarlo siguiendo las instrucciones de su repositorio.
-
----
-
-## 🏗️ Cómo funciona
-
-Arquitectura **script backend + GUI fina**:
-
-- **`bin/install-any`** — un script bash con toda la lógica (detección de formato, instalación, listado/edición/desinstalación de `.desktop`, búsqueda). Es totalmente usable sin GUI. Subcomandos: `detect`, `install`, `installmany`, `detectmany`, `list`, `appinfo`, `edit`, `uninstall`, `rmpreview`, `search`, `installpkg`, `pickfile`.
-- **`quickshell/shell.qml`** — la interfaz, que solo muestra estado y llama al backend vía `Process`.
-
-Esto hace fácil depurar y reutilizar la lógica desde consola.
+> The GitHub API allows 60 unauthenticated requests per hour. If you run out, export `GITHUB_TOKEN` before opening the deck.
 
 ---
 
-## ⚠️ Notas de seguridad
+## 🏗️ How it works
 
-- Los accesos directos de juegos (`steam://`, `lutris:`, `heroic://`) se tratan como lanzador de usuario: **desinstalarlos solo quita el acceso directo del menú**, no borra el cliente ni los datos del juego.
-- Antes de un `pacman -Rns` se muestra **qué paquetes se eliminarían**.
-- Las entradas del sistema sin paquete asociado no se desinstalan (por seguridad).
+**Script backend + thin GUI**:
+
+- **`bin/control-deck`** — a bash script with all the logic, fully usable without the GUI (`control-deck help`).
+- **`quickshell/shell.qml`** — the UI, which only shows state and calls the backend through `Process`.
+
+Launchers created by the deck carry their own keys (`X-ControlDeck-Type`, `X-ControlDeck-File`, `X-ControlDeck-Github`, `X-ControlDeck-Version`…) so it knows where they came from, how to update them and how to remove them cleanly. History, launch logs and the launcher trash live in `~/.local/share/control-deck/`.
+
+### Tests
+
+```bash
+tests/run.sh
+```
+
+The suite runs the backend in a throw-away `$HOME` with stubbed system tools (`pacman`, `pkexec`, `flatpak`, `systemctl`, `curl`…): no root, no network, nothing on your system is touched. GitHub Actions runs it — plus `shellcheck` — on every push, in an Arch Linux container.
 
 ---
 
-## 📄 Licencia
+## ⚠️ Safety notes
 
-MIT — ver [LICENSE](LICENSE).
+- Game shortcuts (`steam://`, `lutris:`, `heroic://`) are treated as user launchers: **uninstalling only removes the menu shortcut**, never the client or the game data (not even with *DELETE DATA*).
+- Before a `pacman -Rns` the deck shows **which packages would be removed**; with *DELETE DATA*, **which folders** will be deleted.
+- AUR packages are **reviewed before building**, and high-risk ones need a second confirmation. The review is a set of heuristics, not a guarantee: only build packages you trust.
+- System entries with no owning package are never uninstalled.
+- Broken launchers are **moved** to `~/.local/share/control-deck/trash/`, not deleted.
+- Autostart and the background update check are **opt-in**: nothing runs at login unless you turn it on.
+
+---
+
+## 🤖 Disclaimer
+
+This project was created **with the help of AI** (Anthropic's Claude, through Claude Code). The code was written together with the AI, then reviewed, tested (see [Tests](#tests)) and used on a real Arch / CachyOS + Hyprland system, but:
+
+- It is provided **as is**, without warranty of any kind (see the [license](LICENSE)).
+- It runs privileged operations through `pkexec` (installing, removing and upgrading packages) and can delete files when you ask it to uninstall apps or purge their data. **Read what it is about to do** — the deck always shows it before acting — and keep backups / snapshots of your system.
+- The AUR security review is a set of heuristics that helps you spot suspicious PKGBUILDs; it is **not** a guarantee that a package is safe.
+
+Found a bug or something that looks wrong? Please open an issue.
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).

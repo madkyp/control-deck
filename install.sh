@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Installer for Install Deck (app_install) — Arch / CachyOS
+# Installer for Control Deck — Arch / CachyOS
 # Copies the deck into place and (optionally) installs missing dependencies.
 #
-#   ./install.sh            copia + comprueba e instala dependencias
-#   ./install.sh --no-deps  solo copia los archivos
+#   ./install.sh            copy + check and install dependencies
+#   ./install.sh --no-deps  only copy the files
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 WITH_DEPS=1
 [[ "${1:-}" == "--no-deps" ]] && WITH_DEPS=0
 
-# Paquetes (nombres en repos oficiales / AUR). El font se trata aparte.
+# Package names (official repos / AUR). The font is handled separately.
 REQUIRED=(quickshell jq libarchive polkit)
-OPTIONAL=(flatpak libnotify curl zenity hyprpolkitagent)
+OPTIONAL=(flatpak libnotify curl zenity hyprpolkitagent pacman-contrib wl-clipboard)
 
 is_installed() { pacman -Qq "$1" &>/dev/null; }
 in_repo()      { pacman -Si "$1" &>/dev/null; }
 
 install_deps() {
-    command -v pacman >/dev/null || { echo "⚠  No es Arch/pacman: instala las dependencias a mano (ver README)."; return; }
+    command -v pacman >/dev/null || { echo "⚠  Not Arch/pacman: install the dependencies by hand (see README)."; return; }
 
     local repo=() aur=() p
     for p in "${REQUIRED[@]}" "${OPTIONAL[@]}"; do
@@ -26,21 +26,21 @@ install_deps() {
         if in_repo "$p"; then repo+=("$p"); else aur+=("$p"); fi
     done
 
-    # Nerd Font: solo sugerir si NO hay ninguna instalada
+    # Nerd Font: only suggested when none is installed
     if ! fc-list 2>/dev/null | grep -qi "nerd"; then
         if in_repo ttf-jetbrains-mono-nerd; then repo+=(ttf-jetbrains-mono-nerd); fi
     fi
 
     if [[ ${#repo[@]} -eq 0 && ${#aur[@]} -eq 0 ]]; then
-        echo "✔ Todas las dependencias ya están instaladas."
+        echo "✔ All dependencies are already installed."
         return
     fi
 
-    echo "Dependencias que faltan:"
+    echo "Missing dependencies:"
     [[ ${#repo[@]} -gt 0 ]] && echo "  · repos: ${repo[*]}"
     [[ ${#aur[@]}  -gt 0 ]] && echo "  · AUR:   ${aur[*]}"
-    read -rp "¿Instalarlas ahora? [Y/n] " ans
-    [[ "${ans,,}" == "n" ]] && { echo "→ Omitido. Instálalas a mano si algo no funciona."; return; }
+    read -rp "Install them now? [Y/n] " ans
+    [[ "${ans,,}" == "n" ]] && { echo "→ Skipped. Install them by hand if something doesn't work."; return; }
 
     if [[ ${#repo[@]} -gt 0 ]]; then
         sudo pacman -S --needed "${repo[@]}"
@@ -50,37 +50,55 @@ install_deps() {
         if [[ -n "$helper" ]]; then
             "$helper" -S --needed "${aur[@]}"
         else
-            echo "⚠  Estos paquetes están en el AUR y no tienes helper (paru/yay):"
+            echo "⚠  These packages are in the AUR and you have no helper (paru/yay):"
             echo "     ${aur[*]}"
-            echo "   Instálalos con tu método habitual del AUR."
+            echo "   Install them the way you usually install AUR packages."
         fi
     fi
 }
 
-# ---- dependencias -----------------------------------------------------------
+# ---- dependencies -----------------------------------------------------------
 if [[ $WITH_DEPS -eq 1 ]]; then
-    echo "== Dependencias =="
+    echo "== Dependencies =="
     install_deps
     echo
 fi
 
-# ---- archivos ---------------------------------------------------------------
-echo "== Instalando Install Deck =="
-echo "→ backend  ~/.local/bin/install-any"
-install -Dm755 "$SRC/bin/install-any" "$HOME/.local/bin/install-any"
+# ---- migration from "Install Deck" (install-any) ----------------------------
+if [[ -e "$HOME/.local/bin/install-any" || -d "$HOME/.config/quickshell/install-any" ]]; then
+    echo "== Migrating from install-any =="
+    rm -f "$HOME/.local/bin/install-any"
+    rm -rf "$HOME/.config/quickshell/install-any"
+    rm -f "$HOME/.local/share/applications/install-any.desktop"
+    echo "→ removed the old version (your apps and launchers are kept)"
+    echo
+fi
 
-echo "→ GUI      ~/.config/quickshell/install-any/shell.qml"
-install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/install-any/shell.qml"
+# ---- files ------------------------------------------------------------------
+echo "== Installing Control Deck =="
+echo "→ backend   ~/.local/bin/control-deck"
+install -Dm755 "$SRC/bin/control-deck" "$HOME/.local/bin/control-deck"
 
-echo "→ lanzador ~/.local/share/applications/install-any.desktop"
-install -Dm644 "$SRC/install-any.desktop" "$HOME/.local/share/applications/install-any.desktop"
+echo "→ GUI       ~/.config/quickshell/control-deck/shell.qml"
+install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/control-deck/shell.qml"
+
+echo "→ icon      ~/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
+install -Dm644 "$SRC/icons/control-deck.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
+gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+
+echo "→ launcher  ~/.local/share/applications/control-deck.desktop"
+install -Dm644 "$SRC/control-deck.desktop" "$HOME/.local/share/applications/control-deck.desktop"
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 echo
-echo "✔ Instalado."
-echo "  Lánzalo con:  qs -c install-any   (o desde tu menú como \"Install Any\")"
+echo "✔ Installed."
+echo "  Run it with:  qs -c control-deck   (or \"Control Deck\" from your app menu)"
+echo
+echo "  Optional extras from the AUR:"
+echo "    · appimageupdatetool — update AppImages that don't come from GitHub"
+echo "    · debtap             — install .deb packages (then: sudo debtap -u)"
 echo
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) : ;;
-    *) echo "⚠  ~/.local/bin no está en tu PATH. Añádelo para usar 'install-any' en terminal." ;;
+    *) echo "⚠  ~/.local/bin is not in your PATH. Add it to use 'control-deck' from a terminal." ;;
 esac

@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed bash coreutils findutils grep sed gawk util-linux procps-ng jq libarchive shellcheck git
+
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck -x -S warning bin/control-deck install.sh uninstall.sh tests/run.sh
+
+      - name: Test suite
+        run: tests/run.sh

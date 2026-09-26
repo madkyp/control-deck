@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Control Deck icon: 力 on a rounded dark tile (glyph: Noto Sans CJK JP Bold, OFL) -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#0a0a10"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#2a2740" stroke-width="3"/>
+  <path fill="#b9a3e3" transform="translate(51.57 187.89) scale(0.15907 -0.15907)" d="M382 848V641H75V518H377C360 343 293 138 44 3C73 -19 118 -65 138 -95C419 64 490 310 506 518H787C772 219 752 87 720 56C707 43 695 40 674 40C647 40 588 40 525 45C548 11 565 -43 566 -79C627 -81 690 -82 727 -76C771 -71 800 -60 830 -22C875 32 894 183 915 584C916 600 917 641 917 641H510V848Z"/>
+</svg>
