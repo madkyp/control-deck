@@ -2221,6 +2221,41 @@ cmd_snapallow() {
     history_add "snapshots allow" "$SNAPPER_CONFIG" "$USER" 0
 }
 
+# delete snapshots: numbers and/or ranges (41 42 30-35), one password prompt
+cmd_snapdelete() {
+    local a lo hi
+    snapper_ready || { err "snapper has no '$SNAPPER_CONFIG' config"; return 3; }
+    [[ $# -gt 0 ]] || { err "use: snapdelete <number|from-to>…"; return 2; }
+    for a in "$@"; do
+        [[ "$a" =~ ^([0-9]+)(-([0-9]+))?$ ]] || { err "not a snapshot number or range: $a"; return 2; }
+        lo="${BASH_REMATCH[1]}"; hi="${BASH_REMATCH[3]:-$lo}"
+        (( lo >= 1 && hi >= lo )) || { err "invalid snapshot number/range: $a (0 is the live system)"; return 2; }
+    done
+    log "→ pkexec snapper -c $SNAPPER_CONFIG delete $*"
+    pkexec snapper -c "$SNAPPER_CONFIG" delete "$@" || { err "snapper delete failed"; return 4; }
+    log "✔ Deleted snapshot(s) $*. Btrfs frees the space in the background."
+    history_add "snapshot delete" "$SNAPPER_CONFIG" "$*" 0
+}
+
+# apply snapper's cleanup rules now (what snapper-cleanup.timer does hourly)
+cmd_snapcleanup() {
+    snapper_ready || { err "snapper has no '$SNAPPER_CONFIG' config"; return 3; }
+    log "→ pkexec snapper cleanup number · timeline · empty-pre-post"
+    # shellcheck disable=SC2016
+    pkexec sh -c 'for a in number timeline empty-pre-post; do snapper -c "$1" cleanup "$a" || exit 1; done' \
+        sh "$SNAPPER_CONFIG" || { err "snapper cleanup failed"; return 4; }
+    log "✔ Cleanup done (limits from /etc/snapper/configs/$SNAPPER_CONFIG: NUMBER_LIMIT, NUMBER_LIMIT_IMPORTANT, TIMELINE_LIMIT_*)."
+    history_add "snapshot cleanup" "$SNAPPER_CONFIG" "cleanup" 0
+}
+
+# cleanup limits of the config, for the GUI (KEY=VALUE)
+cmd_snaplimits() {
+    snapper_ready || return 3
+    grep -E '^(NUMBER_CLEANUP|NUMBER_LIMIT|NUMBER_LIMIT_IMPORTANT|NUMBER_MIN_AGE|TIMELINE_CREATE|TIMELINE_CLEANUP|QGROUP)=' \
+        "$SNAPPER_CONFIG_DIR/$SNAPPER_CONFIG" | tr -d '"'
+    printf 'CLEANUP_TIMER=%s\n' "$(systemctl is-enabled snapper-cleanup.timer 2>/dev/null || echo disabled)"
+}
+
 # packages (name<TAB>version) from a pacman local db listing on stdin
 db_pkgs() { awk 'NF { n = $0; sub(/-[^-]+-[^-]+$/, "", n); print n "\t" substr($0, length(n) + 2) }' | sort; }
 
@@ -2532,6 +2567,9 @@ Maintain
   snapstatus / snaplist [--root]   Snapper status / snapshots (JSON)
   snapcreate <description>      Create a snapshot (pkexec)
   snapdiff <number>             Packages changed since a snapshot
+  snapdelete <n|from-to>…       Delete snapshots (pkexec)
+  snapcleanup                   Apply snapper's cleanup rules now (pkexec)
+  snaplimits                    Cleanup limits of the snapper config
   snapallow                     Let your user list snapshots without a password (opt-in)
   version / selfupdate          Installed version · update Control Deck itself
 EOF
@@ -2602,6 +2640,9 @@ main() {
         snapcreate)  cmd_snapcreate "$1" ;;
         snapdiff)    need "$1" "missing snapshot number"; cmd_snapdiff "$1" ;;
         snapallow)   cmd_snapallow ;;
+        snapdelete)  cmd_snapdelete "$@" ;;
+        snapcleanup) cmd_snapcleanup ;;
+        snaplimits)  cmd_snaplimits ;;
         version)     cmd_version ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

@@ -427,6 +427,17 @@ has "without snap-pac a snapshot is taken in the same pkexec call" "$(cat "$T/pk
 rm -f "$T/pkexec.log"
 FAKE_SNAPPAC=1 "$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1
 hasnt "with snap-pac the deck doesn't duplicate it" "$(cat "$T/pkexec.log")" "snapper"
+rm -f "$T/pkexec.log"
+"$CD" snapdelete 41 42 30-35 >/dev/null 2>&1; eq "delete fails when pkexec is cancelled" "$?" 4
+has "numbers and ranges go to one snapper delete" "$(cat "$T/pkexec.log")" "snapper -c root delete 41 42 30-35"
+"$CD" snapdelete 0 >/dev/null 2>&1;     eq "snapshot 0 (live system) refused" "$?" 2
+"$CD" snapdelete 9-3 >/dev/null 2>&1;   eq "backwards range refused" "$?" 2
+"$CD" snapdelete '41;rm' >/dev/null 2>&1; eq "garbage refused" "$?" 2
+"$CD" snapdelete >/dev/null 2>&1;       eq "nothing to delete → exit 2" "$?" 2
+rm -f "$T/pkexec.log"
+"$CD" snapcleanup >/dev/null 2>&1
+has "cleanup runs snapper's algorithms in one pkexec call" "$(cat "$T/pkexec.log")" "empty-pre-post"
+has "snaplimits reads the config" "$(printf 'NUMBER_LIMIT="50"\n' >> "$T/snapcfg/root"; "$CD" snaplimits)" "NUMBER_LIMIT=50"
 unset CONTROL_DECK_SNAPPER_DIR
 
 export CONTROL_DECK_PACMAN_DB="$T/pacdb" CONTROL_DECK_SNAPSHOTS_DIR="$T/snaps"

@@ -284,7 +284,12 @@ ShellRoot {
                                  || snapListProc.running || snapStatusProc.running
         property var    snapStatus: ({})
         property var    snapshots: []
-        property int    selSnap: -1
+        property var    selSnaps: []        // snapshot numbers ticked in the list
+        property bool   confirmSnapDelete: false
+        property bool   confirmSnapCleanup: false
+        property var    snapLimits: ({})
+        property var    pendingDelete: []
+        onSelSnapsChanged: confirmSnapDelete = false
         property var    snapListArgs: ["snaplist"]
 
         function runSys(args, label) {
@@ -296,7 +301,18 @@ ShellRoot {
             sysView = sub;
             if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
             if (sub === "history") histProc.running = true;
-            if (sub === "snapshots") snapStatusProc.running = true;
+            if (sub === "snapshots") { snapStatusProc.running = true; snapLimitsProc.running = true; }
+        }
+        // tick/untick a snapshot; a pre and its post always go together
+        function toggleSnap(item) {
+            var nums = [item.num];
+            snapshots.forEach(function (x) {
+                if ((x.type === "post" && x.pre === item.num) || (item.type === "post" && x.num === item.pre))
+                    nums.push(x.num);
+            });
+            var on = selSnaps.indexOf(item.num) < 0;
+            var sel = selSnaps.filter(function (n) { return nums.indexOf(n) < 0; });
+            selSnaps = on ? sel.concat(nums).sort(function (a, b) { return a - b; }) : sel;
         }
         function loadSnapshots(asRoot) {
             snapListArgs = asRoot ? ["snaplist", "--root"] : ["snaplist"];
@@ -595,6 +611,11 @@ ShellRoot {
                 if (win.sysArgs[0] === "clean") scanProc.running = true;
                 if (win.sysArgs[0] === "restore") win.apps = [];
                 if (win.sysArgs[0] === "snapcreate") win.loadSnapshots(!win.snapStatus.canlist);
+                if (win.sysArgs[0] === "snapdelete" && c === 0) {
+                    win.snapshots = win.snapshots.filter(function (x) { return win.pendingDelete.indexOf(x.num) < 0; });
+                    win.selSnaps = [];
+                }
+                if (win.sysArgs[0] === "snapcleanup") { win.confirmSnapCleanup = false; win.loadSnapshots(!win.snapStatus.canlist); }
                 if (win.sysArgs[0] === "snapallow") snapStatusProc.running = true;
                 histProc.running = true;
             }
@@ -625,11 +646,24 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.snapshots = JSON.parse(text); } catch (e) { win.snapshots = []; }
-                    win.selSnap = -1;
+                    win.selSnaps = [];
                     if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + " SNAPSHOTS";
                 }
             }
             stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
+        }
+        Process {
+            id: snapLimitsProc
+            command: [win.scriptPath, "snaplimits"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    var m = {};
+                    text.split("\n").forEach(function (l) {
+                        var i = l.indexOf("="); if (i > 0) m[l.substring(0, i)] = l.substring(i + 1);
+                    });
+                    win.snapLimits = m;
+                }
+            }
         }
         Process {
             id: assistantProc
@@ -2069,6 +2103,7 @@ ShellRoot {
 
                     Rectangle {
                         Layout.fillWidth: true; Layout.fillHeight: true
+                        Layout.minimumHeight: 110
                         visible: win.snapStatus.snapper === true
                         radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
 
@@ -2086,9 +2121,15 @@ ShellRoot {
                             delegate: Rectangle {
                                 required property var modelData
                                 width: snapList.width - 8; height: 30; radius: 6
-                                color: win.selSnap === modelData.num ? pal.cardHi : "transparent"
+                                property bool ticked: win.selSnaps.indexOf(modelData.num) >= 0
+                                color: ticked ? pal.cardHi : "transparent"
                                 RowLayout {
                                     anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
+                                    Text {
+                                        text: parent.parent.ticked ? "\uf14a" : "\uf096"
+                                        color: parent.parent.ticked ? pal.accent : pal.dim
+                                        font.family: win.mono; font.pixelSize: 12
+                                    }
                                     Text {
                                         Layout.preferredWidth: 44
                                         text: "#" + modelData.num; color: pal.accent
@@ -2112,7 +2153,7 @@ ShellRoot {
                                 }
                                 MouseArea {
                                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: win.selSnap = modelData.num
+                                    onClicked: win.toggleSnap(modelData)
                                 }
                             }
                         }
@@ -2133,9 +2174,51 @@ ShellRoot {
                         }
                         MiniBtn {
                             width: 110; height: 34; primary: false
-                            label: win.selSnap >= 0 ? "DIFF #" + win.selSnap + " → NOW" : "DIFF → NOW"
-                            on: win.selSnap >= 0 && !win.sysBusy
-                            onClicked: win.runSys(["snapdiff", String(win.selSnap)], "COMPARING…")
+                            label: win.selSnaps.length === 1 ? "DIFF #" + win.selSnaps[0] + " → NOW" : "DIFF → NOW"
+                            on: win.selSnaps.length === 1 && !win.sysBusy
+                            onClicked: win.runSys(["snapdiff", String(win.selSnaps[0])], "COMPARING…")
+                        }
+                    }
+
+                    // deleting: ticked snapshots, or snapper's own cleanup rules
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.snapStatus.snapper === true
+                        Hint {
+                            text: {
+                                var l = win.snapLimits;
+                                if (!l.NUMBER_LIMIT) return "";
+                                return "Auto-cleanup " + (l.CLEANUP_TIMER === "enabled" ? "runs hourly" : "is OFF (snapper-cleanup.timer disabled)")
+                                     + ": keeps " + l.NUMBER_LIMIT + " numbered snapshots (" + l.NUMBER_LIMIT_IMPORTANT
+                                     + " important), none younger than " + Math.round(l.NUMBER_MIN_AGE / 60) + " min."
+                                     + (l.QGROUP ? "" : " Space limits need Btrfs quotas (off).");
+                            }
+                        }
+                        MiniBtn {
+                            width: 116; height: 34; primary: false
+                            label: win.confirmSnapCleanup ? "CONFIRM?" : "CLEANUP NOW"
+                            on: !win.sysBusy
+                            onClicked: {
+                                if (!win.confirmSnapCleanup) { win.confirmSnapCleanup = true; return; }
+                                win.runSys(["snapcleanup"], "CLEANING UP…");
+                            }
+                        }
+                        MiniBtn {
+                            width: 112; height: 34
+                            tint: pal.bad
+                            label: win.selSnaps.length === 0 ? "DELETE"
+                                 : (win.confirmSnapDelete ? "CONFIRM " + win.selSnaps.length + "?" : "DELETE (" + win.selSnaps.length + ")")
+                            on: win.selSnaps.length > 0 && !win.sysBusy
+                            onClicked: {
+                                if (!win.confirmSnapDelete) {
+                                    win.confirmSnapDelete = true;
+                                    win.sysLog = "Will delete snapshot(s): #" + win.selSnaps.join(", #") + "\nClick again to confirm.\n";
+                                    return;
+                                }
+                                win.pendingDelete = win.selSnaps.slice();
+                                win.confirmSnapDelete = false;
+                                win.runSys(["snapdelete"].concat(win.selSnaps.map(String)), "DELETING…");
+                            }
                         }
                     }
 

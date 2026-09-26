@@ -81,6 +81,7 @@ The window has five tabs:
 - **BACKUP**: exports your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to a `.json`; **RESTORE** reinstalls whatever is missing on another machine or after a reinstall.
 - **HISTORY**: a log of everything you installed, edited, updated, cleaned or removed.
 - **SNAPSHOTS** (snapper): list your snapshots, **create** one before trying something risky, see **which packages changed** since any snapshot (added / removed / upgraded) and how to roll back (with a shortcut to *Btrfs Assistant* when installed).
+  - **Delete** the snapshots you tick (a *pre* and its *post* are always ticked together) or hit **CLEANUP NOW** to apply snapper's own limits right away (what `snapper-cleanup.timer` does every hour). The tab shows those limits (e.g. keep 50, 15 important). Btrfs snapshots cost almost nothing when taken and grow as files change afterwards; deleting them frees that space.
   - If your snapper config only lets root list snapshots, load them with your password or — opt-in — allow your user to list them (`ALLOW_USERS`).
   - With **snap-pac** installed every pacman operation already gets pre/post snapshots, so the deck doesn't add more. Without snap-pac, the deck takes a snapshot itself before any pacman change it makes (same password prompt).
 
