@@ -226,9 +226,9 @@ pkill -f -- "$T/fake/good" 2>/dev/null
 section "Fixes"
 "$CD" fix "$A/sbx.desktop" nosandbox >/dev/null
 eq "--no-sandbox inserted after the program" "$(key "$A/sbx.desktop" Exec)" "\"$T/fake/sbx\" --no-sandbox %U"
-desktop "$A/envapp.desktop" envapp "env FOO=1 /usr/bin/electron %U"
+desktop "$A/envapp.desktop" envapp "env FOO=1 $T/fake/good %U"
 "$CD" fix "$A/envapp.desktop" nosandbox >/dev/null
-eq "--no-sandbox with an env prefix" "$(key "$A/envapp.desktop" Exec)" "env FOO=1 /usr/bin/electron --no-sandbox %U"
+eq "--no-sandbox with an env prefix" "$(key "$A/envapp.desktop" Exec)" "env FOO=1 $T/fake/good --no-sandbox %U"
 "$CD" fix "$A/fuse.desktop" extractrun >/dev/null
 has "extract-and-run prefix" "$(key "$A/fuse.desktop" Exec)" "env APPIMAGE_EXTRACT_AND_RUN=1 "
 "$CD" fix "$A/lib.desktop" repo:gtk3 >/dev/null 2>&1; eq "repo fix fails when pkexec is cancelled" "$?" 4
