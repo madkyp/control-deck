@@ -614,7 +614,7 @@ rep() { printf '{"app":{"steam":{"appId":"%s"}},"timestamp":%s,"responses":{"ver
     echo ']'
 } > "$T/reports_piiremoved.json"
 mkdir -p "$T/pdbdump"; (cd "$T" && tar czf "$T/pdbdump/reports_sep1_2026.tar.gz" reports_piiremoved.json)
-export CONTROL_DECK_GPU_VENDOR=nvidia
+export CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_GPU_NAME="NVIDIA GeForce RTX 2070" CONTROL_DECK_SCREEN=""
 eq "no index → says so" "$("$CD" gsuggest 100 | jq -r .index)" false
 CONTROL_DECK_PDB_RAW="file://$T/pdbdump" CONTROL_DECK_PDB_DUMP=reports_sep1_2026.tar.gz "$CD" pdbindex update >/dev/null 2>&1
 eq "index built (reports with launch options only)" "$("$CD" pdbindex status | jq -r .reports)" 18
@@ -625,15 +625,49 @@ eq "only working, recent reports (12 of 16)" "$(jq -r .reports <<<"$S")" 12
 eq "-vulkan: share / NVIDIA share / fits" "$(sug -vulkan)" "91/100/true"
 eq "+cvar value kept as one option" "$(sug '+fps_max 120')" "75/100/true"
 eq "env var suggested" "$(sug PROTON_ENABLE_WAYLAND=1)" "16/11/true"
-eq "AMD-only variable marked as not for NVIDIA (quotes stripped)" "$(sug RADV_PERFTEST=gpl,nggc)" "16/0/false"
+eq "AMD-only variable hidden on NVIDIA (0 % of NVIDIA players)" "$(sug RADV_PERFTEST=gpl,nggc)" none
+eq "…and shown on AMD, quotes stripped" "$(CONTROL_DECK_GPU_VENDOR=amd CONTROL_DECK_GPU_NAME="AMD Radeon RX 7900 XTX" "$CD" gsuggest 100 | jq -r '.suggestions[] | select(.token == "RADV_PERFTEST=gpl,nggc") | .foryou')" true
 # shellcheck disable=SC2088  # a literal "~/lsfg" token, as players write it
 eq "personal paths never suggested" "$(sug '~/lsfg')" none
 eq "reports saying it doesn't work are ignored" "$(sug -dx11)" none
 eq "reports older than 3 years ignored when there are enough recent ones" "$(sug -oldflag)" none
 eq "wrapper suggested" "$(sug gamemoderun)" "16/11/true"
 eq "few reports → all-time window" "$("$CD" gsuggest 300 | jq -r '.window + " " + (.suggestions[0].token)')" "all -windowed"
-eq "tips count only what fits this GPU" "$("$CD" gtips 100 | jq -r '."100"')" 4
-unset CONTROL_DECK_GPU_VENDOR
+unset CONTROL_DECK_GPU_VENDOR CONTROL_DECK_GPU_NAME CONTROL_DECK_SCREEN
+
+section "Gaming: suggestions adapt to this PC's hardware"
+gen() { bash -c 'source "$1"; jq -Rr "$JQ_GPU_GEN"" gpu_gen" <<<"$2"' _ "$CD" "$1"; }
+eq "RTX 2070 → NVIDIA gen 3"            "$(gen 'NVIDIA GeForce RTX 2070')" nvidia:3
+eq "GTX 1660 = same gen as RTX 20"      "$(gen 'NVIDIA GeForce GTX 1660 SUPER')" nvidia:3
+eq "RX 9070 XT → AMD gen 5 (RDNA4)"     "$(gen 'AMD Radeon RX 9070 XT')" amd:5
+eq "Steam Deck = RDNA2 like RX 6000"    "$(gen 'AMD Custom GPU 0405 (vangogh)')" amd:3
+eq "unknown GPU → no generation"        "$(gen 'Intel UHD Graphics 630')" ""
+# a game where the right option depends on the GPU generation and on the CPU
+{
+    echo '['
+    for i in 1 2 3 4 5 6; do rep 400 "$NOW" yes '"%command% -vulkan -threads 32"' "NVIDIA GeForce RTX 2080"; echo ,; done
+    for i in 1 2 3 4 5 6; do rep 400 "$NOW" yes '"%command% -dx11 -w 1770 -h 996"' "NVIDIA GeForce RTX 4090"; echo ,; done
+    for i in 1 2 3 4 5 6; do rep 400 "$NOW" yes '"RADV_PERFTEST=gpl mangohud %command%"' "AMD Radeon RX 9070 XT"; echo ,; done
+    rep 400 "$NOW" yes '"%command% -threads 6"' "AMD Radeon RX 7800 XT"
+    echo ']'
+} > "$T/reports_piiremoved.json"
+(cd "$T" && tar czf "$T/pdbdump/reports_oct1_2026.tar.gz" reports_piiremoved.json)
+CONTROL_DECK_PDB_RAW="file://$T/pdbdump" CONTROL_DECK_PDB_DUMP=reports_oct1_2026.tar.gz "$CD" pdbindex update >/dev/null 2>&1
+hw() { CONTROL_DECK_GPU_NAME="$1" CONTROL_DECK_GPU_VENDOR="$2" CONTROL_DECK_SCREEN="$3" "$CD" gsuggest 400; }
+R="$(jq -r '[.suggestions[] | select(.recommended) | .token] | join(",")' <<<"$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080)")"
+has   "RTX 2070: -vulkan recommended (RTX 20-30 players)" "$R" "-vulkan"
+hasnt "RTX 2070: RTX 40 players' -dx11 not recommended"   "$R" "-dx11"
+eq    "RTX 2070: -threads adapted to this CPU" "$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080 | jq -r '.suggestions[] | select(.key == "-threads #") | .token')" "-threads $(nproc)"
+R="$(jq -r '[.suggestions[] | select(.recommended) | .token] | join(",")' <<<"$(hw 'NVIDIA GeForce RTX 4090' nvidia 2560x1440)")"
+has   "RTX 4090: -dx11 recommended" "$R" "-dx11"
+eq    "resolution adapted to this screen" "$(hw 'NVIDIA GeForce RTX 4090' nvidia 2560x1440 | jq -r '[.suggestions[] | select(.key == "-w #" or .key == "-h #") | .token] | sort | join(" ")')" "-h 1440 -w 2560"
+eq    "no screen known → resolution options dropped" "$(hw 'NVIDIA GeForce RTX 4090' nvidia '' | jq '[.suggestions[] | select(.key == "-w #")] | length')" 0
+R="$(jq -r '[.suggestions[] | select(.recommended) | .token] | join(",")' <<<"$(hw 'AMD Radeon RX 9070 XT' amd 1920x1080)")"
+has   "RX 9070 XT: AMD-only variable recommended there" "$R" "RADV_PERFTEST=gpl"
+hasnt "RX 9070 XT: NVIDIA players' -vulkan not recommended" "$R" "-vulkan"
+eq    "…and hidden on NVIDIA" "$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080 | jq '[.suggestions[] | select(.token == "RADV_PERFTEST=gpl")] | length')" 0
+eq    "similar-hardware label" "$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080 | jq -r .similarLabel)" "GTX 10, RTX 20 / GTX 16, RTX 30"
+eq    "library badge counts recommended options" "$(CONTROL_DECK_GPU_NAME='NVIDIA GeForce RTX 2070' CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_SCREEN=1920x1080 "$CD" gtips 400 | jq -r '."400"')" 2
 
 section "Gaming: new games are recognised"
 export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0

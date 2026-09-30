@@ -90,6 +90,20 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   kept together). Shares are given overall and for **your GPU vendor**;
   vendor-specific variables (`RADV_*`/Mesa → AMD, `__GL_*`/NVAPI → NVIDIA) are
   marked and hidden when they don't fit, personal paths (`~/lsfg`) are dropped.
+- **Recommended for this PC.** Every report in the index carries the player's
+  GPU generation (an ordinal per vendor: NVIDIA GTX 700 … RTX 50, with GTX 16
+  counted as Turing like RTX 20; AMD RX 400/500, Vega, RX 5000/6000/7000/9000,
+  Steam Deck = RDNA2). Shares are computed among players whose GPU is the
+  **same vendor and ±1 generation** as this PC (falling back to same vendor,
+  then everyone, when there are fewer than 5 such reports). An option is
+  marked **★ RECOMMENDED FOR THIS PC** when ≥ 20 % of those players use it
+  (and at least 5 reports). The hardware is read every time (GPU name from
+  `nvidia-smi`/`lspci`, CPU threads, focused monitor), so the same install on
+  another PC — e.g. an RTX 2070 laptop and an RX 9070 XT desktop — gets
+  different recommendations. Hardware-dependent values are grouped and
+  rewritten for this PC: `-threads N` → this CPU's thread count, `-w`/`-h`
+  (and `-width`/`-height`) → the focused monitor's resolution (dropped when
+  unknown).
   Suggestions are only shown; clicking one adds it to the editor and nothing is
   saved until **SAVE**. These are statistics of what players use, not a
   guarantee that an option helps.

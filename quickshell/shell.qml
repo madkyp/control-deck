@@ -294,6 +294,8 @@ ShellRoot {
         property var    sug: ({})           // launch options players use (ProtonDB open data)
         property var    tips: ({})          // suggestion count per appid
         property var    pdbStat: ({})       // local ProtonDB index status
+        property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
+        property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
 
         function tierColor(t) {
@@ -2478,7 +2480,7 @@ ShellRoot {
                                 }
                                 Text {
                                     visible: (win.tips[modelData.id] || 0) > 0
-                                    text: "\uf0eb " + win.tips[modelData.id]; color: pal.ok
+                                    text: "★ " + win.tips[modelData.id]; color: pal.amber
                                     font.family: win.mono; font.pixelSize: 9
                                 }
                                 Text {
@@ -2573,15 +2575,39 @@ ShellRoot {
                         Text { text: "PLAYERS\nUSE"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.alignment: Qt.AlignTop; Layout.topMargin: 4 }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 4
+                            // ★ recommended for THIS PC's hardware, then the rest players use
                             Flow {
                                 Layout.fillWidth: true; spacing: 6
-                                visible: win.pdbStat.present === true
+                                visible: win.pdbStat.present === true && win.sugRecommended.length > 0
+                                Text {
+                                    text: "★ RECOMMENDED FOR THIS PC"; color: pal.amber; height: 26; verticalAlignment: Text.AlignVCenter
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                }
                                 Repeater {
-                                    model: (win.sug.suggestions || []).filter(function (x) { return x.foryou; })
+                                    model: win.sugRecommended
                                     delegate: Chip {
                                         required property var modelData
                                         property bool applied: win.sugApplied(modelData)
-                                        label: (applied ? "✓ " : "+ ") + modelData.token + "  " + (modelData.vshare !== null && modelData.vshare !== undefined ? modelData.vshare : modelData.share) + "%"
+                                        label: (applied ? "✓ " : "★ ") + modelData.token + "  " + modelData.pct + "%"
+                                        tint: pal.amber; active: true
+                                        opacity: applied ? 0.6 : 1.0
+                                        onClicked: win.applySug(modelData)
+                                    }
+                                }
+                            }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 6
+                                visible: win.pdbStat.present === true && win.sugOthers.length > 0
+                                Text {
+                                    text: "ALSO USED"; color: pal.dim; height: 26; verticalAlignment: Text.AlignVCenter
+                                    font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                }
+                                Repeater {
+                                    model: win.sugOthers
+                                    delegate: Chip {
+                                        required property var modelData
+                                        property bool applied: win.sugApplied(modelData)
+                                        label: (applied ? "✓ " : "+ ") + modelData.token + "  " + modelData.pct + "%"
                                         tint: pal.ok; active: applied
                                         onClicked: win.applySug(modelData)
                                     }
@@ -2592,11 +2618,14 @@ ShellRoot {
                                       ? "Suggestions come from ProtonDB's open data (every game's reported launch options). Download it once (≈70 MB, indexed to ≈5 MB):"
                                       : (!win.sug.index ? "" : (win.sug.reports === 0
                                          ? "No ProtonDB report with launch options for this game yet."
-                                         : ((win.sug.suggestions || []).filter(function (x) { return x.foryou; }).length === 0
+                                         : (win.sugRecommended.length + win.sugOthers.length === 0
                                             ? "Players don't agree on any launch option for this game (" + win.sug.reports + " working reports)."
-                                            : "% of the " + (win.sug.vendorReports > 0 ? win.sug.vendorReports + " " + (win.sug.vendor || "").toUpperCase() + " users among " : "")
-                                              + win.sug.reports + " players who say it works" + (win.sug.window === "3y" ? " (last 3 years)" : "")
-                                              + " that use it. Click to add, then SAVE.")))
+                                            : "% of players with hardware like this PC (" + (win.sug.gpuName || "your GPU")
+                                              + (win.sug.similarReports > 0 ? ": " + win.sug.similarReports + " reports on " + win.sug.similarLabel
+                                                 : (win.sug.vendorReports > 0 ? ": " + win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + " reports" : ""))
+                                              + (win.sug.cores > 0 ? ", " + win.sug.cores + " threads" : "") + (win.sug.screen ? ", " + win.sug.screen : "")
+                                              + ") among " + win.sug.reports + " who say it works" + (win.sug.window === "3y" ? " (last 3 years)" : "")
+                                              + ". ★ = used by ≥ 20% of them. Values like -threads are adapted to this PC. Click to add, then SAVE.")))
                                       + (win.pdbStat.present === true ? "  Data: ProtonDB (ODbL), " + win.pdbStat.date + "." : "")
                             }
                         }

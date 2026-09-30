@@ -2900,12 +2900,12 @@ cmd_gseen() {
     mkdir -p "$GAMING_DIR"; grep -qxF "$1" "$KNOWN_GAMES" 2>/dev/null || echo "$1" >> "$KNOWN_GAMES"
 }
 
-# gtips <appid…> → {"<appid>": number of suggestions that fit this GPU}
+# gtips <appid…> → {"<appid>": number of options RECOMMENDED for this PC}
 cmd_gtips() {
     local id
     for id in "$@"; do
         [[ "$id" =~ ^[0-9]+$ ]] || continue
-        printf '%s\n%s\n' "$id" "$(cmd_gsuggest "$id" | jq '[.suggestions[]? | select(.foryou)] | length')"
+        printf '%s\n%s\n' "$id" "$(cmd_gsuggest "$id" | jq '[.suggestions[]? | select(.recommended)] | length')"
     done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i | {key:$l[$i], value:($l[$i+1]|tonumber)}] | from_entries'
 }
 
@@ -2991,6 +2991,22 @@ PDB_RAW="${CONTROL_DECK_PDB_RAW:-https://raw.githubusercontent.com/bdefore/proto
 PDB_INDEX="$PROTONDB_CACHE/launch-index.jsonl"
 PDB_META="$PROTONDB_CACHE/launch-index.meta"
 
+# jq: GPU model string → "vendor:generation" (an ordinal, so "±1 generation" is
+# a simple difference). GTX 16 = Turing like RTX 20; Steam Deck = RDNA2 like RX 6000.
+JQ_GPU_GEN='def gpu_gen: ascii_downcase
+    | if test("(rtx|gtx|gt|mx)\\s*-?\\s*[0-9]{3,4}") then
+        (capture("(?:rtx|gtx|gt|mx)\\s*-?\\s*(?<n>[0-9]{3,4})").n | tonumber) as $n
+        | ({"7":0,"9":1,"10":2,"16":3,"20":3,"30":4,"40":5,"50":6}[($n / 100 | floor | tostring)]) as $o
+        | if $o == null then "" else "nvidia:\($o)" end
+      elif test("rx\\s*[0-9]{4}") then
+        ({"5":2,"6":3,"7":4,"9":5}[capture("rx\\s*(?<n>[0-9])[0-9]{3}").n]) as $o
+        | if $o == null then "" else "amd:\($o)" end
+      elif test("rx\\s*[0-9]{3}") then "amd:0"
+      elif test("vega") then "amd:1"
+      elif test("steam deck|vangogh|van gogh") then "amd:3"
+      elif test("arc") then "intel:1"
+      else "" end;'
+
 # "reports_sep1_2026.tar.gz" → epoch of that date
 pdb_dump_epoch() {
     local n="${1#reports_}"; n="${n%.tar.gz}"
@@ -3016,6 +3032,19 @@ gpu_vendor() {
     esac
 }
 
+# name of the GPU games run on (nvidia-smi, else lspci)
+gpu_name() {
+    [[ -n "${CONTROL_DECK_GPU_NAME:-}" ]] && { echo "$CONTROL_DECK_GPU_NAME"; return; }
+    have nvidia-smi && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 && return
+    lspci -mm 2>/dev/null | grep -E '"(VGA|3D|Display)' | sed -E 's/^[^"]*"[^"]*" "([^"]*)" "([^"]*)".*/\1 \2/' \
+        | sort -r | head -1
+}
+# focused monitor resolution "WxH" (Hyprland), empty if unknown
+screen_res() {
+    [[ -n "${CONTROL_DECK_SCREEN+set}" ]] && { echo "$CONTROL_DECK_SCREEN"; return; }   # set, even empty = override
+    have hyprctl && hyprctl monitors -j 2>/dev/null | jq -r 'map(select(.focused)) | first // empty | "\(.width)x\(.height)"'
+}
+
 cmd_pdbindex() {
     case "${1:-status}" in
         update)
@@ -3029,14 +3058,14 @@ cmd_pdbindex() {
             url="$PDB_RAW/$dump"
             log "→ Downloading and indexing $dump (about 70 MB, ~1 min)…"
             # stream: download → gunzip/untar → one report at a time
-            if ! curl -fsSL --max-time 900 "$url" | tar xzO | jq -cn --stream '
+            if ! curl -fsSL --max-time 900 "$url" | tar xzO | jq -cn --stream "$JQ_GPU_GEN"'
                     fromstream(1 | truncate_stream(inputs))
                     | select((.responses.launchOptions? // "") | length > 0)
                     | [(.app.steam.appId // ""), (.timestamp // 0), (.responses.verdict // ""),
                        ((.systemInfo.gpu // "") | ascii_downcase
                         | if test("nvidia|geforce|rtx|gtx|quadro") then "nvidia"
                           elif test("amd|radeon|\\brx ") then "amd" elif test("intel") then "intel" else "" end),
-                       .responses.launchOptions]' > "$tmp"; then
+                       .responses.launchOptions, ((.systemInfo.gpu // "") | gpu_gen)]' > "$tmp"; then
                 rm -f "$tmp"; err "download or indexing failed"; return 4
             fi
             n="$(wc -l < "$tmp")"
@@ -3063,8 +3092,34 @@ cmd_gsuggest() {
     local id="$1" vendor since
     [[ "$id" =~ ^[0-9]+$ ]] || { err "use: gsuggest <appid>"; return 2; }
     [[ -s "$PDB_INDEX" ]] || { echo '{"index":false}'; return 0; }
+    local gen cores res
     vendor="$(gpu_vendor)"; since=$(( $(date +%s) - 3 * 365 * 86400 ))
-    grep -F "[\"$id\"," "$PDB_INDEX" | jq -sc --arg v "$vendor" --argjson since "$since" '
+    local gname; gname="$(gpu_name)"
+    gen="$(jq -Rr "$JQ_GPU_GEN"' gpu_gen' <<<"$gname")"
+    cores="$(nproc 2>/dev/null || echo 0)"; res="$(screen_res)"
+    grep -F "[\"$id\"," "$PDB_INDEX" | jq -sc --arg v "$vendor" --argjson since "$since" \
+        --arg gen "$gen" --arg gname "$gname" --argjson cores "${cores:-0}" --arg res "$res" '
+        # hardware-dependent values are grouped and rewritten for this PC
+        def adapt:
+            ($res | split("x")) as $wh |
+            if test("^-(threads|numthreads) [0-9]+$") then
+                (if $cores > 0 then {key:"-threads #", token:("-" + (capture("^-(?<f>[a-z]+)").f) + " \($cores)"), adapted:true} else null end)
+            elif test("^-(w|width|screen-width) [0-9]+$") then
+                (if ($wh | length) == 2 then {key:"-w #", token:((split(" ")[0]) + " " + $wh[0]), adapted:true} else null end)
+            elif test("^-(h|height|screen-height) [0-9]+$") then
+                (if ($wh | length) == 2 then {key:"-h #", token:((split(" ")[0]) + " " + $wh[1]), adapted:true} else null end)
+            else {key:., token:., adapted:false} end;
+        # "RTX 20 / GTX 16 ±1" style label of the generations counted as similar
+        def gen_label:
+            if . == "" then "" else
+            (split(":")[0]) as $vd | (split(":")[1] | tonumber) as $o
+            | ({nvidia:["GTX 700","GTX 900","GTX 10","RTX 20 / GTX 16","RTX 30","RTX 40","RTX 50"],
+                amd:["RX 400/500","Vega","RX 5000","RX 6000","RX 7000","RX 9000"], intel:["","Arc"]}[$vd] // []) as $names
+            | [range([$o - 1, 0] | max; [$o + 2, ($names | length)] | min) | $names[.]] | map(select(. != "")) | join(", ")
+            end;
+        def similar($g): ($gen != "" and $g != null and $g != "")
+            and (($g | split(":")[0]) == ($gen | split(":")[0]))
+            and ((($g | split(":")[1] | tonumber) - ($gen | split(":")[1] | tonumber)) | fabs <= 1);
         def vendor_of: if test("^(RADV_|AMD_|ACO_|RADEONSI|ENABLE_LAYER_MESA|MESA_)") then "amd"
                        elif test("^(__GL_|__NV|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX|DXVK_NVAPI)") then "nvidia"
                        else null end;
@@ -3086,22 +3141,36 @@ cmd_gsuggest() {
                              else {skip:false, out:$a} end)
                           else {skip:false, out:null} end
                      end; .out) | select(. != null) | {token:., kind:"arg", vendor:null}])
-            | map(select(.token | test("[/~$`;|&<>]") | not)) | unique_by(.token);
+            | map(select(.token | test("[/~$`;|&<>]") | not))
+            | map(. as $x | ($x.token | adapt) as $a | select($a != null) | $x + $a)
+            | unique_by(.key);
         map(select(.[2] == "yes")) as $works
         | ($works | map(select(.[1] >= $since))) as $recent
         | (if ($recent | length) >= 8 then {r:$recent, window:"3y"} else {r:$works, window:"all"} end) as $w
         | ($w.r | length) as $n
         | ($w.r | map(select(.[3] == $v)) | length) as $nv
-        | [$w.r[] | .[3] as $gpu | (.[4] | tokens[]) | . + {gpu:$gpu}]
-        | group_by(.token)
-        | map({token:.[0].token, kind:.[0].kind, vendor:.[0].vendor, count:length,
+        | ($w.r | map(select(similar(.[5]))) | length) as $ns
+        | [$w.r[] | .[3] as $gpu | .[5] as $g | (.[4] | tokens[]) | . + {gpu:$gpu, sim:similar($g)}]
+        | group_by(.key)
+        | map({token:.[0].token, key:.[0].key, adapted:.[0].adapted, kind:.[0].kind, vendor:.[0].vendor, count:length,
                share:((length * 100 / ([$n,1]|max)) | floor),
-               vcount:(map(select(.gpu == $v)) | length)}
-              | .vshare = (if $nv > 0 then (.vcount * 100 / $nv | floor) else null end))
-        | map(select(.count >= 2 and .share >= 5))
+               vcount:(map(select(.gpu == $v)) | length), scount:(map(select(.sim)) | length)}
+              | .vshare = (if $nv > 0 then (.vcount * 100 / $nv | floor) else null end)
+              | .sshare = (if $ns >= 5 then (.scount * 100 / $ns | floor) else null end))
+        # judged within the players whose hardware is closest to this PC:
+        # same GPU generation (±1) when there are enough of them, else same vendor
+        | map(. + (if .sshare != null then {basis:"similar", pct:.sshare, n:.scount}
+                   elif .vshare != null then {basis:"vendor", pct:.vshare, n:.vcount}
+                   else {basis:"all", pct:.share, n:.count} end))
+        | map(select(.count >= 2 and .pct >= 5))
         | map(. + {foryou:(.vendor == null or .vendor == $v)})
-        | sort_by(-(if .foryou then 1 else 0 end), -(.vshare // .share), -.count)
-        | {index:true, vendor:$v, window:$w.window, reports:$n, vendorReports:$nv, suggestions:.[:16]}'
+        # RECOMMENDED: used by ≥ 20 % of those players, at least 5 reports
+        | map(. + {recommended:(.foryou and .pct >= 20 and .n >= 5)})
+        | sort_by(-(if .foryou then 1 else 0 end), -(if .recommended then 1 else 0 end), -.pct, -.count)
+        | {index:true, vendor:$v, gpuGen:$gen, gpuName:$gname, similarLabel:($gen | gen_label),
+           cores:$cores, screen:$res, window:$w.window,
+           reports:$n, vendorReports:$nv, similarReports:(if $ns >= 5 then $ns else 0 end),
+           suggestions:.[:16]}'
 }
 
 # ---------------------------------------------------------------------------
