@@ -301,6 +301,8 @@ ShellRoot {
         property var    shaders: ({})       // shader caches (per game + driver)
         property string confirmShader: ""   // target awaiting a second click
         property var    bench: ({})         // A/B benchmark of the selected game
+        property string benchLoadedFor: ""  // game whose variants are in the editors (unsaved edits survive refreshes)
+        property string pendingRun: ""      // "A"/"B": run right after the variants are saved
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
         property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
@@ -389,6 +391,7 @@ ShellRoot {
             });
             runGame(a.concat(extra || []), "SAVING…");
         }
+        function runBench(v) { pendingRun = v; saveBench([]); }
         function pct(v) { return v === undefined || v === null ? "" : (v > 0 ? "+" : "") + v + "%"; }
         function dateOfEpoch(e) { return e ? new Date(e * 1000).toISOString().substring(0, 10) : "?"; }
         function saveGameProfile() {
@@ -848,6 +851,11 @@ ShellRoot {
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
+                if (win.gameArgs[0] === "bench" && win.gameArgs[1] === "set" && win.pendingRun !== "") {
+                    var v = win.pendingRun; win.pendingRun = "";
+                    // started after this handler returns (restarting a Process from its own onExited is unsafe)
+                    if (c === 0) { Qt.callLater(function () { win.runGame(["bench", "run", win.selGame, v], "RUN " + v + "…"); }); return; }
+                }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
@@ -871,7 +879,11 @@ ShellRoot {
             id: benchProc
             command: [win.scriptPath, "bench", "get", win.selGame]
             stdout: StdioCollector {
-                onStreamFinished: { try { win.bench = JSON.parse(text); } catch (e) { win.bench = {}; } win.loadBench(); benchChart.requestPaint(); }
+                onStreamFinished: {
+                    try { win.bench = JSON.parse(text); } catch (e) { win.bench = {}; }
+                    if (win.benchLoadedFor !== win.selGame) { win.loadBench(); win.benchLoadedFor = win.selGame; }
+                    benchChart.requestPaint();
+                }
             }
         }
         Process {
@@ -2846,9 +2858,9 @@ ShellRoot {
                             Item { Layout.fillWidth: true }
                             MiniBtn { width: 70; label: "SAVE"; on: !win.gameBusy; onClicked: win.saveBench([]) }
                             MiniBtn { width: 70; label: "RUN A"; tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
-                                      onClicked: win.runGame(["bench", "run", win.selGame, "A"], "RUN A…") }
+                                      onClicked: win.runBench("A") }
                             MiniBtn { width: 70; label: "RUN B"; tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
-                                      onClicked: win.runGame(["bench", "run", win.selGame, "B"], "RUN B…") }
+                                      onClicked: win.runBench("B") }
                         }
                         Hint {
                             text: !win.selGameWrapped ? "The game must launch through Control Deck: LIBRARY → USE IN STEAM first."
