@@ -4897,7 +4897,7 @@ fx_sfx_game() {
 # fx scan → every installed Steam game with its best preset, compatibility,
 # online risk and current look; also saved for LIBRARY/new-game hints
 cmd_fx_scan() {
-    local pcgw id name g sfx rows online cur d out=()
+    local pcgw id name g sfx rows online cur d found=()
     pcgw="$(fx_pcgw)"; [[ -n "$pcgw" ]] || pcgw="[]"
     while IFS= read -r id && IFS= read -r name && IFS= read -r _ && IFS= read -r _ && IFS= read -r _; do
         sfx="null"; g="$(fx_sfx_game "$name")"
@@ -4908,7 +4908,7 @@ cmd_fx_scan() {
         fi
         online="$(fx_online "$id")"
         d="$(fx_key_dir "steam:$id")"; cur="null"; [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
-        out+=("$(jq -nc --arg id "$id" --arg name "$name" --argjson sfx "$sfx" --argjson online "${online:-null}" \
+        found+=("$(jq -nc --arg id "$id" --arg name "$name" --argjson sfx "$sfx" --argjson online "${online:-null}" \
                  --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" '
             def norm: ascii_downcase | gsub("[™®©]"; "") | gsub("[^a-z0-9]+"; "");
             ([$pcgw[] | select(any(.names[]; norm == $n))] | first // null) as $pc
@@ -4918,7 +4918,7 @@ cmd_fx_scan() {
             | .eligible = ((.blocked | not) and ((.online // {}).level // "none") != "anticheat")')")
     done < <(steam_games)
     mkdir -p "$FX_CACHE"
-    printf '%s\n' "${out[@]}" | jq -sc '
+    printf '%s\n' "${found[@]}" | jq -sc '
         map(. + {defines:[]}) ' > "$FX_CACHE/scan.json.tmp"
     # depth definitions from the notes (bash regexes)
     local i n tmp="[]" line
