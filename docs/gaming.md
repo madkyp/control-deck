@@ -241,10 +241,13 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   Use LACT's own GUI if you ever need GPU tuning.
 - **2.7 Save backups.** Skipped: the games in use keep their saves in the cloud
   (Steam Cloud, Battle.net), so a local backup adds little.
+- **2.8 Unified launcher** (Lutris, Heroic, emulators, AppImages, search).
+  Skipped: LIBRARY already lists and launches the Steam and Umbral games, and
+  no games are installed through the other launchers.
 
 ## Not implemented yet
 
-2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
+2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
 ReShade.
