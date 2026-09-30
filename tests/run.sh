@@ -1272,6 +1272,29 @@ printf 'SteamAppId=300\0' > "$T/proc3/7101/environ"
 printf '/usr/bin/python3\0%s\0waitforexitandrun\0game.exe\0' "$HOME/.steam/compatibilitytools.d/GE-Proton10-3/proton" > "$T/proc3/7101/cmdline"
 D="$(PROC_ROOT="$T/proc3" bash -c 'source "$1"; gs_running_detail steam:300 7100' _ "$CD")"
 eq "running game: Proton build and shaders in use" "$(jq -c '[.proton, .fx]' <<<"$D")" '["GE-Proton10-3","ReShade"]'
+section "GE-Proton updates"
+GE="$T/ge"; GA="$GE/api/repos/GloriousEggroll/proton-ge-custom/releases"; mkdir -p "$GA/tags" "$GE/dl/GE-Proton12-1-x86_64/files"
+echo "script" > "$GE/dl/GE-Proton12-1-x86_64/proton"; echo "1 GE-Proton12-1" > "$GE/dl/GE-Proton12-1-x86_64/version"
+( cd "$GE/dl" && bsdtar -czf GE-Proton12-1-x86_64.tar.gz GE-Proton12-1-x86_64 && sha512sum GE-Proton12-1-x86_64.tar.gz > GE-Proton12-1-x86_64.sha512sum )
+cat > "$GA/latest" <<EOF
+{"tag_name":"GE-Proton12-1","assets":[
+ {"name":"GE-Proton12-1-aarch64.tar.gz","size":1,"browser_download_url":"file://$GE/dl/nope.tar.gz"},
+ {"name":"GE-Proton12-1-x86_64.tar.gz","size":100,"browser_download_url":"file://$GE/dl/GE-Proton12-1-x86_64.tar.gz"},
+ {"name":"GE-Proton12-1-x86_64.sha512sum","size":1,"browser_download_url":"file://$GE/dl/GE-Proton12-1-x86_64.sha512sum"}]}
+EOF
+cp "$GA/latest" "$GA/tags/GE-Proton12-1"
+GST="$HOME/ge-steam"; mkdir -p "$GST/compatibilitytools.d/GE-Proton11-7-x86_64"
+export CONTROL_DECK_STEAM_ROOT="$GST" CONTROL_DECK_GH_API="file://$GE/api"
+eq "no GE installed → nothing offered" "$(CONTROL_DECK_STEAM_ROOT="$HOME/none" bash -c 'source "$1"; upd_proton' _ "$CD")" ""
+eq "newer GE offered in UPDATES" "$(bash -c 'source "$1"; upd_proton' _ "$CD" | paste -sd '|')" "proton|GE-Proton12-1|GE-Proton|GE-Proton11-7|GE-Proton12-1"
+"$CD" update proton GE-Proton12-1 >/dev/null 2>&1
+yes "installed next to the old one (x86_64 build, checksum ok)" "[[ -f '$GST/compatibilitytools.d/GE-Proton12-1-x86_64/proton' && -d '$GST/compatibilitytools.d/GE-Proton11-7-x86_64' ]]"
+eq "…then up to date" "$(bash -c 'source "$1"; upd_proton' _ "$CD")" ""
+rm -rf "$GST/compatibilitytools.d/GE-Proton12-1-x86_64"; echo "0000  GE-Proton12-1-x86_64.tar.gz" > "$GE/dl/GE-Proton12-1-x86_64.sha512sum"
+"$CD" proton install GE-Proton12-1 >/dev/null 2>&1; eq "bad checksum refused" "$?" 4
+yes "…nothing left behind" "[[ ! -e '$GST/compatibilitytools.d/GE-Proton12-1-x86_64' ]]"
+"$CD" proton install 'x;rm' >/dev/null 2>&1; eq "bad tag refused" "$?" 2
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_GH_API
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

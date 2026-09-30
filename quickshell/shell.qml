@@ -58,6 +58,7 @@ ShellRoot {
                 case "github":   return pal.amber;
                 case "appimage": return pal.ok;
                 case "deck":     return pal.accentHi;
+                case "proton":   return pal.bad;
                 default:         return pal.dim;
             }
         }

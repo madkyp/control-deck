@@ -1617,7 +1617,7 @@ is_gh_spec() {
 gh_api() {
     local h=(-H 'Accept: application/vnd.github+json')
     [[ -n "$GITHUB_TOKEN" ]] && h+=(-H "Authorization: Bearer $GITHUB_TOKEN")
-    curl -fsSL --max-time 15 "${h[@]}" "https://api.github.com/$1"
+    curl -fsSL --max-time 15 "${h[@]}" "${CONTROL_DECK_GH_API:-https://api.github.com}/$1"
 }
 
 # newest release that ships something installable here (stable ones first;
@@ -1974,8 +1974,9 @@ cmd_updates() {
     upd_flatpak  > "$tmp/3" &
     upd_appimage > "$tmp/4" &
     upd_self     > "$tmp/5" &
+    upd_proton   > "$tmp/6" &
     wait
-    cat "$tmp"/[1-5] | jq -Rn '[inputs] as $l | [range(0; $l|length; 5) as $i |
+    cat "$tmp"/[1-6] | jq -Rn '[inputs] as $l | [range(0; $l|length; 5) as $i |
         {source:$l[$i], id:$l[$i+1], name:$l[$i+2], old:$l[$i+3], new:$l[$i+4]}]'
     rm -rf "$tmp"
 }
@@ -1998,6 +1999,7 @@ update_one() {
             log "✔ $id updated." ;;
         github)  gh_update_launcher "$id" ;;
         deck)    cmd_selfupdate ;;
+        proton)  cmd_proton_install "$id" ;;
         appimage)
             have appimageupdatetool || { err "appimageupdatetool is not installed"; return 4; }
             file="$(dget "$id" X-ControlDeck-File)"; [[ -z "$file" ]] && file="$(exec_bin "$(dget "$id" Exec)")"
@@ -3961,6 +3963,7 @@ Gaming
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
+  proton install [tag]          Install GE-Proton (latest by default; checksum-verified) into Steam's compatibilitytools.d
   health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
 EOF
 }
@@ -5337,6 +5340,59 @@ gs_library() {
     jq -c --argjson disks "$disks" '. + {disks:$disks}' "$f"
 }
 
+# --- GE-Proton: offered in UPDATES when a GE build is installed ------------------
+# Releases of GloriousEggroll/proton-ge-custom: <tag>-x86_64.tar.gz (older ones:
+# <tag>.tar.gz) plus its .sha512sum; unpacks to one folder in Steam's
+# compatibilitytools.d. Old builds stay: CLEAN → Unused Proton versions.
+GE_REPO="GloriousEggroll/proton-ge-custom"
+
+ge_installed() {   # newest GE-Proton folder name in Steam's compatibilitytools.d
+    local d; for d in "$(steam_root)"/compatibilitytools.d/GE-Proton*/; do [[ -d "$d" ]] && basename "$d"; done | sort -V | tail -1
+}
+ge_latest_json() {   # cached 6 h
+    local f="$FX_CACHE/ge-latest.json"; mkdir -p "$FX_CACHE"
+    if [[ -s "$f" ]] && (( $(date +%s) - $(stat -c %Y "$f") < 21600 )); then cat "$f"; return; fi
+    local j; j="$(gh_api "repos/$GE_REPO/releases/latest" 2>/dev/null)" && jq -e .tag_name <<<"$j" >/dev/null 2>&1 \
+        && { printf '%s' "$j" > "$f"; printf '%s' "$j"; return; }
+    [[ -s "$f" ]] && cat "$f"
+}
+
+upd_proton() {
+    local cur tag
+    cur="$(ge_installed)"; [[ -n "$cur" ]] || return 0      # only for people who use GE
+    tag="$(ge_latest_json | jq -r '.tag_name // empty')"; [[ -n "$tag" ]] || return 0
+    [[ -d "$(steam_root)/compatibilitytools.d/$tag-x86_64" || -d "$(steam_root)/compatibilitytools.d/$tag" ]] && return 0
+    printf '%s\n' proton "$tag" "GE-Proton" "${cur%-x86_64}" "$tag"
+}
+
+# proton install [tag] — latest when no tag
+cmd_proton_install() {
+    local tag="${1:-}" rel asset sum dir tmp top
+    if [[ -n "$tag" ]]; then
+        [[ "$tag" =~ ^GE-Proton[0-9A-Za-z._-]+$ ]] || { err "not a GE-Proton tag: $tag"; return 2; }
+        rel="$(gh_api "repos/$GE_REPO/releases/tags/$tag")" || { err "release $tag not found"; return 4; }
+    else rel="$(ge_latest_json)"; tag="$(jq -r .tag_name <<<"$rel")"; fi
+    asset="$(jq -r --arg t "$tag" '.assets[] | select(.name == ($t + "-x86_64.tar.gz") or .name == ($t + ".tar.gz")) | .browser_download_url' <<<"$rel" | head -1)"
+    sum="$(jq -r --arg t "$tag" '.assets[] | select(.name == ($t + "-x86_64.sha512sum") or .name == ($t + ".sha512sum")) | .browser_download_url' <<<"$rel" | head -1)"
+    [[ -n "$asset" && -n "$sum" ]] || { err "no x86_64 build or checksum in $tag"; return 4; }
+    dir="$(steam_root)/compatibilitytools.d"; mkdir -p "$dir"
+    tmp="$(mktemp -d)"
+    log "→ downloading $tag ($(jq -r --arg u "$asset" '.assets[] | select(.browser_download_url == $u) | .size' <<<"$rel" | numfmt --to=iec 2>/dev/null)B)"
+    curl -fsSL --max-time 1800 -o "$tmp/${asset##*/}" "$asset" && curl -fsSL --max-time 60 -o "$tmp/sum" "$sum" \
+        || { rm -rf "$tmp"; err "download failed"; return 4; }
+    ( cd "$tmp" && sha512sum -c --status sum ) || { rm -rf "$tmp"; err "checksum mismatch: not installed"; return 4; }
+    log "→ SHA-512 verified"
+    top="$(bsdtar -tzf "$tmp/${asset##*/}" 2>/dev/null | head -1 | cut -d/ -f1)"
+    [[ "$top" == GE-Proton* ]] || { rm -rf "$tmp"; err "unexpected archive layout"; return 4; }
+    [[ -e "$dir/$top" ]] && { rm -rf "$tmp"; log "✔ $top is already installed."; return 0; }
+    bsdtar -xzf "$tmp/${asset##*/}" -C "$dir" || { rm -rf "$dir/$top" "$tmp"; err "extract failed"; return 4; }
+    rm -rf "$tmp"
+    rm -f "$FX_CACHE/tools.json"
+    history_add "proton install" steam "$top" 0
+    log "✔ $top installed in ${dir/#$HOME/\~}. Restart Steam to see it; pick it per game in LIBRARY → PROTON."
+    log "  Older GE builds no game uses show up in SYSTEM → CLEAN → Unused Proton versions."
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5374,6 +5430,8 @@ main() {
             if [[ "$1" == aur ]]; then cmd_installpkg "$@"   # finishes in a terminal
             else with_notify "Installed ✓" "Install failed ✗" "$(urldecode "${2##*/}")" cmd_installpkg "$@"; fi ;;
         updates)     cmd_updates ;;
+        proton)      [[ "${1:-}" == install ]] || { err "use: proton install [tag]"; exit 2; }
+                     with_notify "GE-Proton installed ✓" "GE-Proton install failed ✗" "${2:-latest}" cmd_proton_install "${2:-}" ;;
         update)      need "$2" "missing arguments (source id)"
                      with_notify "Updated ✓" "Update failed ✗" "$(basename "$2" .desktop)" cmd_update "$1" "$2" ;;
         updateall)   cmd_updateall ;;

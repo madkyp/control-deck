@@ -508,6 +508,18 @@ reports:
   come from the game's environment (`ENABLE_VKBASALT=1`, or ReShade's DLL
   overrides).
 
+### GE-Proton updates (SYSTEM → UPDATES)
+- Offered only when a GE-Proton build is already installed in Steam's
+  `compatibilitytools.d`. The latest release of `GloriousEggroll/proton-ge-custom`
+  (GitHub API, cached 6 h) is compared with the installed folders.
+- The x86_64 `.tar.gz` is used (`<tag>-x86_64.tar.gz`; older releases name it
+  `<tag>.tar.gz`), checked with its `.sha512sum` (`sha512sum -c`), and
+  unpacked next to the old ones. It must contain a single `GE-Proton*`
+  folder. Checked here: 11-7 unpacks to `GE-Proton11-7-x86_64/`.
+- Old builds aren't removed automatically, because games or Umbral may still
+  use them. CLEAN → Unused Proton versions lists the ones nothing uses.
+- CLI: `proton install [tag]`, `update proton <tag>`.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |
