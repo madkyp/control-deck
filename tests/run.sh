@@ -1210,6 +1210,41 @@ eq "free package: nothing blocks it" "$(bash -c 'source "$1"; pkg_required_by fr
 mkdir -p "$T/sysapps"; printf '[Desktop Entry]\nType=Application\nName=Sys\nExec=/usr/bin/sys\n' > "$T/sysapps/sys.desktop"
 bash -c 'source "$1"; manual_remove "$2"' _ "$CD" "$T/sysapps/sys.desktop" >/dev/null 2>&1; eq "a system launcher is never 'cleaned up' by hand" "$?" 4
 yes "…and stays" "[[ -f '$T/sysapps/sys.desktop' ]]"
+section "FX: import a downloaded preset (Nexus…)"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 \
+       CONTROL_DECK_RESHADE_URL="file://$RS/web" CONTROL_DECK_FF_D3DC_URL="file://$RS/ff" \
+       CONTROL_DECK_FF_D3DC_SHA64="$FFSHA" CONTROL_DECK_FF_D3DC_SHA32="$FFSHA" \
+       CONTROL_DECK_FX_PACKAGES_URL="file://$FXS/EffectPackages.ini" CONTROL_DECK_SFX_URL="file://$FXS/sfx" \
+       CONTROL_DECK_AWACY_URL="file://$FXS/awacy.json" CONTROL_DECK_STEAM_STORE_API="file://$FXS/store-4002.json#"
+NX="$T/nexus/Realistica ReShade"; mkdir -p "$NX/reshade-shaders/Shaders" "$NX/reshade-shaders/Textures" "$NX/Alt"
+printf 'Techniques=Vibrance@Vibrance.fx,Grain@MyGrain.fx\r\n[MyGrain.fx]\r\nAmount=0.5\r\n' > "$NX/Realistica.ini"
+printf 'Techniques=Vibrance@Vibrance.fx\r\n' > "$NX/Alt/Soft.ini"
+printf '[GENERAL]\nEffectSearchPaths=.\\reshade-shaders\\Shaders\n' > "$NX/ReShade.ini"
+echo 'technique Grain { pass { } }' > "$NX/reshade-shaders/Shaders/MyGrain.fx"
+echo 'technique Vibrance { pass { } }' > "$NX/reshade-shaders/Shaders/Vibrance.fx"
+echo png > "$NX/reshade-shaders/Textures/grain.png"; echo MZ > "$NX/dxgi.dll"
+( cd "$T/nexus" && bsdtar -a -cf "$T/nexus/Realistica.zip" "Realistica ReShade" )
+eq "presets found in the archive, the bigger one first (ReShade.ini isn't one)" \
+   "$("$CD" fx importlist "$T/nexus/Realistica.zip" | jq -c '[.[] | [.path, .effects]]')" \
+   '[["Realistica ReShade/Realistica.ini",2],["Realistica ReShade/Alt/Soft.ini",1]]'
+"$CD" fx mode steam:5000 reshade >/dev/null 2>&1
+O="$("$CD" fx import steam:5000 "$T/nexus/Realistica.zip" 2>&1)"; eq "import succeeds" "$?" 0
+RP="$HOME/.local/share/control-deck/gaming/fx/steam_5000"; FXD="$HOME/.local/share/control-deck/reshade"
+eq "applied as the game's preset, named after the file" "$(jq -c '[.source, .name, .mode, .effects]' "$RP/report.json")" '["file","Realistica","reshade",["MyGrain.fx","Vibrance.fx"]]'
+has "preset content kept as is" "$(cat "$RP/ReShadePreset.ini")" "Amount=0.5"
+yes "the archive's own shader copied" "[[ -f '$FXD/Shaders/imported/Realistica/MyGrain.fx' ]]"
+yes "a shader we already have isn't duplicated" "[[ ! -e '$FXD/Shaders/imported/Realistica/Vibrance.fx' ]]"
+yes "texture copied" "[[ -f '$FXD/Textures/grain.png' ]]"
+eq "its ReShade.ini / dxgi.dll are not used" "$(readlink "$SG/Binaries/Win64/dxgi.dll")" "$HOME/.local/share/control-deck/reshade/bin/current/ReShade64.dll"
+"$CD" fx import steam:5000 "$T/nexus/Realistica.zip" "Realistica ReShade/Alt/Soft.ini" >/dev/null 2>&1
+eq "a chosen preset from the archive" "$(jq -r .name "$RP/report.json")" "Soft"
+"$CD" fx mode steam:5000 vkbasalt >/dev/null 2>&1
+eq "switching route keeps an imported look" "$(jq -c '[.source, .name, .mode]' "$RP/report.json")" '["file","Soft","vkbasalt"]'
+echo 'nothing' > "$T/nexus/readme.txt"
+"$CD" fx import steam:5000 "$T/nexus/readme.txt" >/dev/null 2>&1; eq "a file without a preset is refused" "$?" 4
+"$CD" fx set steam:5000 off >/dev/null
+unset CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 \
+      CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

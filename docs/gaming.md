@@ -406,6 +406,26 @@ Studied from the community's reference script
   wrapper), AMD, and 32-bit/D3D9/OpenGL titles (none installed here).
 
 
+#### Importing a downloaded preset (FX → FROM A FILE)
+- Many recent games only have presets on Nexus Mods, which answers 403 to
+  scripted requests. The flow is: SEARCH NEXUS ↗ (a web search), you download
+  the file, then **IMPORT…**. The picker opens in the XDG Downloads folder and
+  accepts zip, 7z, rar (all read by bsdtar), .ini or .txt.
+- `fx importlist <file>` lists the presets inside: the files with a
+  `Techniques=` line, `ReShade.ini` excluded, the most effects first. When
+  there's more than one, the tab lets you pick.
+- `fx import <key> <file> [preset]`:
+  1. Copies the archive's own `.fx`/`.fxh` to `Shaders/imported/<file name>`.
+     A name we already have is skipped, so there are no duplicate
+     techniques. Its textures go to `Textures`.
+  2. Applies the preset through the game's route like any other look
+     (`fx set … file:<preset>`). With ReShade it runs as is, and missing
+     shaders are fetched from the official packages. With vkBasalt it's
+     converted.
+  The archive's `ReShade.ini`, `dxgi.dll` and the like are never used, since
+  the deck manages those. Switching route keeps an imported look (a copy is
+  kept in `gaming/fx/<game>/preset.ini`).
+
 #### My library: presets and settings for every game (FX → MY LIBRARY)
 - **SCAN** checks every installed Steam game:
   - **SweetFX Settings DB:** the game's page is matched by exact title (after

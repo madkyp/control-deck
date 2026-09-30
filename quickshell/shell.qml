@@ -326,6 +326,8 @@ ShellRoot {
         }
         property string fxLastGame: ""
         property string fxScope: "game"     // game | library
+        property string fxImportFile: ""    // archive picked for IMPORT
+        property var    fxImportList: []    // its presets, when there's more than one
         property var    fxScan: []          // fx scan: every game's best preset / compatibility
         property var    fxScanByKey: { var m = {}; fxScan.forEach(function (r) { m[r.key] = r; }); return m; }
         property int    fxEligible: fxScan.filter(function (r) { return r.eligible && !r.current; }).length
@@ -985,6 +987,31 @@ ShellRoot {
             id: fxStatProc
             command: [win.scriptPath, "fx", "status", win.selGame]
             stdout: StdioCollector { onStreamFinished: { try { win.fx = JSON.parse(text); } catch (e) { win.fx = {}; } } }
+        }
+        Process {
+            id: fxPickProc
+            command: [win.scriptPath, "pickfile", "Choose a downloaded ReShade preset", "@downloads",
+                      "ReShade preset (zip, 7z, rar, ini) | *.zip *.7z *.rar *.ini *.txt"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    var f = text.trim(); if (!f) return;
+                    win.fxImportFile = f; win.fxImportList = []; win.fxMsg = "Reading " + f.replace(/^.*\//, "") + "…";
+                    fxImpListProc.command = [win.scriptPath, "fx", "importlist", f]; fxImpListProc.running = true;
+                }
+            }
+        }
+        Process {
+            id: fxImpListProc
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    var l = []; try { l = JSON.parse(text); } catch (e) { }
+                    if (l.length === 0) { win.fxMsg = "No ReShade preset in that file (it needs a Techniques= line)."; return; }
+                    if (l.length === 1) {
+                        win.fxMsg = "";
+                        win.fxApply("file:" + win.fxImportFile, "IMPORTING PRESET…", ["fx", "import", win.selGame, win.fxImportFile]);
+                    } else { win.fxImportList = l; win.fxMsg = l.length + " presets in this file: pick one"; }
+                }
+            }
         }
         Process {
             id: fxScanProc
@@ -3599,6 +3626,40 @@ ShellRoot {
                                                 active: win.fxActive && win.fx.current.source === "builtin" && win.fx.current.name === modelData[0]
                                                 on: !win.gameBusy && win.fxReady
                                                 onClicked: win.fxApply(k, "APPLYING…")
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "FROM A FILE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Chip {
+                                            label: fxPickProc.running || fxImpListProc.running ? "OPENING…" : "IMPORT…"
+                                            tint: pal.ok; on: !win.gameBusy && win.fxReady && !fxPickProc.running
+                                            tip: "A preset you downloaded (Nexus Mods…): zip, 7z, rar or .ini. Its own shaders come along; its ReShade.ini/DLLs are ignored."
+                                            onClicked: fxPickProc.running = true
+                                        }
+                                        Chip {
+                                            label: "SEARCH NEXUS ↗"; tip: "Web search for this game's ReShade presets on Nexus Mods"
+                                            onClicked: Qt.openUrlExternally("https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "download it, then IMPORT"
+                                        }
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxImportList.length > 1
+                                        Repeater {
+                                            model: win.fxImportList
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData.path.replace(/^.*\//, "") + "  ·  " + modelData.effects + " fx"
+                                                tip: modelData.path; tint: pal.ok
+                                                on: !win.gameBusy
+                                                onClicked: { var f = win.fxImportFile, pth = modelData.path; win.fxImportList = [];
+                                                             win.fxApply("file:" + f, "IMPORTING PRESET…", ["fx", "import", win.selGame, f, pth]); }
                                             }
                                         }
                                     }

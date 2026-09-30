@@ -1585,11 +1585,13 @@ cmd_copyexec() {
 
 # --- pickfile: native file chooser (zenity), prints chosen path ------------
 cmd_pickfile() {
-    local title="${1:-Choose a file}"
+    local title="${1:-Choose a file}" dir="${2:-$HOME}" filter="${3:-}"
+    [[ "$dir" == @downloads ]] && dir="$(xdg-user-dir DOWNLOAD 2>/dev/null)"
+    [[ -d "$dir" ]] || dir="$HOME"
     if have zenity; then
-        zenity --file-selection --title="$title" 2>/dev/null
+        zenity --file-selection --title="$title" --filename="$dir/" ${filter:+--file-filter="$filter"} 2>/dev/null
     elif have kdialog; then
-        kdialog --getopenfilename "$HOME" 2>/dev/null
+        kdialog --getopenfilename "$dir" ${filter:+"${filter#*|}"} 2>/dev/null
     else
         err "no file chooser available (install zenity)"; return 1
     fi
@@ -4523,17 +4525,23 @@ cmd_fx_set() {
                 rep="$(jq -nc --arg n "$name" '{source:"builtin", name:$n, applied:1, effects:[$n], skipped:[], partial:[]}')"
             fi
             rm -f "$d/preset.ini" ;;
-        sfx:*)
-            local id="${what#sfx:}" tmp r rc=0
-            [[ "$id" =~ ^[0-9]+$ ]] || { err "bad preset id"; return 2; }
+        sfx:*|file:*)
+            local id="" tmp r rc=0
             mkdir -p "$d"; tmp="$(mktemp)"
-            curl -fsSL --max-time 20 -A "$FX_UA" "$SFX_URL/games/preset/$id/download/" -o "$tmp" \
-                || { rm -f "$tmp"; err "couldn't download the preset"; return 4; }
+            if [[ "$what" == file:* ]]; then
+                cp -- "${what#file:}" "$tmp" 2>/dev/null || { rm -f "$tmp"; err "can't read ${what#file:}"; return 4; }
+            else
+                id="${what#sfx:}"
+                [[ "$id" =~ ^[0-9]+$ ]] || { rm -f "$tmp"; err "bad preset id"; return 2; }
+                curl -fsSL --max-time 20 -A "$FX_UA" "$SFX_URL/games/preset/$id/download/" -o "$tmp" \
+                    || { rm -f "$tmp"; err "couldn't download the preset"; return 4; }
+            fi
             if ! tr -d '\r' < "$tmp" | grep -qE '^Techniques='; then
                 err "not a ReShade preset (no Techniques= line); it only says: $(tr -d '\r' < "$tmp" | head -c 120)"; rm -f "$tmp"; return 4
             fi
             name="$(tr -d '\r' < "$tmp" | head -1 | sed -E 's/^-->[[:space:]]*//' | cut -c1-80)"
-            [[ "$name" == Techniques=* || "$name" == \[* ]] && name="preset $id"
+            [[ "$name" == Techniques=* || "$name" == \[* || "$name" == *=* ]] && name="preset $id"
+            [[ -n "${FX_IMPORT_NAME:-}" ]] && name="$FX_IMPORT_NAME"
             if [[ "$mode" == reshade ]]; then
                 [[ -n "$(reshade_state "$key")" ]] || { cmd_reshade_on "$key" || { rc=$?; rm -f "$tmp"; return $rc; }; }
                 r="$(reshade_need_files "$tmp")"
@@ -4552,8 +4560,12 @@ cmd_fx_set() {
                 mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"
             fi
             mv "$tmp" "$d/preset.ini"
-            rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
-                   '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")" ;;
+            if [[ -n "$id" ]]; then
+                rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
+                       '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")"
+            else
+                rep="$(jq -c --arg n "${name:-imported preset}" '. + {source:"file", name:$n}' <<<"$r")"
+            fi ;;
         *) err "use: fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off"; return 2 ;;
     esac
     rep="$(jq -c --arg m "$mode" '. + {mode:$m}' <<<"$rep")"
@@ -4573,7 +4585,9 @@ cmd_fx_mode() {
     [[ "$key" == steam:* ]] || { err "only Steam games"; return 2; }
     d="$(fx_key_dir "$key")"
     if [[ -s "$d/report.json" ]]; then
-        look="$(jq -r 'if .source == "sfx" then "sfx:\(.id)" else "builtin:\(.name)" end' "$d/report.json")"
+        look="$(jq -r --arg p "$d/preset.ini" 'if .source == "sfx" then "sfx:\(.id)" elif .source == "file" then "file:\($p)" else "builtin:\(.name)" end' "$d/report.json")"
+        if [[ "$look" == file:* ]]; then cp -f "$d/preset.ini" "$d/preset.keep"; look="file:$d/preset.keep"
+            export FX_IMPORT_NAME; FX_IMPORT_NAME="$(jq -r .name "$d/report.json")"; fi
     fi
     case "$mode" in
         reshade)
@@ -4584,7 +4598,7 @@ cmd_fx_mode() {
             profile_write "$key" '{"fxMode":"vkbasalt"}' ;;
         *) err "use: fx mode <key> reshade [exe] [dxgi|d3d9|opengl32] | vkbasalt"; return 2 ;;
     esac
-    if [[ -n "$look" ]]; then cmd_fx_set "$key" "$look"
+    if [[ -n "$look" ]]; then cmd_fx_set "$key" "$look"; rm -f "$d/preset.keep"
     elif [[ "$mode" == vkbasalt ]]; then profile_write "$key" '{"fx":false}'; fi
     log "✔ $key now uses $mode."
 }
@@ -5016,6 +5030,66 @@ cmd_fx_autoinstall() {
     ((fail == 0))
 }
 
+# --- import a preset downloaded by hand (Nexus Mods…) ----------------------------
+# A .ini/.txt, or an archive (zip/7z/rar: bsdtar reads them all). Presets are
+# the files with a "Techniques=" line; any shaders/textures the archive brings
+# go to Shaders/imported/<name> (a file name we already have is kept, not
+# replaced) and Textures. ReShade.ini, DLLs and the like are ignored: the deck
+# manages those.
+fx_unpack() {   # file → dir with its content (a lone preset is copied in)
+    local f="$1" t; t="$(mktemp -d)"
+    case "${f,,}" in
+        *.ini|*.txt) cp -f -- "$f" "$t/" ;;
+        *) bsdtar -xf "$f" -C "$t" 2>/dev/null || { rm -rf "$t"; return 1; } ;;
+    esac
+    echo "$t"
+}
+fx_presets_in() {   # dir → preset files (relative), best first: most techniques
+    local d="$1" f
+    while IFS= read -r -d '' f; do
+        [[ "$(basename "${f,,}")" == reshade.ini ]] && continue
+        tr -d '\r' < "$f" | grep -qE '^Techniques=[^[:space:]]' || continue
+        printf '%s\t%s\n' "$(tr -d '\r' < "$f" | grep -m1 -E '^Techniques=' | tr ',' '\n' | grep -c @)" "${f#"$d"/}"
+    done < <(find "$d" -type f \( -iname '*.ini' -o -iname '*.txt' \) -print0)
+}
+
+# fx importlist <file> → [{path, effects}]
+cmd_fx_importlist() {
+    local f="$1" d
+    [[ -f "$f" ]] || { err "not found: $f"; return 2; }
+    d="$(fx_unpack "$f")" || { err "couldn't open $(basename "$f") (zip, 7z, rar, .ini or .txt)"; return 4; }
+    fx_presets_in "$d" | sort -t$'\t' -k1,1nr | jq -Rsc '[split("\n")[] | select(. != "") | split("\t") | {path:.[1], effects:(.[0] | tonumber)}]'
+    rm -rf "$d"
+}
+
+# fx import <key> <file> [preset path inside the archive]
+cmd_fx_import() {
+    local key="$1" f="$2" pick="${3:-}" d list slug sub n=0 g
+    [[ "$key" == steam:* ]] || { err "only Steam games"; return 2; }
+    [[ -f "$f" ]] || { err "not found: $f"; return 2; }
+    d="$(fx_unpack "$f")" || { err "couldn't open $(basename "$f") (zip, 7z, rar, .ini or .txt)"; return 4; }
+    list="$(fx_presets_in "$d" | sort -t$'\t' -k1,1nr | cut -f2)"
+    if [[ -z "$list" ]]; then rm -rf "$d"; err "no ReShade preset (a file with Techniques=) in $(basename "$f")"; return 4; fi
+    [[ -n "$pick" ]] || pick="$(head -1 <<<"$list")"
+    grep -qxF -- "$pick" <<<"$list" || { rm -rf "$d"; err "not a preset in that archive: $pick"; return 2; }
+    # shaders and textures it brings
+    slug="${f##*/}"; slug="${slug%.*}"; slug="${slug//[^A-Za-z0-9._-]/_}"; slug="${slug:0:60}"
+    sub="$FX_DIR/Shaders/imported/$slug"
+    while IFS= read -r -d '' g; do
+        [[ -n "$(fx_find "$(basename "$g")")" ]] && continue
+        mkdir -p "$sub"; cp -n -- "$g" "$sub/"; n=$((n + 1))
+    done < <(find "$d" -type f \( -iname '*.fx' -o -iname '*.fxh' \) -print0)
+    while IFS= read -r -d '' g; do
+        mkdir -p "$FX_DIR/Textures"; cp -n -- "$g" "$FX_DIR/Textures/"
+    done < <(find "$d" -type f -ipath '*/textures/*' \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.dds' -o -iname '*.bmp' -o -iname '*.tga' \) -print0)
+    ((n)) && log "→ $n shader file(s) from the archive → Shaders/imported/$slug"
+    local keep; keep="$(mktemp)"; cp -- "$d/$pick" "$keep"; rm -rf "$d"
+    local label="${pick##*/}"; label="${label%.*}"
+    FX_IMPORT_NAME="$label" cmd_fx_set "$key" "file:$keep"; local rc=$?
+    rm -f "$keep"
+    return $rc
+}
+
 cmd_fx() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5026,6 +5100,8 @@ cmd_fx() {
         search)   cmd_fx_search "$*" ;;
         presets)  cmd_fx_presets "${1:-}" ;;
         set)      cmd_fx_set "${1:-}" "${2:-}" ;;
+        importlist) cmd_fx_importlist "${1:-}" ;;
+        import)   cmd_fx_import "${1:-}" "${2:-}" "${3:-}" ;;
         mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
         exes)     cmd_fx_exes "${1:-}" ;;
         key)      cmd_fx_key "${1:-}" ;;
@@ -5069,7 +5145,7 @@ main() {
         fpperms)     cmd_fpperms "$1" ;;
         fpset)       need "$3" "missing arguments (appid permission on|off)"; cmd_fpset "$1" "$2" "$3" ;;
         fpreset)     cmd_fpreset "$1" ;;
-        pickfile)    cmd_pickfile "$1" ;;
+        pickfile)    cmd_pickfile "$1" "${2:-}" "${3:-}" ;;
         search)      cmd_search "$1" ;;
         ghreleases)  need "$1" "missing repo"; cmd_ghreleases "$1" ;;
         aurreview)   need "$1" "missing package"; cmd_aurreview "$1" ;;
