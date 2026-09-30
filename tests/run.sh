@@ -593,6 +593,58 @@ eq "missing summary → unknown" "$("$CD" protondb 200 | jq -r '."200".tier')" u
 rm "$T/pdb/100.json"
 eq "cached for a day" "$("$CD" protondb 100 | jq -r '."100".tier')" platinum
 unset CONTROL_DECK_PROTONDB_API CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
+
+section "Gaming: launch-option suggestions (ProtonDB open data)"
+NOW=$(date +%s); OLD=$(( NOW - 5 * 365 * 86400 ))
+rep() { printf '{"app":{"steam":{"appId":"%s"}},"timestamp":%s,"responses":{"verdict":"%s","launchOptions":%s},"systemInfo":{"gpu":"%s"}}' "$1" "$2" "$3" "$4" "$5"; }
+{
+    echo '['
+    for i in 1 2 3 4 5 6 7 8; do rep 100 "$NOW" yes '"%command% -vulkan +fps_max 120"' "NVIDIA GeForce RTX 2070"; echo ,; done
+    rep 100 "$NOW" yes '"PROTON_ENABLE_WAYLAND=1 gamemoderun %command% -vulkan +fps_max 120"' "NVIDIA GeForce RTX 3080"; echo ,
+    rep 100 "$NOW" yes '"PROTON_ENABLE_WAYLAND=1 gamemoderun %command% -vulkan"' "AMD Radeon RX 6800"; echo ,
+    rep 100 "$NOW" yes '"RADV_PERFTEST=\"gpl,nggc\" %command% -vulkan"' "AMD Radeon RX 7900"; echo ,
+    rep 100 "$NOW" yes '"RADV_PERFTEST=\"gpl,nggc\" ~/lsfg %command%"' "AMD Radeon RX 7900"; echo ,
+    rep 100 "$NOW" no  '"-dx11 %command%"' "NVIDIA GeForce GTX 1060"; echo ,
+    rep 100 "$NOW" no  '"-dx11 %command%"' "NVIDIA GeForce GTX 1060"; echo ,
+    rep 100 "$OLD" yes '"-oldflag %command%"' "NVIDIA GeForce GTX 970"; echo ,
+    rep 100 "$OLD" yes '"-oldflag %command%"' "NVIDIA GeForce GTX 970"; echo ,
+    rep 300 "$NOW" yes '"%command% -windowed"' "Intel Arc"; echo ,
+    rep 300 "$NOW" yes '"%command% -windowed"' "Intel Arc"; echo ,
+    rep 200 "$NOW" yes '""' "NVIDIA"
+    echo ']'
+} > "$T/reports_piiremoved.json"
+mkdir -p "$T/pdbdump"; (cd "$T" && tar czf "$T/pdbdump/reports_sep1_2026.tar.gz" reports_piiremoved.json)
+export CONTROL_DECK_GPU_VENDOR=nvidia
+eq "no index → says so" "$("$CD" gsuggest 100 | jq -r .index)" false
+CONTROL_DECK_PDB_RAW="file://$T/pdbdump" CONTROL_DECK_PDB_DUMP=reports_sep1_2026.tar.gz "$CD" pdbindex update >/dev/null 2>&1
+eq "index built (reports with launch options only)" "$("$CD" pdbindex status | jq -r .reports)" 18
+eq "games counted" "$("$CD" pdbindex status | jq -r .games)" 2
+S="$("$CD" gsuggest 100)"
+sug() { jq -r --arg t "$1" '[.suggestions[] | select(.token == $t)] | first | if . == null then "none" else "\(.share)/\(.vshare)/\(.foryou)" end' <<<"$S"; }
+eq "only working, recent reports (12 of 16)" "$(jq -r .reports <<<"$S")" 12
+eq "-vulkan: share / NVIDIA share / fits" "$(sug -vulkan)" "91/100/true"
+eq "+cvar value kept as one option" "$(sug '+fps_max 120')" "75/100/true"
+eq "env var suggested" "$(sug PROTON_ENABLE_WAYLAND=1)" "16/11/true"
+eq "AMD-only variable marked as not for NVIDIA (quotes stripped)" "$(sug RADV_PERFTEST=gpl,nggc)" "16/0/false"
+# shellcheck disable=SC2088  # a literal "~/lsfg" token, as players write it
+eq "personal paths never suggested" "$(sug '~/lsfg')" none
+eq "reports saying it doesn't work are ignored" "$(sug -dx11)" none
+eq "reports older than 3 years ignored when there are enough recent ones" "$(sug -oldflag)" none
+eq "wrapper suggested" "$(sug gamemoderun)" "16/11/true"
+eq "few reports → all-time window" "$("$CD" gsuggest 300 | jq -r '.window + " " + (.suggestions[0].token)')" "all -windowed"
+eq "tips count only what fits this GPU" "$("$CD" gtips 100 | jq -r '."100"')" 4
+unset CONTROL_DECK_GPU_VENDOR
+
+section "Gaming: new games are recognised"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
+rm -f "$HOME/.local/share/control-deck/gaming/known-games.txt"
+"$CD" games >/dev/null; sleep 0.3
+eq "first run: nothing is new" "$("$CD" games | jq '[.[] | select(.new)] | length')" 0
+man 300 "Fresh Install" FreshInstall 10
+eq "a game installed later is flagged new" "$("$CD" games | jq -r '.[] | select(.id == "300") | .new')" true
+"$CD" gseen steam:300
+eq "opening it clears the flag" "$("$CD" games | jq -r '.[] | select(.id == "300") | .new')" false
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

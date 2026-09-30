@@ -291,6 +291,9 @@ ShellRoot {
         property string selGameCompat: ""
         property bool   selGameWrapped: false
         property bool   confirmJoin: false
+        property var    sug: ({})           // launch options players use (ProtonDB open data)
+        property var    tips: ({})          // suggestion count per appid
+        property var    pdbStat: ({})       // local ProtonDB index status
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
 
         function tierColor(t) {
@@ -308,12 +311,35 @@ ShellRoot {
             return g ? g.name : "app " + id;
         }
         function openGaming() {
-            gamesProc.running = true; gstatProc.running = true; toolsProc.running = true;
+            gamesProc.running = true; gstatProc.running = true; toolsProc.running = true; pdbStatProc.running = true;
         }
         function selectGame(g) {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
             selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped;
             gameLog = ""; gprofProc.running = true;
+            sug = {}; if (g.source === "steam") sugProc.running = true;
+            if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
+        }
+        // is a suggestion already part of the profile being edited?
+        function sugApplied(x) {
+            if (x.kind === "env") return (" " + gEnv.text + " ").indexOf(" " + x.token + " ") >= 0;
+            if (x.kind === "arg") return (" " + gArgs.text + " ").indexOf(" " + x.token + " ") >= 0;
+            if (x.token === "gamemoderun") return gp.gamemode === true;
+            if (x.token === "mangohud") return gp.mangohud === true;
+            return (" " + gPrefix.text + " ").indexOf(" " + x.token + " ") >= 0;
+        }
+        // add a suggestion to the editor (saved with SAVE, never automatically)
+        function applySug(x) {
+            if (sugApplied(x)) return;
+            if (x.kind === "env") {
+                var name = x.token.split("=")[0];
+                var rest = gEnv.text.split(/\s+/).filter(function (e) { return e && e.split("=")[0] !== name; });
+                gEnv.text = rest.concat([x.token]).join(" ");
+            } else if (x.kind === "arg") {
+                gArgs.text = (gArgs.text.trim() + " " + x.token).trim();
+            } else if (x.token === "gamemoderun") { gpSet("gamemode", true); }
+            else if (x.token === "mangohud") { gpSet("mangohud", true); }
+            else { gPrefix.text = (gPrefix.text.trim() + " " + (x.token === "gamescope" ? "gamescope -f --" : x.token)).trim(); }
         }
         function gpSet(k, v) { var o = Object.assign({}, gp); o[k] = v; gp = o; }
         function envString(e) {
@@ -736,7 +762,10 @@ ShellRoot {
                     var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
                     if (cur) { win.selGameLaunch = cur.launch; win.selGameCompat = cur.compat; win.selGameWrapped = cur.wrapped; }
                     var ids = win.games.filter(function (g) { return g.source === "steam"; }).map(function (g) { return g.id; });
-                    if (ids.length > 0) { pdbProc.command = [win.scriptPath, "protondb"].concat(ids); pdbProc.running = true; }
+                    if (ids.length > 0) {
+                        pdbProc.command = [win.scriptPath, "protondb"].concat(ids); pdbProc.running = true;
+                        tipsProc.command = [win.scriptPath, "gtips"].concat(ids); tipsProc.running = true;
+                    }
                 }
             }
         }
@@ -771,10 +800,26 @@ ShellRoot {
             stderr: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
             onExited: (c, s) => {
                 win.gameStatus = c === 0 ? "DONE ✓" : (c === 3 ? "CLOSE STEAM FIRST" : "FAILED · " + c);
-                gamesProc.running = true; gstatProc.running = true;
+                gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
+                if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
         }
+        Process {
+            id: sugProc
+            command: [win.scriptPath, "gsuggest", win.selGameId]
+            stdout: StdioCollector { onStreamFinished: { try { win.sug = JSON.parse(text); } catch (e) { win.sug = {}; } } }
+        }
+        Process {
+            id: tipsProc
+            stdout: StdioCollector { onStreamFinished: { try { win.tips = JSON.parse(text); } catch (e) {} } }
+        }
+        Process {
+            id: pdbStatProc
+            command: [win.scriptPath, "pdbindex", "status"]
+            stdout: StdioCollector { onStreamFinished: { try { win.pdbStat = JSON.parse(text); } catch (e) { win.pdbStat = {}; } } }
+        }
+        Process { id: seenProc }
         Process {
             id: steamOpenProc
             command: ["setsid", "-f", "steam"]
@@ -2427,6 +2472,16 @@ ShellRoot {
                                     text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12
                                 }
                                 Text {
+                                    visible: modelData.new === true
+                                    text: "NEW"; color: pal.amber
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                }
+                                Text {
+                                    visible: (win.tips[modelData.id] || 0) > 0
+                                    text: "\uf0eb " + win.tips[modelData.id]; color: pal.ok
+                                    font.family: win.mono; font.pixelSize: 9
+                                }
+                                Text {
                                     visible: modelData.wrapped
                                     text: "◆ DECK"; color: pal.accent
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
@@ -2508,6 +2563,48 @@ ShellRoot {
                                     onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
                                 }
                             }
+                        }
+                    }
+
+                    // what players who report the game works put in their launch options
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.selGameSource === "steam"
+                        Text { text: "PLAYERS\nUSE"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.alignment: Qt.AlignTop; Layout.topMargin: 4 }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 4
+                            Flow {
+                                Layout.fillWidth: true; spacing: 6
+                                visible: win.pdbStat.present === true
+                                Repeater {
+                                    model: (win.sug.suggestions || []).filter(function (x) { return x.foryou; })
+                                    delegate: Chip {
+                                        required property var modelData
+                                        property bool applied: win.sugApplied(modelData)
+                                        label: (applied ? "✓ " : "+ ") + modelData.token + "  " + (modelData.vshare !== null && modelData.vshare !== undefined ? modelData.vshare : modelData.share) + "%"
+                                        tint: pal.ok; active: applied
+                                        onClicked: win.applySug(modelData)
+                                    }
+                                }
+                            }
+                            Hint {
+                                text: win.pdbStat.present !== true
+                                      ? "Suggestions come from ProtonDB's open data (every game's reported launch options). Download it once (≈70 MB, indexed to ≈5 MB):"
+                                      : (!win.sug.index ? "" : (win.sug.reports === 0
+                                         ? "No ProtonDB report with launch options for this game yet."
+                                         : ((win.sug.suggestions || []).filter(function (x) { return x.foryou; }).length === 0
+                                            ? "Players don't agree on any launch option for this game (" + win.sug.reports + " working reports)."
+                                            : "% of the " + (win.sug.vendorReports > 0 ? win.sug.vendorReports + " " + (win.sug.vendor || "").toUpperCase() + " users among " : "")
+                                              + win.sug.reports + " players who say it works" + (win.sug.window === "3y" ? " (last 3 years)" : "")
+                                              + " that use it. Click to add, then SAVE.")))
+                                      + (win.pdbStat.present === true ? "  Data: ProtonDB (ODbL), " + win.pdbStat.date + "." : "")
+                            }
+                        }
+                        Chip {
+                            visible: win.pdbStat.present !== true || win.pdbStat.stale === true
+                            label: win.pdbStat.present === true ? "UPDATE DATA" : "GET DATA (70 MB)"
+                            on: !win.gameBusy
+                            onClicked: win.runGame(["pdbindex", "update"], "INDEXING PROTONDB DATA…")
                         }
                     }
 

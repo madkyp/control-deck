@@ -77,9 +77,24 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   (`/api/v1/reports/summaries/<appid>.json`), one request per game, on demand,
   cached for 24 h, with the app's own User-Agent. It is not an official,
   documented API: if it disappears the deck shows "no data".
-- **No launch-option advice is generated.** The summary doesn't contain any and
-  individual reports have no stable API, so instead of inventing variables the
-  deck links to the game's ProtonDB page (**PROTONDB ↗**).
+- **Launch-option suggestions from ProtonDB's open data.** ProtonDB publishes a
+  monthly dump of every report (github.com/bdefore/protondb-data, **ODbL**), and
+  ~15 % of reports include the player's launch options. `pdbindex update`
+  streams the newest dump (≈70 MB download, never unpacked to disk, a few MB of
+  RAM, ~1 min) into a local index of every report with launch options — about
+  59 000 reports for ~6 900 games (≈5 MB) — so games installed later get
+  suggestions with no extra download. `gsuggest <appid>` then counts, among the
+  reports that say the game **works** (last 3 years, or all time when there are
+  fewer than 8), how many use each option: env variables, wrappers
+  (`gamemoderun`, `mangohud`, …) and arguments (`+cvar value` / `-flag value`
+  kept together). Shares are given overall and for **your GPU vendor**;
+  vendor-specific variables (`RADV_*`/Mesa → AMD, `__GL_*`/NVAPI → NVIDIA) are
+  marked and hidden when they don't fit, personal paths (`~/lsfg`) are dropped.
+  Suggestions are only shown; clicking one adds it to the editor and nothing is
+  saved until **SAVE**. These are statistics of what players use, not a
+  guarantee that an option helps.
+- **New games are recognised**: the library flags games installed since the
+  deck last looked (**NEW**) and shows how many suggestions fit them (💡 n).
 - **Proton version per game**: writes Steam's `CompatToolMapping`
   (`config.vdf`). Offered tools are the ones actually installed:
   `proton_experimental` when "Proton - Experimental" is present, plus every
@@ -89,7 +104,8 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - Note: ProtonDB's `robots.txt` disallows AI crawlers (including
   `anthropic-ai`). The deck's requests are made by the user's app on demand;
   the test-suite uses local fixtures instead of querying ProtonDB.
-- CLI: `protondb <appid…>`, `compattools`, `steamcompat <appid> <tool|default>`.
+- CLI: `protondb <appid…>`, `pdbindex update|status`, `gsuggest <appid>`,
+  `gtips <appid…>`, `gseen <key>`, `compattools`, `steamcompat <appid> <tool|default>`.
 
 ## Compatibility report
 
@@ -100,6 +116,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 | gamemode governor switch | polkit rule and group checked | needs the user in the `gamemode` group |
 | Running-game detection | `SteamAppId` read from `/proc/*/environ` (tests) | confirmation while a real game runs |
 | ProtonDB | 3 real summaries fetched and cached | endpoint stability (unofficial) |
+| Launch-option suggestions | index built from the real Sep 2026 dump (58 850 reports, 6 914 games); Deadlock: 16 suggestions from 264 working reports | — |
 | AMD / Intel GPUs | — | 2.1 / 2.5 don't touch the GPU; untested on other vendors |
 
 ## Not implemented yet

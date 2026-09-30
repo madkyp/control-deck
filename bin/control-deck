@@ -2880,11 +2880,33 @@ cmd_games() {
         compat=""; [[ -f "$cfg" ]] && compat="$(vdf_get "$cfg" "$COMPAT_MAPPING/$id" name)"
         printf '%s\n' "$id" "$name" "$dir" "$size" "$lib" "$launch" "$compat" \
             "$([[ -d "$lib/steamapps/compatdata/$id" ]] && echo 1 || echo 0)"
-    done | jq -Rn --argjson profs "$profs" '[inputs] as $l | [range(0; $l|length; 8) as $i |
+    done | jq -Rn --argjson profs "$profs" --argjson known "$(known_games_json)" '[inputs] as $l | [range(0; $l|length; 8) as $i |
         {key:("steam:" + $l[$i]), source:"steam", id:$l[$i], name:$l[$i+1], installdir:$l[$i+2],
          size:($l[$i+3]|tonumber? // 0), library:$l[$i+4], launch:$l[$i+5],
          wrapped:($l[$i+5] | contains("control-deck run")), compat:$l[$i+6], prefix:($l[$i+7] == "1"),
-         profile:($profs | has("steam:" + $l[$i]))}] | sort_by(.name | ascii_downcase)'
+         profile:($profs | has("steam:" + $l[$i])),
+         new:(($known != null) and (($known | index("steam:" + $l[$i])) == null))}] | sort_by(.name | ascii_downcase)' \
+    | tee >(jq -r '.[].key' | known_games_init)
+}
+
+# games already seen by the user (null on the very first run: nothing is "new" then)
+KNOWN_GAMES="$GAMING_DIR/known-games.txt"
+known_games_json() { if [[ -f "$KNOWN_GAMES" ]]; then jq -Rsc 'split("\n") | map(select(. != ""))' "$KNOWN_GAMES"; else echo null; fi; }
+known_games_init() { mkdir -p "$GAMING_DIR"; [[ -f "$KNOWN_GAMES" ]] && { cat >/dev/null; return; }; cat > "$KNOWN_GAMES"; }
+
+# gseen <key> — the user opened this game: it's no longer "new"
+cmd_gseen() {
+    valid_game_key "$1" || { err "not a game key: $1"; return 2; }
+    mkdir -p "$GAMING_DIR"; grep -qxF "$1" "$KNOWN_GAMES" 2>/dev/null || echo "$1" >> "$KNOWN_GAMES"
+}
+
+# gtips <appid…> → {"<appid>": number of suggestions that fit this GPU}
+cmd_gtips() {
+    local id
+    for id in "$@"; do
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        printf '%s\n%s\n' "$id" "$(cmd_gsuggest "$id" | jq '[.suggestions[]? | select(.foryou)] | length')"
+    done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i | {key:$l[$i], value:($l[$i+1]|tonumber)}] | from_entries'
 }
 
 # --- status: gamemode, governor, running games ---------------------------------------
@@ -2957,6 +2979,131 @@ cmd_protondb() {
     done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i | {key:$l[$i], value:($l[$i+1]|fromjson)}] | from_entries'
 }
 
+# --- launch-option suggestions from ProtonDB's open data -------------------------
+# ProtonDB publishes monthly dumps of every report (github.com/bdefore/protondb-data,
+# ODbL). `pdbindex update` streams the newest one — never unpacked to disk, a few
+# MB of RAM — into a small local index of the reports that list launch options,
+# for EVERY game, so a game installed later gets suggestions without another
+# download. `gsuggest` turns that into per-game statistics; nothing is applied
+# automatically.
+PDB_REPO_API="${CONTROL_DECK_PDB_REPO_API:-https://api.github.com/repos/bdefore/protondb-data/contents/reports}"
+PDB_RAW="${CONTROL_DECK_PDB_RAW:-https://raw.githubusercontent.com/bdefore/protondb-data/master/reports}"
+PDB_INDEX="$PROTONDB_CACHE/launch-index.jsonl"
+PDB_META="$PROTONDB_CACHE/launch-index.meta"
+
+# "reports_sep1_2026.tar.gz" → epoch of that date
+pdb_dump_epoch() {
+    local n="${1#reports_}"; n="${n%.tar.gz}"
+    [[ "$n" =~ ^([a-z]+)([0-9]+)_([0-9]{4})$ ]] || { echo 0; return; }
+    date -d "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}" +%s 2>/dev/null || echo 0
+}
+
+pdb_latest_dump() {
+    local n best="" bestt=0 t
+    while IFS= read -r n; do
+        t="$(pdb_dump_epoch "$n")"; (( t > bestt )) && { best="$n"; bestt=$t; }
+    done < <(curl -fsS --max-time 15 -H 'Accept: application/vnd.github+json' "$PDB_REPO_API" | jq -r '.[].name' 2>/dev/null)
+    [[ -n "$best" ]] && echo "$best"
+}
+
+# the GPU vendor games will run on (a discrete NVIDIA/AMD card wins over Intel)
+gpu_vendor() {
+    [[ -n "${CONTROL_DECK_GPU_VENDOR:-}" ]] && { echo "$CONTROL_DECK_GPU_VENDOR"; return; }
+    local v all=""
+    for v in /sys/class/drm/card[0-9]*/device/vendor; do [[ -f "$v" ]] && all+=" $(cat "$v")"; done
+    case "$all" in
+        *0x10de*) echo nvidia ;; *0x1002*) echo amd ;; *0x8086*) echo intel ;; *) echo "" ;;
+    esac
+}
+
+cmd_pdbindex() {
+    case "${1:-status}" in
+        update)
+            local dump url tmp n
+            dump="${CONTROL_DECK_PDB_DUMP:-$(pdb_latest_dump)}"
+            [[ -n "$dump" ]] || { err "could not list ProtonDB's data dumps on GitHub"; return 4; }
+            if [[ -f "$PDB_META" && "$(sed -n 's/^DUMP=//p' "$PDB_META")" == "$dump" && "$2" != --force ]]; then
+                log "✔ The index is already built from $dump."; return 0
+            fi
+            mkdir -p "$PROTONDB_CACHE"; tmp="$PDB_INDEX.tmp"
+            url="$PDB_RAW/$dump"
+            log "→ Downloading and indexing $dump (about 70 MB, ~1 min)…"
+            # stream: download → gunzip/untar → one report at a time
+            if ! curl -fsSL --max-time 900 "$url" | tar xzO | jq -cn --stream '
+                    fromstream(1 | truncate_stream(inputs))
+                    | select((.responses.launchOptions? // "") | length > 0)
+                    | [(.app.steam.appId // ""), (.timestamp // 0), (.responses.verdict // ""),
+                       ((.systemInfo.gpu // "") | ascii_downcase
+                        | if test("nvidia|geforce|rtx|gtx|quadro") then "nvidia"
+                          elif test("amd|radeon|\\brx ") then "amd" elif test("intel") then "intel" else "" end),
+                       .responses.launchOptions]' > "$tmp"; then
+                rm -f "$tmp"; err "download or indexing failed"; return 4
+            fi
+            n="$(wc -l < "$tmp")"
+            (( n > 0 )) || { rm -f "$tmp"; err "the dump had no usable reports"; return 4; }
+            mv -f "$tmp" "$PDB_INDEX"
+            printf 'DUMP=%s\nDATE=%s\nBUILT=%s\nREPORTS=%s\nGAMES=%s\n' "$dump" "$(pdb_dump_epoch "$dump")" \
+                "$(date +%s)" "$n" "$(cut -d'"' -f2 "$PDB_INDEX" | sort -u | wc -l)" > "$PDB_META"
+            log "✔ Indexed $n reports with launch options ($(sed -n 's/^GAMES=//p' "$PDB_META") games). Data: ProtonDB, ODbL."
+            history_add "protondb data" steam "$dump" 0 ;;
+        status)
+            if [[ -f "$PDB_META" && -s "$PDB_INDEX" ]]; then
+                jq -n --arg d "$(sed -n 's/^DUMP=//p' "$PDB_META")" --argjson t "$(sed -n 's/^DATE=//p' "$PDB_META")" \
+                      --argjson r "$(sed -n 's/^REPORTS=//p' "$PDB_META")" --argjson g "$(sed -n 's/^GAMES=//p' "$PDB_META")" \
+                      --argjson now "$(date +%s)" \
+                    '{present:true, dump:$d, date:($t | strftime("%Y-%m-%d")), reports:$r, games:$g,
+                      stale:(($now - $t) > 35 * 86400)}'
+            else echo '{"present":false}'; fi ;;
+        *) err "use: pdbindex update [--force] | status"; return 2 ;;
+    esac
+}
+
+# gsuggest <appid> — what players who say the game works put in their launch options
+cmd_gsuggest() {
+    local id="$1" vendor since
+    [[ "$id" =~ ^[0-9]+$ ]] || { err "use: gsuggest <appid>"; return 2; }
+    [[ -s "$PDB_INDEX" ]] || { echo '{"index":false}'; return 0; }
+    vendor="$(gpu_vendor)"; since=$(( $(date +%s) - 3 * 365 * 86400 ))
+    grep -F "[\"$id\"," "$PDB_INDEX" | jq -sc --arg v "$vendor" --argjson since "$since" '
+        def vendor_of: if test("^(RADV_|AMD_|ACO_|RADEONSI|ENABLE_LAYER_MESA|MESA_)") then "amd"
+                       elif test("^(__GL_|__NV|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX|DXVK_NVAPI)") then "nvidia"
+                       else null end;
+        # one report → unique suggestion tokens: env VAR=value, wrapper, argument (+cvar value / -flag value)
+        def tokens:
+            [scan("(?:[^\\s\"]+|\"[^\"]*\")+")] as $t
+            | ($t | index("%command%")) as $c
+            | (if $c == null then [] else $t[:$c] end) as $pre
+            | (if $c == null then $t else $t[$c+1:] end) as $post
+            | ([$pre[] | select(test("^[A-Za-z_][A-Za-z0-9_]*="))
+                 | gsub("\""; "") | {token:., kind:"env", vendor:(vendor_of)}]
+               + [$pre[] | select(test("^[a-z][a-z0-9_.-]*$") and (test("^[0-9.]+$") | not))
+                 | {token:., kind:"wrapper", vendor:null}]
+               + [foreach range(0; $post | length) as $i ({skip:false, out:null};
+                     if .skip then {skip:false, out:null}
+                     else ($post[$i]) as $a | ($post[$i+1] // null) as $b
+                        | if ($a | test("^[-+]")) then
+                            (if $b != null and ($b | test("^[-+]") | not) then {skip:true, out:($a + " " + $b)}
+                             else {skip:false, out:$a} end)
+                          else {skip:false, out:null} end
+                     end; .out) | select(. != null) | {token:., kind:"arg", vendor:null}])
+            | map(select(.token | test("[/~$`;|&<>]") | not)) | unique_by(.token);
+        map(select(.[2] == "yes")) as $works
+        | ($works | map(select(.[1] >= $since))) as $recent
+        | (if ($recent | length) >= 8 then {r:$recent, window:"3y"} else {r:$works, window:"all"} end) as $w
+        | ($w.r | length) as $n
+        | ($w.r | map(select(.[3] == $v)) | length) as $nv
+        | [$w.r[] | .[3] as $gpu | (.[4] | tokens[]) | . + {gpu:$gpu}]
+        | group_by(.token)
+        | map({token:.[0].token, kind:.[0].kind, vendor:.[0].vendor, count:length,
+               share:((length * 100 / ([$n,1]|max)) | floor),
+               vcount:(map(select(.gpu == $v)) | length)}
+              | .vshare = (if $nv > 0 then (.vcount * 100 / $nv | floor) else null end))
+        | map(select(.count >= 2 and .share >= 5))
+        | map(. + {foryou:(.vendor == null or .vendor == $v)})
+        | sort_by(-(if .foryou then 1 else 0 end), -(.vshare // .share), -.count)
+        | {index:true, vendor:$v, window:$w.window, reports:$n, vendorReports:$nv, suggestions:.[:16]}'
+}
+
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
@@ -3018,6 +3165,9 @@ Gaming
   steamcompat <appid> <tool|default>   Proton version for a game (Steam must be closed)
   protondb <appid…>             ProtonDB summary per game, cached 24 h (JSON)
   gamejoin                      Join the gamemode group (one-time, pkexec)
+  pdbindex update [--force]|status   Index ProtonDB's open data (all games' launch options)
+  gsuggest <appid>              Launch options players use for a game, with shares (JSON)
+  gtips <appid…> / gseen <key>  Suggestion counts per game · mark a new game as seen
 EOF
 }
 
@@ -3099,6 +3249,10 @@ main() {
         steamcompat) cmd_steamcompat "$1" "$2" ;;
         protondb)    cmd_protondb "$@" ;;
         gamejoin)    cmd_gamejoin ;;
+        pdbindex)    cmd_pdbindex "$@" ;;
+        gsuggest)    cmd_gsuggest "$1" ;;
+        gtips)       cmd_gtips "$@" ;;
+        gseen)       cmd_gseen "$1" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;
         *) err "unknown command: $sub"; exit 2 ;;
