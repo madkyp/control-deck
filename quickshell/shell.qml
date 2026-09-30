@@ -254,6 +254,10 @@ ShellRoot {
         property bool   newsAck: false      // user saw the news warning for this check
         property string deckVersion: ""
         property bool   deckUpdate: updates.some(function (u) { return u.source === "deck"; })
+        // pending GPU driver updates (NVIDIA / Mesa / AMD) rebuild every shader cache
+        property var    driverUpdates: updates.filter(function (u) {
+            return u.source === "repo" && /^(lib32-)?(nvidia(-[0-9]+xx)?-utils|nvidia-open-dkms|mesa|vulkan-(radeon|intel|nouveau)|amdvlk)$/.test(u.name);
+        })
 
         function checkUpdates() {
             updates = []; updStatus = "CHECKING…"; newsAck = false;
@@ -294,6 +298,8 @@ ShellRoot {
         property var    sug: ({})           // launch options players use (ProtonDB open data)
         property var    tips: ({})          // suggestion count per appid
         property var    pdbStat: ({})       // local ProtonDB index status
+        property var    shaders: ({})       // shader caches (per game + driver)
+        property string confirmShader: ""   // target awaiting a second click
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
         property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
@@ -361,7 +367,13 @@ ShellRoot {
         function envString(e) {
             return Object.keys(e || {}).map(function (k) { return k + "=" + e[k]; }).join(" ");
         }
-        function runGame(args, label) { gameArgs = args; gameLog = ""; gameStatus = label; gameProc.running = true; }
+        function runGame(args, label) { gameArgs = args; gameLog = ""; gameStatus = label; confirmShader = ""; gameProc.running = true; }
+        // destructive shader actions need a second click on the same button
+        function shaderAction(args, key, label) {
+            if (confirmShader !== key) { confirmShader = key; return; }
+            runGame(args, label);
+        }
+        function dateOfEpoch(e) { return e ? new Date(e * 1000).toISOString().substring(0, 10) : "?"; }
         function saveGameProfile() {
             runGame(["gprofile", "set", selGame,
                      "gamemode=" + (gp.gamemode === true), "mangohud=" + (gp.mangohud === true),
@@ -818,6 +830,7 @@ ShellRoot {
                 win.gameStatus = c === 0 ? "DONE ✓" : (c === 3 ? "CLOSE STEAM FIRST" : "FAILED · " + c);
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
+                if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -836,6 +849,11 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { try { win.pdbStat = JSON.parse(text); } catch (e) { win.pdbStat = {}; } } }
         }
         Process { id: seenProc }
+        Process {
+            id: shaderProc
+            command: [win.scriptPath, "shadercache"]
+            stdout: StdioCollector { onStreamFinished: { try { win.shaders = JSON.parse(text); } catch (e) { win.shaders = {}; } } }
+        }
         Process {
             id: steamOpenProc
             command: ["setsid", "-f", "steam"]
@@ -1936,6 +1954,21 @@ ShellRoot {
                     }
                 }
 
+                // GPU driver in this update → shader caches will be rebuilt
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: win.driverUpdates.length > 0
+                    implicitHeight: drvText.implicitHeight + 16
+                    radius: 8; color: "#0c1520"; border.color: pal.sky; border.width: 1
+                    Text {
+                        id: drvText
+                        anchors.fill: parent; anchors.margins: 8; wrapMode: Text.WordWrap
+                        color: pal.sky; font.family: win.mono; font.pixelSize: 10
+                        text: "\uf108  This update changes the GPU driver (" + win.driverUpdates.map(function (u) { return u.name + " " + u.old + " → " + u.new; }).join(", ")
+                              + "). Every game's shader cache gets rebuilt: expect some stutter the first time you play each game. Old driver caches can be cleaned afterwards in GAMING → SHADERS."
+                    }
+                }
+
                 // Arch news published since the last full upgrade
                 Rectangle {
                     Layout.fillWidth: true
@@ -2450,6 +2483,7 @@ ShellRoot {
                     Layout.fillWidth: true; spacing: 8
                     Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
                     Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
+                    Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -2695,6 +2729,125 @@ ShellRoot {
                             on: win.gp.custom === true && !win.gameBusy
                             onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
                         }
+                    }
+                }
+
+
+                // ---- SHADERS ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "shaders"
+                    spacing: 8
+
+                    Hint {
+                        text: !win.shaders.drivers ? "" :
+                              "Drivers: " + win.shaders.drivers.map(function (d) { return d.name + " " + d.version; }).join(" · ")
+                              + (win.shaders.lastDriverUpdate ? "  ·  last driver update " + win.dateOfEpoch(win.shaders.lastDriverUpdate) : "")
+                    }
+                    // stale after a driver update / orphaned / Steam busy
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: (win.shaders.staleBytes || 0) > 0 || (win.shaders.orphanBytes || 0) > 0 || win.shaders.steamProcessing === true
+                        implicitHeight: shBanner.implicitHeight + 16
+                        radius: 8; color: "#1a150c"; border.color: pal.amber; border.width: 1
+                        RowLayout {
+                            id: shBanner
+                            anchors.fill: parent; anchors.margins: 8; spacing: 8
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.amber; font.family: win.mono; font.pixelSize: 10
+                                text: (win.shaders.steamProcessing ? "Steam is compiling shaders right now; cleaning waits until it finishes. " : "")
+                                      + ((win.shaders.staleBytes || 0) > 0 ? win.human(win.shaders.staleBytes) + " of driver caches weren't used since the last driver update: they are stale. " : "")
+                                      + ((win.shaders.orphanBytes || 0) > 0 ? win.human(win.shaders.orphanBytes) + " belong to games that are no longer installed." : "")
+                            }
+                            MiniBtn {
+                                visible: (win.shaders.staleBytes || 0) > 0
+                                width: 104; label: win.confirmShader === "stale" ? "CONFIRM?" : "CLEAN STALE"
+                                on: !win.gameBusy && !win.shaders.steamProcessing
+                                onClicked: win.shaderAction(["shaderclean", "stale"], "stale", "CLEANING…")
+                            }
+                            MiniBtn {
+                                visible: (win.shaders.orphanBytes || 0) > 0
+                                width: 112; label: win.confirmShader === "orphans" ? "CONFIRM?" : "CLEAN ORPHANS"
+                                on: !win.gameBusy && !win.shaders.steamProcessing
+                                onClicked: win.shaderAction(["shaderclean", "orphans"], "orphans", "CLEANING…")
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+                        EmptyHint {
+                            visible: !win.shaders.games || (win.shaders.games.length === 0 && win.shaders.global.length === 0)
+                            title: shaderProc.running ? "MEASURING CACHES…" : "NO SHADER CACHES"
+                        }
+                        ListView {
+                            id: shaderList
+                            anchors.fill: parent; anchors.margins: 4
+                            clip: true; spacing: 3
+                            model: (win.shaders.games || []).concat((win.shaders.global || []).map(function (g) {
+                                return { global: true, id: g.id, name: g.label, total: g.size, stale: g.stale, path: g.path, installed: true };
+                            }))
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: shaderList.width - 8; height: 50; radius: 8
+                                color: pal.card; border.color: modelData.stale ? pal.amber : pal.border; border.width: 1
+                                RowLayout {
+                                    anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 2
+                                        RowLayout {
+                                            spacing: 8
+                                            Text {
+                                                text: modelData.global ? "DRIVER" : (modelData.installed ? "STEAM" : "ORPHAN")
+                                                color: modelData.global ? pal.sky : (modelData.installed ? pal.accent : pal.bad)
+                                                font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
+                                            }
+                                            Text {
+                                                text: modelData.name || ("uninstalled app " + modelData.id)
+                                                color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true; elide: Text.ElideRight
+                                                Layout.maximumWidth: 330
+                                            }
+                                            Text { text: win.human(modelData.total); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
+                                            Text { visible: modelData.stale === true; text: "STALE"; color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.running === true; text: "RUNNING"; color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: modelData.global ? modelData.path
+                                                  : ["pipelines " + (win.human(modelData.pipelines) || "0"),
+                                                     "driver " + (win.human(modelData.driver) || "0"),
+                                                     modelData.video > 0 ? "videos " + win.human(modelData.video) : "",
+                                                     modelData.dxvk > 0 ? "dxvk " + win.human(modelData.dxvk) : "",
+                                                     modelData.other > 0 ? "other " + win.human(modelData.other) : ""]
+                                                    .filter(function (x) { return x !== ""; }).join("  ·  ")
+                                        }
+                                    }
+                                    MiniBtn {
+                                        visible: !modelData.global && modelData.driver > 0
+                                        width: 92; primary: false
+                                        property string key: "steam:" + modelData.id + ":driver"
+                                        label: win.confirmShader === key ? "CONFIRM?" : "DRIVER CACHE"
+                                        on: !win.gameBusy && !modelData.running && !win.shaders.steamProcessing
+                                        onClicked: win.shaderAction(["shaderclean", "steam:" + modelData.id, "driver"], key, "CLEANING…")
+                                    }
+                                    MiniBtn {
+                                        width: 70; tint: pal.bad
+                                        property string key: (modelData.global ? "global:" + modelData.id : "steam:" + modelData.id + ":all")
+                                        label: win.confirmShader === key ? "CONFIRM?" : (modelData.global ? "CLEAN" : "ALL")
+                                        on: !win.gameBusy && !modelData.running && (modelData.global || !win.shaders.steamProcessing)
+                                        onClicked: win.shaderAction(modelData.global ? ["shaderclean", "global:" + modelData.id]
+                                                                                     : ["shaderclean", "steam:" + modelData.id, "all"], key, "CLEANING…")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Hint {
+                        text: "pipelines = Steam's Fossilize recordings (driver-independent, used to pre-compile) · driver = the GPU driver's compiled cache (NVIDIA nvidiav1 / Mesa for AMD-Intel), rebuilt after every driver update. DRIVER CACHE clears only that; ALL clears the game's whole folder. Either way the next launches stutter a little while caches rebuild."
                     }
                 }
 

@@ -37,6 +37,7 @@ case "$*" in
     *"--jsonout list"*) [[ -n "${FAKE_SNAPLIST:-}" ]] && cat "$FAKE_SNAPLIST" ;;
 esac'
 stub gtk-update-icon-cache 'exit 0'
+stub pgrep '[[ -n "${FAKE_FOSSILIZE:-}" && "$*" == *fossilize* ]] && exit 0; exit 1'
 stub xdg-open 'exit 0'
 stub checkupdates 'printf "%s" "${FAKE_UPDATES:-}"'
 stub ldconfig '[[ "${FAKE_FUSE2:-1}" == 1 ]] && echo "	libfuse.so.2 (libc6,x86-64) => /usr/lib/libfuse.so.2"; exit 0'
@@ -698,6 +699,41 @@ eq "a game installed later is flagged new" "$("$CD" games | jq -r '.[] | select(
 "$CD" gseen steam:300
 eq "opening it clears the flag" "$("$CD" games | jq -r '.[] | select(.id == "300") | .new')" false
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
+
+section "Gaming: shader caches"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_PACMAN_LOG="$T/pacman-drv.log"
+SCD="$ST/steamapps/shadercache"
+mkdir -p "$SCD/100/fozpipelinesv6" "$SCD/100/nvidiav1/GLCache" "$SCD/200/nvidiav1/GLCache" "$SCD/999/fozpipelinesv6" "$HOME/.cache/nvidia/GLCache"
+head -c 3000 /dev/zero > "$SCD/100/fozpipelinesv6/steam_pipeline_cache.foz"
+head -c 2000 /dev/zero > "$SCD/100/nvidiav1/GLCache/old.bin"
+head -c 1000 /dev/zero > "$SCD/200/nvidiav1/GLCache/fresh.bin"
+head -c 500  /dev/zero > "$SCD/999/fozpipelinesv6/x.foz"
+head -c 700  /dev/zero > "$HOME/.cache/nvidia/GLCache/g.bin"
+touch -d '2026-01-01' "$SCD/100/nvidiav1/GLCache/old.bin" "$HOME/.cache/nvidia/GLCache/g.bin"
+touch -d '2026-06-01' "$SCD/200/nvidiav1/GLCache/fresh.bin"
+echo '[2026-03-10T10:00:00+0100] [ALPM] upgraded nvidia-utils (600.1-1 -> 610.2-1)' > "$T/pacman-drv.log"
+echo '[2026-03-11T10:00:00+0100] [ALPM] upgraded firefox (1-1 -> 2-1)' >> "$T/pacman-drv.log"
+SC="$("$CD" shadercache)"
+eq "last driver update read from pacman.log (other packages ignored)" "$(jq -r '.lastDriverUpdate | strftime("%Y-%m-%d")' <<<"$SC")" 2026-03-10
+eq "parts split: pipelines / driver" "$(jq -r '.games[] | select(.id == "100") | "\(.pipelines)/\(.driver)"' <<<"$SC")" "3000/2000"
+eq "driver cache untouched since the update → stale" "$(jq -r '.games[] | select(.id == "100") | .stale' <<<"$SC")" true
+eq "driver cache used since the update → not stale" "$(jq -r '.games[] | select(.id == "200") | .stale' <<<"$SC")" false
+eq "cache of an uninstalled game is an orphan" "$(jq -r '.games[] | select(.id == "999") | .installed' <<<"$SC")" false
+eq "global NVIDIA cache found and stale" "$(jq -r '.global[] | select(.id == "nvidia") | .stale' <<<"$SC")" true
+eq "stale bytes (game driver cache + global)" "$(jq -r .staleBytes <<<"$SC")" 2700
+FAKE_FOSSILIZE=1 "$CD" shaderclean orphans >/dev/null 2>&1; eq "refuses while Steam compiles shaders" "$?" 3
+PROC_ROOT="$T/proc" "$CD" shaderclean steam:100 driver >/dev/null 2>&1; eq "refuses while that game runs" "$?" 3
+"$CD" shaderclean steam:100 driver >/dev/null
+yes "driver part emptied, pipelines kept" "[[ -z \"\$(ls -A '$SCD/100/nvidiav1')\" && -f '$SCD/100/fozpipelinesv6/steam_pipeline_cache.foz' ]]"
+"$CD" shaderclean orphans >/dev/null
+yes "orphan cache removed" "[[ ! -e '$SCD/999' ]]"
+"$CD" shaderclean stale >/dev/null
+yes "stale global cache emptied, folder kept" "[[ -d '$HOME/.cache/nvidia/GLCache' && -z \"\$(ls -A '$HOME/.cache/nvidia/GLCache')\" ]]"
+yes "fresh driver cache kept" "[[ -f '$SCD/200/nvidiav1/GLCache/fresh.bin' ]]"
+"$CD" shaderclean steam:200 all >/dev/null
+yes "all: every part of that game gone" "[[ -d '$SCD/200' && -z \"\$(ls -A '$SCD/200')\" ]]"
+"$CD" shaderclean 'steam:../x' >/dev/null 2>&1; eq "bad target refused" "$?" 2
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_PACMAN_LOG
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

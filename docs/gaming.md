@@ -71,6 +71,35 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - Tools: gamemode (recommended), mangohud (optional), gamescope (optional).
 - CLI: `games`, `gstatus`, `gprofile get|set|reset`, `run`, `steamwrap`, `gamejoin`.
 
+### 2.2 Shader-cache assistant — `GAMING → SHADERS`
+- Per game, Steam's `steamapps/shadercache/<appid>/` (every library) split
+  into **pipelines** (`fozpipelinesv6`, Fossilize recordings — driver-
+  independent, what Steam pre-compiles from), **driver** (`nvidiav1` on NVIDIA,
+  `mesa_shader_cache*` on AMD/Intel — the compiled cache, tied to the driver
+  version), **dxvk** (`DXVK_state_cache`, empty with DXVK ≥ 2.0), **videos**
+  (`transcoded_video.foz`, `fozmediav1`) and other. Global driver caches:
+  `~/.cache/nvidia/GLCache` (+ legacy `~/.nv/GLCache`), `~/.cache/mesa_shader_cache`
+  and `mesa_shader_cache_db`.
+- **Driver updates**: the last install/upgrade of a driver package
+  (`nvidia*-utils`, `nvidia-open-dkms`, `mesa`, `vulkan-radeon|intel|nouveau`,
+  `amdvlk`, lib32 included) is read from `pacman.log`. A driver cache with no
+  file written after it is **stale** (the game hasn't been played since, so
+  it's all old-driver data). Before updating, the UPDATES tab warns when the
+  pending update changes the GPU driver.
+- Caches of games no longer installed are **orphans**.
+- Cleaning (always a second click to confirm): a game's driver cache only,
+  the whole game folder, all stale caches, all orphans, or a global driver
+  cache. Folders are emptied, not removed, where Steam/the driver expect them.
+  Refused while Steam is compiling shaders (`fossilize_replay`) or while the
+  game (for global caches: any game) is running.
+- Pre-warming: Steam already does it from the Fossilize recordings (Settings →
+  Downloads → Shader Pre-Caching); the deck shows when it's running. The
+  setting itself isn't stored in any Steam file the deck could verify, so it's
+  not read or changed.
+- **AMD/Intel**: Mesa paths follow Mesa's defaults and the folder names Steam
+  uses; verified here only on NVIDIA.
+- CLI: `shadercache`, `shaderclean steam:<appid> [driver|all] | orphans | stale | global:<id>`.
+
 ### 2.5 Compatibility manager (Steam + ProtonDB)
 - ProtonDB **summary** per game: tier, score, report count, trending tier,
   confidence. Only the public summary endpoint is used
@@ -142,7 +171,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.2 shader-cache assistant · 2.3 A/B benchmark · 2.4 GPU tuner (plan: LACT
+2.3 A/B benchmark · 2.4 GPU tuner (plan: LACT
 backend, which supports NVIDIA and AMD) · 2.6 prefixes · 2.7 save backups ·
 2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space

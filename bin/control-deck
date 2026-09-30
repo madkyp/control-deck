@@ -3195,6 +3195,162 @@ cmd_gsuggest() {
            suggestions:.[:16]}'
 }
 
+# --- shader caches -----------------------------------------------------------------
+# Per game, Steam keeps steamapps/shadercache/<appid>/ with:
+#   fozpipelinesv6/   Fossilize recordings of the game's pipelines — driver-independent,
+#                     Steam compiles them ahead of time ("shader pre-caching")
+#   nvidiav1/, mesa_shader_cache*/  the driver's compiled cache — tied to the driver
+#                     version, useless after a driver update until rebuilt
+#   DXVK_state_cache/  (DXVK < 2.0), transcoded_video.foz / fozmediav1/ (videos, not shaders)
+# Globally the drivers keep ~/.cache/nvidia/GLCache and ~/.cache/mesa_shader_cache*.
+DRIVER_PKG_RE='^(lib32-)?(nvidia(-[0-9]+xx)?-utils|nvidia-open-dkms|mesa|vulkan-(radeon|intel|nouveau)|amdvlk)$'
+
+driver_pkgs() { pacman -Q 2>/dev/null | awk -v re="$DRIVER_PKG_RE" '$1 ~ re'; }
+
+# last time pacman installed/upgraded a driver package (epoch, 0 if never logged)
+last_driver_update() {
+    local l
+    l="$(grep -E '\[ALPM\] (upgraded|installed|downgraded|reinstalled) ' "$PACMAN_LOG" 2>/dev/null \
+         | awk -v re="$DRIVER_PKG_RE" '{ if ($4 ~ re) last = $0 } END { print last }')"
+    l="${l#\[}"; l="${l%%\]*}"
+    [[ -n "$l" ]] && date -d "$l" +%s 2>/dev/null || echo 0
+}
+
+# which part of a shadercache entry is what
+shader_part() {
+    case "$1" in
+        fozpipelines*) echo pipelines ;;
+        nvidiav1|mesa_shader_cache*|radv*) echo driver ;;
+        DXVK_state_cache*|*.dxvk-cache) echo dxvk ;;
+        fozmedia*|transcoded_video*) echo video ;;
+        *) echo other ;;
+    esac
+}
+
+# a driver cache is stale when nothing in it was written after the last driver update
+cache_stale() {   # dir since
+    [[ -d "$1" && "$2" -gt 0 ]] || return 1
+    [[ -z "$(find "$1" -type f -newermt "@$2" -print -quit 2>/dev/null)" ]] \
+        && [[ -n "$(find "$1" -type f -print -quit 2>/dev/null)" ]]
+}
+
+# Steam compiling shaders in the background (the process name is truncated to 15 chars)
+steam_processing_shaders() { pgrep -x fossilize_repla >/dev/null 2>&1; }
+
+global_shader_caches() {   # id<TAB>label<TAB>path
+    printf '%s\t%s\t%s\n' nvidia "NVIDIA driver (OpenGL/Vulkan)" "$CACHE_HOME/nvidia/GLCache" \
+        nvidia-legacy "NVIDIA driver (old location)" "$HOME/.nv/GLCache" \
+        mesa "Mesa (AMD/Intel)" "$CACHE_HOME/mesa_shader_cache" \
+        mesa-db "Mesa single-file cache" "$CACHE_HOME/mesa_shader_cache_db"
+}
+
+cmd_shadercache() {
+    local since lib d id name part f bytes installed running
+    since="$(last_driver_update)"
+    running="$(running_games | cut -f1)"
+    local games; games="$(steam_games | awk 'NR % 5 == 1 { id = $0 } NR % 5 == 2 { print id "\t" $0 }')"
+    {
+        while IFS= read -r lib; do
+            for d in "$lib"/steamapps/shadercache/*/; do
+                d="${d%/}"; id="${d##*/}"; [[ "$id" =~ ^[0-9]+$ ]] || continue
+                name="$(awk -F'\t' -v i="$id" '$1 == i { print $2; exit }' <<<"$games")"
+                installed=0; [[ -n "$name" ]] && installed=1
+                [[ -z "$name" ]] && name="$(vdf_get "$lib/steamapps/appmanifest_$id.acf" AppState name 2>/dev/null)"
+                local p_pipe=0 p_drv=0 p_dxvk=0 p_vid=0 p_oth=0 st=0
+                for f in "$d"/* "$d"/.[!.]*; do
+                    [[ -e "$f" ]] || continue
+                    bytes="$(dir_bytes "$f")"; part="$(shader_part "${f##*/}")"
+                    case "$part" in
+                        pipelines) p_pipe=$(( p_pipe + bytes )) ;;
+                        driver) p_drv=$(( p_drv + bytes )); cache_stale "$f" "$since" && st=1 ;;
+                        dxvk) p_dxvk=$(( p_dxvk + bytes )) ;;
+                        video) p_vid=$(( p_vid + bytes )) ;;
+                        *) p_oth=$(( p_oth + bytes )) ;;
+                    esac
+                done
+                printf 'game\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "${name:-}" "$installed" "$d" \
+                    "$p_pipe" "$p_drv" "$p_dxvk" "$p_vid" "$p_oth" "$st" \
+                    "$(grep -qx "$id" <<<"$running" && echo 1 || echo 0)"
+            done
+        done < <(steam_libs)
+        local gid label path
+        while IFS=$'\t' read -r gid label path; do
+            [[ -d "$path" ]] || continue
+            st=0; cache_stale "$path" "$since" && st=1
+            printf 'global\t%s\t%s\t%s\t%s\t%s\n' "$gid" "$label" "$path" "$(dir_bytes "$path")" "$st"
+        done < <(global_shader_caches)
+    } | jq -Rn --argjson since "$since" --arg drivers "$(driver_pkgs)" \
+          --argjson busy "$(steam_processing_shaders && echo true || echo false)" '
+        [inputs | split("\t")] as $rows
+        | {lastDriverUpdate:$since, drivers:($drivers | split("\n") | map(select(. != "") | split(" ") | {name:.[0], version:.[1]})),
+           steamProcessing:$busy,
+           games:[$rows[] | select(.[0] == "game") |
+                  {id:.[1], name:.[2], installed:(.[3] == "1"), path:.[4],
+                   pipelines:(.[5]|tonumber), driver:(.[6]|tonumber), dxvk:(.[7]|tonumber), video:(.[8]|tonumber),
+                   other:(.[9]|tonumber), stale:(.[10] == "1"), running:(.[11] == "1")}
+                  | .total = (.pipelines + .driver + .dxvk + .video + .other)] | sort_by(-.total),
+           global:[$rows[] | select(.[0] == "global") | {id:.[1], label:.[2], path:.[3], size:(.[4]|tonumber), stale:(.[5] == "1")}]}
+        | .staleBytes = ([.games[] | select(.stale) | .driver] + [.global[] | select(.stale) | .size] | add // 0)
+        | .orphanBytes = ([.games[] | select(.installed | not) | .total] | add // 0)'
+}
+
+# empty a directory (keep it: Steam/driver expect it) and report
+empty_dir() {
+    local d="$1" b; [[ -d "$d" ]] || return 0
+    b="$(dir_bytes "$d")"
+    find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && echo "$b"
+}
+
+# shaderclean steam:<appid> [driver|all] | orphans | stale | global:<id>
+cmd_shaderclean() {
+    local target="$1" part="${2:-driver}" info freed=0 b d id gid f
+    info="$(cmd_shadercache)"
+    if [[ "$target" != global:* ]] && steam_processing_shaders; then
+        err "Steam is processing shaders right now (fossilize_replay): try again when it finishes"; return 3
+    fi
+    case "$target" in
+        steam:*)
+            id="${target#steam:}"; [[ "$id" =~ ^[0-9]+$ ]] || { err "bad app id"; return 2; }
+            d="$(jq -r --arg i "$id" '.games[] | select(.id == $i) | .path' <<<"$info")"
+            [[ -n "$d" ]] || { err "no shader cache for $id"; return 4; }
+            [[ "$(jq -r --arg i "$id" '.games[] | select(.id == $i) | .running' <<<"$info")" == true ]] \
+                && { err "the game is running: close it first"; return 3; }
+            case "$part" in
+                driver) for f in "$d"/*; do
+                            [[ "$(shader_part "${f##*/}")" == driver ]] || continue
+                            b="$(empty_dir "$f")"; freed=$(( freed + ${b:-0} ))
+                        done ;;
+                all)    b="$(dir_bytes "$d")"; find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; freed=${b:-0} ;;
+                *) err "part must be driver or all"; return 2 ;;
+            esac ;;
+        orphans)
+            while IFS= read -r d; do
+                [[ -n "$d" ]] || continue
+                b="$(dir_bytes "$d")"; rm -rf -- "$d" && freed=$(( freed + b )) && log "→ removed ${d##*/}"
+            done < <(jq -r '.games[] | select(.installed | not) | .path' <<<"$info") ;;
+        stale)
+            [[ -n "$(running_games)" ]] && { err "a game is running: close it first"; return 3; }
+            while IFS= read -r d; do
+                for f in "$d"/*; do
+                    [[ "$(shader_part "${f##*/}")" == driver ]] || continue
+                    b="$(empty_dir "$f")"; freed=$(( freed + ${b:-0} ))
+                done
+            done < <(jq -r '.games[] | select(.stale) | .path' <<<"$info")
+            while IFS= read -r d; do
+                b="$(empty_dir "$d")"; freed=$(( freed + ${b:-0} ))
+            done < <(jq -r '.global[] | select(.stale) | .path' <<<"$info") ;;
+        global:*)
+            gid="${target#global:}"
+            d="$(jq -r --arg g "$gid" '.global[] | select(.id == $g) | .path' <<<"$info")"
+            [[ -n "$d" ]] || { err "no such cache: $gid"; return 2; }
+            [[ -n "$(running_games)" ]] && { err "a game is running: close it first"; return 3; }
+            b="$(empty_dir "$d")"; freed=${b:-0} ;;
+        *) err "use: shaderclean steam:<appid> [driver|all] | orphans | stale | global:<id>"; return 2 ;;
+    esac
+    log "✔ Freed $(human "$freed"). The first launches rebuild what's needed (some stutter is expected)."
+    history_add "shader cache clean" gaming "$target${2:+ $2}" 0
+}
+
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
@@ -3259,6 +3415,8 @@ Gaming
   pdbindex update [--force]|status   Index ProtonDB's open data (all games' launch options)
   gsuggest <appid>              Launch options players use for a game, with shares (JSON)
   gtips <appid…> / gseen <key>  Suggestion counts per game · mark a new game as seen
+  shadercache                   Shader caches per game + driver caches, stale/orphan detection (JSON)
+  shaderclean <target> [part]   steam:<appid> [driver|all] · orphans · stale · global:<id>
 EOF
 }
 
@@ -3344,6 +3502,8 @@ main() {
         gsuggest)    cmd_gsuggest "$1" ;;
         gtips)       cmd_gtips "$@" ;;
         gseen)       cmd_gseen "$1" ;;
+        shadercache) cmd_shadercache ;;
+        shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;
         *) err "unknown command: $sub"; exit 2 ;;
