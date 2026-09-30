@@ -11,6 +11,11 @@ ShellRoot {
         implicitWidth: 660
         implicitHeight: 760
         color: pal.bg
+        // closing the window ends the process: a windowless instance would
+        // reopen its window on every reload (each install/update of shell.qml).
+        // A reload also closes the old window, but destroys this timer with it.
+        onClosed: quitTimer.start()
+        Timer { id: quitTimer; interval: 1500; onTriggered: Qt.quit() }
 
         // ---- palette (CONTROL DECK) -------------------------------------
         QtObject {
