@@ -405,6 +405,43 @@ Studied from the community's reference script
 - Not verified yet: an actual in-game run (needs the game launched through the
   wrapper), AMD, and 32-bit/D3D9/OpenGL titles (none installed here).
 
+
+#### My library: presets and settings for every game (FX → MY LIBRARY)
+- **SCAN** checks every installed Steam game:
+  - **SweetFX Settings DB:** the game's page is matched by exact title (after
+    normalising case, symbols, ™/®). From its preset table (preset, added, by,
+    screenshots, downloads, shader) the **most downloaded "ReShade"** preset
+    is taken; old "SweetFX" presets are ignored.
+  - **PCGamingWiki's ReShade page:** reshade.me's Compatibility page embeds
+    it. It's read through the MediaWiki API (`action=parse`, sections "Online
+    games to avoid" and "Compatibility list", 875 rows) and gives render API,
+    status and notes. Depth notes become ReShade's own definitions from
+    `ReShade.fxh`: "reversed" → `RESHADE_DEPTH_INPUT_IS_REVERSED=1`,
+    "upside down/flipped" → `…_IS_UPSIDE_DOWN=1`, "logarithmic" →
+    `…_IS_LOGARITHMIC=1`. Content is CC BY-NC-SA, and every row links back.
+  - **Online risk:** the same data as a single game's warning.
+  Everything is cached (search/wiki 7 days, game pages 1 day); `scan.json`
+  feeds LIBRARY too.
+- **SET UP / SET UP ALL** (`fx autoinstall`), for each game:
+  1. ReShade is installed in its folder (exe/API detected as above).
+  2. The best preset is applied; with none, SHARPEN + AA.
+  3. The depth definitions are added to `[GENERAL] PreprocessorDefinitions`
+     (comma list, per ReShade's `ini_file.cpp`), merged with the ones already
+     there.
+  4. The game is wrapped (USE IN STEAM) when Steam is closed.
+  **Never touched:** games with anti-cheat (AreWeAntiCheatYet / VAC) and games
+  on PCGW's "Online games to avoid". Optional online co-op doesn't exclude a
+  game; it just gets an amber note.
+- Nexus Mods has many presets for new games, but it answers 403 to scripted
+  requests and its API needs a personal key (and premium for direct
+  downloads), so each row only offers a web search
+  (`site:nexusmods.com <game> reshade preset`).
+- **LIBRARY** shows `FX <n>` on games with presets that aren't set up yet
+  (from the last scan), so a newly installed game shows up there after SCAN.
+- Here: none of the 3 installed games has presets on SweetFX DB or a PCGW
+  row. BALL x PIT and Rogue Trader (co-op → amber) are eligible, and Deadlock
+  (VAC) is excluded.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

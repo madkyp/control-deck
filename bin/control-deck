@@ -3908,6 +3908,7 @@ Gaming
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
   fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id> | key <Home|Insert|F10|F11|F12>
+  fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
   health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
@@ -4370,9 +4371,7 @@ cmd_fx_presets() {
     [[ "$g" =~ ^[0-9]+$ ]] || { err "use: fx presets <sfx game id>"; return 2; }
     html="$(fx_cached "sfx-game-$g.html" 86400 "$SFX_URL/games/game/$g/")"
     [[ -n "$html" ]] || { err "couldn't load the game's presets"; return 4; }
-    grep -oE 'href="/games/preset/[0-9]+/"[^>]*>[^<]+' <<<"$html" \
-        | sed -E 's|href="/games/preset/([0-9]+)/"[^>]*>|\1\t|' \
-        | jq -Rsc '[split("\n")[] | select(. != "") | split("\t") | {id:.[0], name:(.[1] | gsub("&amp;"; "&") | gsub("&#39;"; "\u0027") | gsub("&quot;"; "\""))}] | unique_by(.id) | sort_by(-(.id | tonumber))'
+    fx_sfx_rows <<<"$html" | jq -c 'unique_by(.id) | sort_by(-(.id | tonumber))'
 }
 
 # turn a ReShade preset (.ini text) into a vkBasalt config; missing effect files
@@ -4837,6 +4836,148 @@ reshade_builtin() {   # name out.ini
     printf 'Techniques=%s\nTechniqueSorting=%s\n' "$t" "$t" > "$2"
 }
 
+# --- library scan: best preset + known ReShade settings for every game ----------
+# Sources: SweetFX Settings DB (presets, with download counts) and the ReShade
+# compatibility list that reshade.me points to — PCGamingWiki's "ReShade" page
+# (MediaWiki API; CC BY-NC-SA): render API, status and notes per game, plus
+# "Online games to avoid" (bans/blocks). Notes about the depth buffer are turned
+# into ReShade's own preprocessor definitions (see ReShade.fxh).
+PCGW_API="${CONTROL_DECK_PCGW_API:-https://www.pcgamingwiki.com/w/api.php}"
+
+fx_norm() { tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[™®©]//g; s/[^a-z0-9]+//g'; }
+
+# PCGW sections → JSON [{names:[…], api, status, notes, avoid}]
+fx_pcgw() {
+    local sec out
+    for sec in 15 16; do
+        fx_cached "pcgw-$sec.json" 604800 "$PCGW_API?action=parse&page=ReShade&prop=wikitext&section=$sec&format=json" \
+            | jq -r '.parse.wikitext["*"] // empty' 2>/dev/null \
+            | awk -v avoid="$([[ $sec == 15 ]] && echo 1 || echo 0)" '/^\| *\[\[/ { print avoid "\t" $0 }'
+    done | jq -Rsc '
+        def clean: gsub("\\{\\{Code\\|(?<c>[^}]*)\\}\\}"; "\(.c)") | gsub("\\{\\{[^}]*\\}\\}"; "")
+                   | gsub("\\[\\[(?:[^]|]*\\|)?(?<t>[^]]*)\\]\\]"; "\(.t)") | gsub("<[^>]*>"; " ")
+                   | gsub("\\[https?://[^ \\]]+ ?(?<t>[^]]*)\\]"; "\(.t)")
+                   | gsub("\u0027\u0027+"; "") | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ");
+        [split("\n")[] | select(. != "") | split("\t") | .[0] as $av | .[1] | ltrimstr("|") | split("||")
+         | select(length >= 3)
+         | {names:([.[0] | scan("\\[\\[([^]|]+)") | .[0] | ltrimstr(" ") | rtrimstr(" ")]),
+            api:(.[1] | clean), status:(.[2] | clean), notes:((.[3] // "") | clean), avoid:($av == "1")}]'
+}
+
+# depth notes → ReShade definitions
+fx_depth_defines() {
+    local n; n="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
+    [[ "$n" == *depth* ]] || return 0
+    [[ "$n" =~ revers ]] && echo "RESHADE_DEPTH_INPUT_IS_REVERSED=1"
+    [[ "$n" =~ upside|flipped|y.flip|vertically ]] && echo "RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN=1"
+    [[ "$n" =~ logarithm ]] && echo "RESHADE_DEPTH_INPUT_IS_LOGARITHMIC=1"
+    return 0
+}
+
+# SweetFX DB rows of a game page → [{id, name, added, downloads, shader}]
+fx_sfx_rows() {
+    tr -d '\r' | tr '\n' ' ' \
+        | grep -oE '<a href="/games/preset/[0-9]+/">[^<]*</a></td> *<td>[^<]*</td> *<td><a [^>]*>[^<]*</a> *</td> *<td>[0-9]+</td> *<td>[0-9]+</td> *<td><a href="/games/shader/[0-9]+/">[^<]+</a>' \
+        | sed -E 's|<a href="/games/preset/([0-9]+)/">([^<]*)</a></td> *<td>([^<]*)</td> *<td><a [^>]*>[^<]*</a> *</td> *<td>[0-9]+</td> *<td>([0-9]+)</td> *<td><a href="/games/shader/[0-9]+/">([^<]+)</a>|\1\t\2\t\3\t\4\t\5|' \
+        | jq -Rsc '[split("\n")[] | select(. != "") | split("\t")
+                    | {id:.[0], name:(.[1] | gsub("&amp;"; "&") | gsub("&#39;"; "\u0027") | gsub("&quot;"; "\"")),
+                       added:.[2], downloads:(.[3] | tonumber), shader:.[4]}]'
+}
+
+# the SweetFX DB game whose title matches a name exactly (normalized)
+fx_sfx_game() {
+    local name="$1" q res
+    q="$(jq -rn --arg q "$name" '$q | @uri')"
+    res="$(fx_cached "sfx-search-$(fx_norm "$name").json" 604800 "$SFX_URL/games/game/search/?query=$q")"
+    jq -c --arg n "$(fx_norm "$name")" '
+        def norm: ascii_downcase | gsub("[™®©]"; "") | gsub("[^a-z0-9]+"; "");
+        [.Games[]? | select((.title | norm) == $n) | {title, id:(.url | capture("/games/game/(?<i>[0-9]+)/").i)}] | first // empty' <<<"$res" 2>/dev/null
+}
+
+# fx scan → every installed Steam game with its best preset, compatibility,
+# online risk and current look; also saved for LIBRARY/new-game hints
+cmd_fx_scan() {
+    local pcgw id name g sfx rows online cur d out=()
+    pcgw="$(fx_pcgw)"; [[ -n "$pcgw" ]] || pcgw="[]"
+    while IFS= read -r id && IFS= read -r name && IFS= read -r _ && IFS= read -r _ && IFS= read -r _; do
+        sfx="null"; g="$(fx_sfx_game "$name")"
+        if [[ -n "$g" ]]; then
+            rows="$(fx_cached "sfx-game-$(jq -r .id <<<"$g").html" 86400 "$SFX_URL/games/game/$(jq -r .id <<<"$g")/" | fx_sfx_rows)"
+            sfx="$(jq -c --argjson r "${rows:-[]}" '. + {count:($r | map(select(.shader == "ReShade")) | length),
+                    best:($r | map(select(.shader == "ReShade")) | sort_by(-.downloads) | first // null)}' <<<"$g")"
+        fi
+        online="$(fx_online "$id")"
+        d="$(fx_key_dir "steam:$id")"; cur="null"; [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
+        out+=("$(jq -nc --arg id "$id" --arg name "$name" --argjson sfx "$sfx" --argjson online "${online:-null}" \
+                 --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" '
+            def norm: ascii_downcase | gsub("[™®©]"; "") | gsub("[^a-z0-9]+"; "");
+            ([$pcgw[] | select(any(.names[]; norm == $n))] | first // null) as $pc
+            | {key:("steam:" + $id), id:$id, name:$name, sfx:$sfx, pcgw:$pc, online:$online, current:$cur,
+               nexus:("https://duckduckgo.com/?q=" + ("site:nexusmods.com \($name) reshade preset" | @uri))}
+            | .blocked = (($pc // {}).avoid == true)
+            | .eligible = ((.blocked | not) and ((.online // {}).level // "none") != "anticheat")')")
+    done < <(steam_games)
+    mkdir -p "$FX_CACHE"
+    printf '%s\n' "${out[@]}" | jq -sc '
+        map(. + {defines:[]}) ' > "$FX_CACHE/scan.json.tmp"
+    # depth definitions from the notes (bash regexes)
+    local i n tmp="[]" line
+    n="$(jq length "$FX_CACHE/scan.json.tmp")"
+    for ((i = 0; i < n; i++)); do
+        line="$(jq -c ".[$i]" "$FX_CACHE/scan.json.tmp")"
+        line="$(jq -c --argjson d "$(fx_depth_defines "$(jq -r '.pcgw.notes // ""' <<<"$line")" | jq -Rsc 'split("\n") | map(select(. != ""))')" '.defines = $d' <<<"$line")"
+        tmp="$(jq -c --argjson l "$line" '. + [$l]' <<<"$tmp")"
+    done
+    jq -c 'sort_by(.name | ascii_downcase)' <<<"$tmp" > "$FX_CACHE/scan.json"; rm -f "$FX_CACHE/scan.json.tmp"
+    cat "$FX_CACHE/scan.json"
+}
+
+# add ReShade preprocessor definitions to a game's ReShade.ini (keeps others)
+reshade_defines() {   # key def…
+    local st ini cur
+    st="$(reshade_state "$1")"; [[ -n "$st" ]] || return 0; shift
+    (($#)) || return 0
+    ini="$(jq -r .dir <<<"$st")/ReShade.ini"; [[ -f "$ini" ]] || return 0
+    cur="$(awk -F= '/^\[GENERAL\]/ { g = 1; next } /^\[/ { g = 0 } g && $1 == "PreprocessorDefinitions" { sub(/^[^=]*=/, ""); print }' "$ini" | tr -d '\r')"
+    local all d; all="$cur"
+    for d in "$@"; do
+        [[ ",$all," == *",${d%%=*}="* ]] && continue
+        all="${all:+$all,}$d"
+    done
+    ini_set "$ini" GENERAL PreprocessorDefinitions "$all"
+}
+
+# fx autoinstall [key…] — ReShade + the best preset (a quick look when there's
+# none) for every eligible game, or just the ones given; anti-cheat games and
+# PCGW "avoid" ones are never touched (optional co-op is fine)
+cmd_fx_autoinstall() {
+    local scan keys=() k row name ok=0 skip=0 fail=0
+    scan="$( [[ -s "$FX_CACHE/scan.json" ]] && cat "$FX_CACHE/scan.json" || cmd_fx_scan )"
+    if (($#)); then keys=("$@"); else mapfile -t keys < <(jq -r '.[] | select(.eligible) | .key' <<<"$scan"); fi
+    ((${#keys[@]})) || { log "Nothing to set up: no single-player game without shaders found."; return 0; }
+    [[ -n "$(reshade_version)" && -f "$RESHADE_BIN/d3dcompiler_47.dll.64" ]] || { cmd_reshade_install || return 4; }
+    for k in "${keys[@]}"; do
+        row="$(jq -c --arg k "$k" '.[] | select(.key == $k)' <<<"$scan")"
+        [[ -n "$row" ]] || { err "$k: not in the scan"; fail=$((fail + 1)); continue; }
+        name="$(jq -r .name <<<"$row")"
+        if [[ "$(jq -r .eligible <<<"$row")" != true ]]; then
+            log "✗ $name: skipped ($(jq -r 'if .blocked then "ReShade is banned/blocked there (PCGamingWiki)" else "online game with anti-cheat" end' <<<"$row"))"
+            skip=$((skip + 1)); continue
+        fi
+        log "── $name"
+        if ! cmd_reshade_on "$k" >/dev/null 2>"$FX_CACHE/auto.err"; then
+            log "  ✗ ReShade: $(sed 's/^ERROR: //' "$FX_CACHE/auto.err" | head -1)"; fail=$((fail + 1)); continue
+        fi
+        local look; look="$(jq -r 'if .sfx.best then "sfx:\(.sfx.best.id)" else "builtin:sharpen-aa" end' <<<"$row")"
+        cmd_fx_set "$k" "$look" 2>&1 | sed 's/^/  /'
+        if [[ "${PIPESTATUS[0]}" == 0 ]]; then ok=$((ok + 1)); else fail=$((fail + 1)); fi
+        local defs=(); mapfile -t defs < <(jq -r '.defines[]' <<<"$row")
+        ((${#defs[@]})) && reshade_defines "$k" "${defs[@]}" && log "  depth: ${defs[*]}"
+    done
+    log "✔ $ok set up · $skip skipped · $fail failed"
+    ((fail == 0))
+}
+
 cmd_fx() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -4850,12 +4991,16 @@ cmd_fx() {
         mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
         exes)     cmd_fx_exes "${1:-}" ;;
         key)      cmd_fx_key "${1:-}" ;;
+        scan)     if [[ "${1:-}" == --cached ]]; then
+                      if [[ -s "$FX_CACHE/scan.json" ]]; then cat "$FX_CACHE/scan.json"; else echo '[]'; fi
+                  else cmd_fx_scan; fi ;;
+        autoinstall) cmd_fx_autoinstall "$@" ;;
         reshade)  case "${1:-}" in
                       install) cmd_reshade_install ;;
                       off)     cmd_reshade_off "${2:-}" ;;
                       *) err "use: fx reshade install | off <key>"; return 2 ;;
                   esac ;;
-        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | key <name> | reshade install|off"; return 2 ;;
+        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | key <name> | scan | autoinstall [key…] | reshade install|off"; return 2 ;;
     esac
 }
 

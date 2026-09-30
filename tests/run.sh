@@ -1036,7 +1036,8 @@ EffectFiles=Vibrance.fx,Multi.fx,DOF.fx
 DenyEffectFiles=Template.fx
 EOF
 echo '{"Games": [{"title": "Test Game", "url": "/games/game/7/"}]}' > "$FXS/sfx/games/game/search/q_Test_Game.json"
-echo '<a href="/games/preset/499/">Old one</a> <a href="/games/preset/501/">Nice &amp; sharp</a>' > "$FXS/sfx/games/game/7/index.html"
+sfxrow() { printf '<tr>\n<td><a href="/games/preset/%s/">%s</a></td>\n\n<td>Jan. 1, 2026</td>\n<td><a href="/users/u/x/">x</a>\n</td>\n<td>1</td>\n<td>%s</td>\n<td><a href="/games/shader/%s/">%s</a></td>\n</tr>\n' "$@"; }
+{ sfxrow 499 "Old one" 900 5 SweetFX; sfxrow 501 "Nice &amp; sharp" 40 21 ReShade; sfxrow 502 "Popular" 300 21 ReShade; } > "$FXS/sfx/games/game/7/index.html"
 printf -- '--> Nice preset\r\nTechniques=Vibrance@Vibrance.fx,Second@Multi.fx,DOF@DOF.fx,Missing@Missing.fx\r\n\r\n[Vibrance.fx]\r\nVibrance=0.300000\r\nVibranceRGBBalance=1.000000,0.900000,1.000000\r\n' > "$FXS/sfx/games/preset/501/download/index.html"
 cat > "$FXS/awacy.json" <<'EOF'
 [{"name":"Shooter","anticheats":["Easy Anti-Cheat"],"status":"Denied","storeIds":{"steam":"4000"}}]
@@ -1059,7 +1060,7 @@ yes "textures are flattened (one folder for vkBasalt)" "[[ -f '$FXD/Textures/lut
 yes "DenyEffectFiles removed" "[[ ! -e '$FXD/Shaders/Sub/Template.fx' ]]"
 eq "marked installed" "$("$CD" fx packages | jq '.[0].installed')" true
 eq "search on SweetFX DB" "$("$CD" fx search Test Game)" '[{"title":"Test Game","id":"7"}]'
-eq "presets of a game, newest first, entities decoded" "$("$CD" fx presets 7 | jq -c '[.[] | [.id, .name]]')" '[["501","Nice & sharp"],["499","Old one"]]'
+eq "presets of a game, newest first, entities decoded, downloads and type" "$("$CD" fx presets 7 | jq -c '[.[] | [.id, .name, .downloads, .shader]]')" '[["502","Popular",300,"ReShade"],["501","Nice & sharp",40,"ReShade"],["499","Old one",900,"SweetFX"]]'
 "$CD" fx set steam:4002 builtin:nope >/dev/null 2>&1; eq "unknown look refused" "$?" 2
 "$CD" fx set steam:4002 sfx:501 >/dev/null 2>&1
 FXC="$HOME/.local/share/control-deck/gaming/fx/steam_4002"
@@ -1168,6 +1169,38 @@ eq "profile off" "$("$CD" gprofile get steam:5000 | jq -c '[.fx]')" '[false]'
 "$CD" fx mode steam:5000 reshade /etc/passwd >/dev/null 2>&1; eq "only the game's own executables" "$?" 2
 unset CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 CONTROL_DECK_STEAM_ROOT \
       CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
+section "FX: my library (scan + set up)"
+PW="$T/pcgw"; mkdir -p "$PW"
+pcgw() { jq -nc --arg w "$2" '{parse:{wikitext:{"*":$w}}}' > "$PW/api.php?action=parse&page=ReShade&prop=wikitext&section=$1&format=json"; }
+pcgw 15 $'===Online games to avoid===\n{|\n|-\n| [[Second Game]] || Direct3D 10+ || <span style="color: #ff0000; font-weight: bold">Banned</span> || EAC bans.\n|}'
+pcgw 16 $'===Compatibility list===\n{|\n|-\n| [[Story Game|Story Game™]] || Direct3D 10+ || <span style="color: #10ab00; font-weight: bold">Perfect</span> || Game uses a reversed depth buffer. See {{Code|Copy depth}} and [https://example.org the guide].\n|}'
+echo '{"Games": [{"title": "Story Game", "url": "/games/game/7/"}]}' > "$FXS/sfx/games/game/search/?query=Story%20Game"
+mkdir -p "$FXS/sfx/games/preset/502/download"
+printf -- '--> Popular preset\r\nTechniques=Vibrance@Vibrance.fx\r\n\r\n[Vibrance.fx]\r\nVibrance=0.200000\r\n' > "$FXS/sfx/games/preset/502/download/index.html"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_PCGW_API="file://$PW/api.php" \
+       CONTROL_DECK_RESHADE_URL="file://$RS/web" CONTROL_DECK_FF_D3DC_URL="file://$RS/ff" \
+       CONTROL_DECK_FF_D3DC_SHA64="$FFSHA" CONTROL_DECK_FF_D3DC_SHA32="$FFSHA" \
+       CONTROL_DECK_FX_PACKAGES_URL="file://$FXS/EffectPackages.ini" CONTROL_DECK_SFX_URL="file://$FXS/sfx" \
+       CONTROL_DECK_AWACY_URL="file://$FXS/awacy.json" CONTROL_DECK_STEAM_STORE_API="file://$FXS/store-4002.json#"
+SC="$("$CD" fx scan)"
+row() { jq -c --arg k "$1" '.[] | select(.key == $k)' <<<"$SC"; }
+eq "best ReShade preset by downloads (old SweetFX ones ignored)" "$(row steam:5000 | jq -c '[.sfx.count, .sfx.best.id]')" '[2,"502"]'
+eq "PCGamingWiki row matched (™ and link label ignored), notes cleaned" "$(row steam:5000 | jq -r '"\(.pcgw.status) | \(.pcgw.notes)"')" "Perfect | Game uses a reversed depth buffer. See Copy depth and the guide."
+eq "depth note → ReShade definition" "$(row steam:5000 | jq -c .defines)" '["RESHADE_DEPTH_INPUT_IS_REVERSED=1"]'
+eq "\"Online games to avoid\" → blocked, not eligible" "$(row steam:200 | jq -c '[.blocked, .eligible]')" '[true,false]'
+eq "single-player game eligible" "$(row steam:5000 | jq .eligible)" true
+has "Nexus search link" "$(row steam:5000 | jq -r .nexus)" "site%3Anexusmods.com%20Story%20Game%20reshade%20preset"
+eq "cached copy for the GUI" "$("$CD" fx scan --cached | jq length)" "$(jq length <<<"$SC")"
+O="$("$CD" fx autoinstall steam:5000 steam:200 2>&1)"
+has "blocked game skipped, with the reason" "$O" "Second Game: skipped (ReShade is banned"
+RP="$HOME/.local/share/control-deck/gaming/fx/steam_5000"
+eq "Story Game: ReShade with the most downloaded preset" "$(jq -c '[.mode, .source, .id]' "$RP/report.json")" '["reshade","sfx","502"]'
+has "depth definition written to its ReShade.ini" "$(cat "$SG/Binaries/Win64/ReShade.ini")" "PreprocessorDefinitions=RESHADE_DEPTH_INPUT_IS_REVERSED=1"
+bash -c 'source "$1"; reshade_defines steam:5000 RESHADE_DEPTH_INPUT_IS_REVERSED=1 FOO=2' _ "$CD"
+has "definitions merged, no duplicates" "$(grep PreprocessorDefinitions "$SG/Binaries/Win64/ReShade.ini")" "=RESHADE_DEPTH_INPUT_IS_REVERSED=1,FOO=2"
+"$CD" fx set steam:5000 off >/dev/null
+unset CONTROL_DECK_PCGW_API CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 \
+      CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

@@ -325,6 +325,10 @@ ShellRoot {
             }
         }
         property string fxLastGame: ""
+        property string fxScope: "game"     // game | library
+        property var    fxScan: []          // fx scan: every game's best preset / compatibility
+        property var    fxScanByKey: { var m = {}; fxScan.forEach(function (r) { m[r.key] = r; }); return m; }
+        property int    fxEligible: fxScan.filter(function (r) { return r.eligible && !r.current; }).length
         function fxSearch(q) {
             if (!q || fxSearchProc.running) return;
             fxGames = []; fxPresets = []; fxGameId = ""; fxMsg = "";
@@ -867,6 +871,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.games = JSON.parse(text); } catch (e) { win.games = []; }
+                    if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = true; fxScanProc.running = true; }
                     win.gameStatus = win.games.length + " GAMES";
                     // keep the selection in sync (launch options / Proton may have changed)
                     var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
@@ -926,6 +931,7 @@ ShellRoot {
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
                 if (win.gameArgs[0] === "fx" || (win.gameArgs[0] === "steamwrap" && win.gameView === "fx")) fxStatProc.running = true;
+                if (win.gameArgs[0] === "fx" && win.fxScope === "library") { fxScanProc.cached = false; fxScanProc.running = true; }
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -979,6 +985,12 @@ ShellRoot {
             id: fxStatProc
             command: [win.scriptPath, "fx", "status", win.selGame]
             stdout: StdioCollector { onStreamFinished: { try { win.fx = JSON.parse(text); } catch (e) { win.fx = {}; } } }
+        }
+        Process {
+            id: fxScanProc
+            property bool cached: false
+            command: [win.scriptPath, "fx", "scan"].concat(cached ? ["--cached"] : [])
+            stdout: StdioCollector { onStreamFinished: { try { win.fxScan = JSON.parse(text); } catch (e) { } } }
         }
         Process {
             id: fxSearchProc
@@ -2769,6 +2781,15 @@ ShellRoot {
                                     font.family: win.mono; font.pixelSize: 9
                                 }
                                 Text {
+                                    property var r: win.fxScanByKey[modelData.key]
+                                    visible: !!r && !!r.sfx && r.sfx.count > 0 && !r.current && r.eligible
+                                    text: "FX " + (r && r.sfx ? r.sfx.count : ""); color: pal.pink
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                    ToolTip.visible: fxBadgeMa.containsMouse; ToolTip.delay: 300
+                                    ToolTip.text: "ReShade presets for this game on SweetFX DB — see GAMING → FX"
+                                    MouseArea { id: fxBadgeMa; anchors.fill: parent; hoverEnabled: true }
+                                }
+                                Text {
                                     visible: modelData.wrapped
                                     text: "◆ DECK"; color: pal.accent
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
@@ -3260,6 +3281,19 @@ ShellRoot {
                 }
 
                 // ---- FX (visual shaders) ----
+                // FX: this game / my whole library (fixed above the scrolling part)
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 6
+                    visible: win.gameView === "fx"
+                    Chip { label: "THIS GAME"; active: win.fxScope === "game"; onClicked: win.fxScope = "game" }
+                    Chip {
+                        label: "MY LIBRARY" + (win.fxEligible > 0 ? "  ·  " + win.fxEligible + " to set up" : "")
+                        active: win.fxScope === "library"
+                        onClicked: { win.fxScope = "library"; if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = false; fxScanProc.running = true; } }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
                 ScrollView {
                     id: fxScroll
                     Layout.fillWidth: true; Layout.fillHeight: true
@@ -3269,6 +3303,10 @@ ShellRoot {
                     ColumnLayout {
                         width: fxScroll.availableWidth
                         spacing: 8
+
+                        ColumnLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.fxScope === "game"
 
                             EmptyHint {
                                 Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 40; anchors.centerIn: undefined
@@ -3619,6 +3657,108 @@ ShellRoot {
                                     }
                                 }
                             }
+                        }
+
+                        // ---- MY LIBRARY: best preset + known settings for every game ----
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 8
+                            visible: win.fxScope === "library"
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                    text: "Every Steam game: the most downloaded ReShade preset on SweetFX Settings DB, the ReShade compatibility list (PCGamingWiki, which reshade.me links) and online/anti-cheat risk. SET UP installs ReShade with that preset — or SHARPEN + AA when there's none — and the depth settings the list gives. Anti-cheat games and games where ReShade is banned are never touched."
+                                }
+                                Chip { label: fxScanProc.running ? "SCANNING…" : "SCAN"; on: !fxScanProc.running; onClicked: { fxScanProc.cached = false; fxScanProc.running = true; } }
+                                MiniBtn {
+                                    width: 150; height: 32; label: "SET UP ALL (" + win.fxEligible + ")"
+                                    on: !win.gameBusy && win.fxEligible > 0
+                                    onClicked: win.runGame(["fx", "autoinstall"].concat(win.fxScan.filter(function (r) { return r.eligible && !r.current; }).map(function (r) { return r.key; })), "SETTING UP " + win.fxEligible + " GAME(S)…")
+                                }
+                            }
+                            Repeater {
+                                model: win.fxScan
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    implicitHeight: libCol.implicitHeight + 16
+                                    radius: 8; color: pal.card; border.width: 1
+                                    border.color: modelData.blocked || (modelData.online && modelData.online.level === "anticheat") ? pal.bad
+                                                  : (modelData.current ? pal.ok : pal.border)
+                                    ColumnLayout {
+                                        id: libCol
+                                        anchors.fill: parent; anchors.margins: 8; spacing: 4
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Text { Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
+                                            Text {
+                                                visible: !!modelData.current
+                                                text: modelData.current ? "● " + (modelData.current.mode === "reshade" ? "ReShade" : "vkBasalt") + " · " + modelData.current.name : ""
+                                                color: pal.ok; font.family: win.mono; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 260
+                                            }
+                                            MiniBtn {
+                                                width: 70; height: 28; primary: false; label: "OPEN"
+                                                onClicked: {
+                                                    var g = win.games.filter(function (x) { return x.key === modelData.key; })[0];
+                                                    if (g) { win.selectGame(g); win.fxScope = "game"; win.openFx(); }
+                                                }
+                                            }
+                                            MiniBtn {
+                                                width: 80; height: 28; label: "SET UP"
+                                                visible: modelData.eligible
+                                                on: !win.gameBusy
+                                                onClicked: win.runGame(["fx", "autoinstall", modelData.key], "SETTING UP " + modelData.name.toUpperCase() + "…")
+                                            }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            font.family: win.mono; font.pixelSize: 10
+                                            color: modelData.sfx && modelData.sfx.count > 0 ? pal.text : pal.dim
+                                            visible: modelData.eligible || (modelData.sfx && modelData.sfx.count > 0)
+                                            text: modelData.sfx && modelData.sfx.count > 0
+                                                  ? "★ " + modelData.sfx.count + " presets · best: " + modelData.sfx.best.name + " (" + modelData.sfx.best.downloads + " downloads)"
+                                                  : "No ReShade presets on SweetFX DB → SET UP uses SHARPEN + AA"
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                            visible: !!modelData.pcgw
+                                            font.family: win.mono; font.pixelSize: 9; color: modelData.blocked ? pal.bad : pal.dim
+                                            text: modelData.pcgw ? "PCGamingWiki: " + modelData.pcgw.status + " · " + modelData.pcgw.api
+                                                  + (modelData.defines.length ? " · depth: " + modelData.defines.join(", ") + " (set automatically)" : "")
+                                                  + (modelData.pcgw.notes ? " — " + modelData.pcgw.notes : "") : ""
+                                            maximumLineCount: 3; elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                            visible: modelData.blocked || (!!modelData.online && modelData.online.level !== "none")
+                                            font.family: win.mono; font.pixelSize: 9
+                                            color: modelData.blocked || modelData.online.level === "anticheat" ? pal.bad : pal.amber
+                                            text: modelData.blocked ? "✗ ReShade is banned or blocked in this game (PCGamingWiki): not touched"
+                                                  : (modelData.online.level === "anticheat" ? "✗ Anti-cheat (" + modelData.online.anticheats.join(", ") + "): not touched"
+                                                     : "⚠ Has online multiplayer/co-op: fine for single-player, check the game's rules online")
+                                        }
+                                        RowLayout {
+                                            spacing: 6
+                                            Chip {
+                                                visible: !!modelData.sfx
+                                                label: "PRESETS ↗"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/game/" + modelData.sfx.id + "/")
+                                            }
+                                            Chip { label: "SEARCH NEXUS ↗"; tip: "Web search for ReShade presets of this game on Nexus Mods"; onClicked: Qt.openUrlExternally(modelData.nexus) }
+                                            Chip {
+                                                visible: !!modelData.pcgw
+                                                label: "PCGW ↗"; onClicked: Qt.openUrlExternally("https://www.pcgamingwiki.com/wiki/ReShade#Compatibility_list")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            EmptyHint {
+                                Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 30; anchors.centerIn: undefined
+                                visible: win.fxScan.length === 0
+                                title: fxScanProc.running ? "SCANNING YOUR LIBRARY…" : "PRESS SCAN"
+                            }
+                        }
                     }
                 }
 
