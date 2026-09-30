@@ -38,6 +38,7 @@ case "$*" in
 esac'
 stub gtk-update-icon-cache 'exit 0'
 stub steam 'echo "steam $*" >> "'"$T"'/steam.log"'
+stub mangohud 'exec "$@"'
 stub pgrep '[[ -n "${FAKE_FOSSILIZE:-}" && "$*" == *fossilize* ]] && exit 0; exit 1'
 stub xdg-open 'exit 0'
 stub checkupdates 'printf "%s" "${FAKE_UPDATES:-}"'
