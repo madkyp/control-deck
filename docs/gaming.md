@@ -315,8 +315,11 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   before an upgrade, pacman changes get snapshots (snap-pac or the deck's own),
   and SNAPSHOTS lists what changed since each one; HEALTH catches a driver
   updated without a reboot.
+- **2.12 Session monitor** (recording + end-of-game summary) and **2.13
+  Bottleneck detector** (which works on those recordings). Skipped: only the
+  live part was wanted, as the TEMPS overlay.
 
 ## Not implemented yet
 
-2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
+2.14 vkBasalt /
 ReShade.
