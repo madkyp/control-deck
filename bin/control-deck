@@ -3832,10 +3832,10 @@ gpu_devices() {
 }
 
 cmd_health() {
-    local out=() missing=() vendors drv p v kmod u32 icd
+    local checks=() missing=() vendors drv p v kmod u32 icd
 
     # $1 id · $2 group · $3 status (ok|warn|fail|info) · $4 label · $5 detail · $6 fix
-    chk() { out+=("$(jq -nc --arg id "$1" --arg g "$2" --arg s "$3" --arg l "$4" --arg d "$5" --arg f "${6:-}" \
+    chk() { checks+=("$(jq -nc --arg id "$1" --arg g "$2" --arg s "$3" --arg l "$4" --arg d "$5" --arg f "${6:-}" \
                         '{id:$id, group:$g, status:$s, label:$l, detail:$d, fix:$f}')"); }
     # packages that must be installed ($1 group · $2 status if missing · $3 label);
     # missing ones also go to the combined fix
@@ -3942,7 +3942,8 @@ cmd_health() {
 
     # --- Vulkan
     need_pkgs vulkan fail "Vulkan loader" vulkan-icd-loader lib32-vulkan-icd-loader
-    icd="$(ls /usr/share/vulkan/icd.d/ 2>/dev/null | tr '\n' ' ')"
+    local f; icd=""
+    for f in /usr/share/vulkan/icd.d/*.json; do [[ -e "$f" ]] && icd+="${f##*/} "; done
     if have vulkaninfo; then
         local devs
         devs="$(timeout 15 vulkaninfo --summary 2>/dev/null | awk -F'= ' '
@@ -3972,7 +3973,7 @@ cmd_health() {
 
     local all=""
     ((${#missing[@]})) && all="sudo pacman -S --needed $(printf '%s\n' "${missing[@]}" | sort -u | paste -sd ' ')"
-    printf '%s\n' "${out[@]}" | jq -sc --arg all "$all" --argjson ml "$multilib" --arg v "$vendors" '{
+    printf '%s\n' "${checks[@]}" | jq -sc --arg all "$all" --argjson ml "$multilib" --arg v "$vendors" '{
         checks: .,
         vendors: ($v | split("\n") | map(select(. != "") | split(" ")[0]) | unique),
         fail: ([.[] | select(.status == "fail")] | length),
