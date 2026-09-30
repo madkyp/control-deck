@@ -575,7 +575,7 @@ mkdir -p "$T/proc/4242" "$T/proc/4243" "$T/proc/99"
 printf 'HOME=/x\0SteamAppId=100\0' > "$T/proc/4243/environ"; printf 'SteamAppId=100\0' > "$T/proc/4242/environ"
 printf 'SteamAppId=0\0' > "$T/proc/99/environ"
 eq "running game found once (lowest pid), id 0 ignored" "$(PROC_ROOT="$T/proc" bash -c 'source "$1"; running_games' _ "$CD")" "$(printf '100\t4242')"
-yes "gstatus is valid JSON" "\"$CD\" gstatus | jq -e '.gamemode | has(\"ingroup\")' >/dev/null"
+yes "gstatus is valid JSON" "\"$CD\" gstatus | jq -e '.gamemode | has(\"ingroup\") and has(\"pending\")' >/dev/null"
 mkdir -p "$T/pdb"; printf '{"tier":"platinum","score":0.9,"total":10,"trendingTier":"gold","confidence":"strong"}' > "$T/pdb/100.json"
 export CONTROL_DECK_PROTONDB_API="file://$T/pdb"
 eq "ProtonDB tier" "$("$CD" protondb 100 200 | jq -r '."100".tier')" platinum

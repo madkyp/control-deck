@@ -2890,20 +2890,22 @@ running_games() {
 }
 
 cmd_gstatus() {
-    local gm_inst=false gm_active=false ingroup=false gov drv mmc run
+    local gm_inst=false gm_active=false ingroup=false added=false gov drv mmc run
     have gamemoded && gm_inst=true
     [[ $gm_inst == true ]] && gamemoded -s 2>/dev/null | grep -q 'is active' && gm_active=true
     id -nG | tr ' ' '\n' | grep -qx gamemode && ingroup=true
+    # in the group database but not in this session yet (needs a new login)
+    id -nG "$(id -un)" | tr ' ' '\n' | grep -qx gamemode && added=true
     gov="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
     drv="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver 2>/dev/null)"
     mmc="$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)"
     run="$(running_games | while IFS=$'\t' read -r id pid; do
             printf '%s\n%s\n' "$id" "$pid"; done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i | {id:$l[$i], pid:($l[$i+1]|tonumber)}]')"
-    jq -n --argjson gi "$gm_inst" --argjson ga "$gm_active" --argjson grp "$ingroup" \
+    jq -n --argjson gi "$gm_inst" --argjson ga "$gm_active" --argjson grp "$ingroup" --argjson add "$added" \
           --arg gov "$gov" --arg drv "$drv" --argjson mmc "${mmc:-0}" --argjson run "$run" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
-        '{gamemode:{installed:$gi, active:$ga, ingroup:$grp}, governor:$gov, cpufreq_driver:$drv,
+        '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
           max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run}'
 }
 
@@ -2912,6 +2914,9 @@ cmd_gstatus() {
 cmd_gamejoin() {
     getent group gamemode >/dev/null || { err "the gamemode group doesn't exist (install gamemode)"; return 4; }
     id -nG | tr ' ' '\n' | grep -qx gamemode && { log "✔ You are already in the gamemode group."; return 0; }
+    if id -nG "$(id -un)" | tr ' ' '\n' | grep -qx gamemode; then
+        log "✔ You were already added: log out of your desktop session (or reboot) to activate it."; return 0
+    fi
     log "→ pkexec usermod -aG gamemode $USER"
     pkexec usermod -aG gamemode "$USER" || { err "usermod failed"; return 4; }
     log "✔ Added to the gamemode group. Log out and back in for it to take effect."

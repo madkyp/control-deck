@@ -2591,11 +2591,15 @@ ShellRoot {
                             StatLine {
                                 label: "gamemode group"
                                 good: !!win.gstat.gamemode && win.gstat.gamemode.ingroup
-                                value: win.gstat.gamemode && win.gstat.gamemode.ingroup ? "member" : "not a member"
-                                note: win.gstat.gamemode && win.gstat.gamemode.ingroup ? "" : "without it gamemode can't switch the governor (no password prompt during games) and nice < 0 is refused"
+                                value: !win.gstat.gamemode ? "" : (win.gstat.gamemode.ingroup ? "member"
+                                       : (win.gstat.gamemode.pending ? "added · not active yet" : "not a member"))
+                                note: !win.gstat.gamemode || win.gstat.gamemode.ingroup ? ""
+                                      : (win.gstat.gamemode.pending
+                                         ? "log out of your desktop session (back to the login screen) or reboot: groups are only read at login"
+                                         : "without it gamemode can't switch the governor (no password prompt during games) and nice < 0 is refused")
                             }
                             MiniBtn {
-                                visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup
+                                visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup && !win.gstat.gamemode.pending
                                 width: 96; label: win.confirmJoin ? "CONFIRM?" : "JOIN GROUP"
                                 on: !win.gameBusy
                                 onClicked: {
