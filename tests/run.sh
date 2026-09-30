@@ -537,6 +537,16 @@ PR="$("$CD" gprofile get steam:100)"
 eq "old options adopted: env"      "$(jq -r '.env.PROTON_ENABLE_WAYLAND' <<<"$PR")" 0
 eq "old options adopted: mangohud" "$(jq -r '.mangohud' <<<"$PR")" true
 eq "old options adopted: args"     "$(jq -r '.args' <<<"$PR")" "-novid +fps_max 120"
+"$CD" steamwrap 100 off >/dev/null
+# a profile saved BEFORE wrapping must still get the old options merged in
+"$CD" gprofile reset steam:100 >/dev/null
+"$CD" gprofile set steam:100 mangohud=false 'env=MY_VAR=1' >/dev/null
+"$CD" steamwrap 100 on >/dev/null
+PR="$("$CD" gprofile get steam:100)"
+eq "pre-existing profile: old env merged in" "$(jq -r '.env.PROTON_ENABLE_WAYLAND' <<<"$PR")" 0
+eq "pre-existing profile: its own env kept"  "$(jq -r '.env.MY_VAR' <<<"$PR")" 1
+eq "pre-existing profile: empty args filled" "$(jq -r '.args' <<<"$PR")" "-novid +fps_max 120"
+eq "pre-existing profile: mangohud from the old line" "$(jq -r '.mangohud' <<<"$PR")" true
 "$CD" steamwrap 200 on >/dev/null
 has "missing LaunchOptions key is created" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/200 LaunchOptions' _ "$CD" "$LC")" "control-deck run"
 eq "…next to the existing keys" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/200 Playtime' _ "$CD" "$LC")" 5

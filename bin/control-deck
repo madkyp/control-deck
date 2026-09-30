@@ -2806,10 +2806,17 @@ cmd_steamwrap() {
                 err "these launch options use quoting/shell syntax the deck won't rewrite: $cur"
                 err "set them in the profile by hand, then try again"; return 3
             fi
-            # first time: what the game used becomes its profile
-            if [[ "$(profiles_json | jq --arg k "$key" 'has($k)')" != true ]]; then
-                profile_write "$key" "$(adopt_launch_options "$cur")"
-                [[ -n "$cur" ]] && log "→ Existing options moved into the profile: $cur"
+            # what the game used is merged into its profile (even one saved before):
+            # env adds up (the profile wins), prefix/args only fill empty fields,
+            # gamemode/mangohud turn on if the old line used them
+            if [[ -n "$cur" ]]; then
+                profile_write "$key" "$(jq -cn --argjson a "$(adopt_launch_options "$cur")" --argjson p "$(profiles_json | jq -c --arg k "$key" '.[$k] // {}')" '
+                    {env: ($a.env + ($p.env // {})),
+                     prefix: (if ($p.prefix // "") == "" then $a.prefix else $p.prefix end),
+                     args: (if ($p.args // "") == "" then $a.args else $p.args end)}
+                    + (if $a.gamemode then {gamemode:true} else {} end)
+                    + (if $a.mangohud then {mangohud:true} else {} end)')"
+                log "→ Existing options merged into the profile: $cur"
             fi
             profile_write "$key" "$(jq -cn --arg o "$cur" '{original_launch:$o}')"
             vdf_set "$lc" "$LOCALCONFIG_APPS/$id" "LaunchOptions=$(wrapper_line)" || { err "could not write $lc"; return 4; }
