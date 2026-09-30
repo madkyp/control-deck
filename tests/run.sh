@@ -1354,6 +1354,20 @@ rm -f "$T/notify.log"; printf '#!/bin/sh\nkill -TERM $$\n' > "$T/fake/killed"; c
 SteamAppId=100 "$CD" run "$T/fake/killed" >/dev/null 2>&1
 yes "killed by a signal (Steam's STOP) isn't a crash" "[[ ! -s '$T/notify.log' ]]"
 unset CONTROL_DECK_SYSFS CONTROL_DECK_SCX_TOML
+section "Profiles between PCs (backup + check for this PC)"
+"$CD" gprofile set steam:600 'env=__GL_SHADER_DISK_CACHE_SIZE=1000 RADV_PERFTEST=gpl DXVK_ASYNC=1' >/dev/null
+BK="$T/bk.json"; "$CD" export "$BK" >/dev/null 2>&1
+eq "backup carries game profiles" "$(jq -r '.gaming.profiles["steam:600"].env.DXVK_ASYNC' "$BK")" 1
+A="$(CONTROL_DECK_GPU_VENDOR=amd "$CD" gaudit)"
+eq "on AMD: NVIDIA-only variable flagged, AMD and neutral ones not" "$(jq -c '[.issues[] | select(.key == "steam:600") | .var]' <<<"$A")" '["__GL_SHADER_DISK_CACHE_SIZE"]'
+N="$(CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit)"
+eq "on NVIDIA: the AMD one flagged" "$(jq -c '[.issues[] | select(.key == "steam:600") | .var]' <<<"$N")" '["RADV_PERFTEST"]'
+CONTROL_DECK_GPU_VENDOR=amd "$CD" gaudit fix steam:600 >/dev/null
+eq "fix drops only what does nothing on this GPU" "$("$CD" gprofile get steam:600 | jq -c '.env | keys')" '["DXVK_ASYNC","RADV_PERFTEST"]'
+"$CD" gprofile reset steam:600 >/dev/null; "$CD" gprofile set steam:601 'env=A=1' >/dev/null
+"$CD" gaming-import "$BK" >/dev/null 2>&1
+eq "import adds what's missing here" "$("$CD" gprofile get steam:600 | jq -r '.env.__GL_SHADER_DISK_CACHE_SIZE')" 1000
+eq "…and keeps what's already here" "$("$CD" gprofile get steam:601 | jq -r '.env.A')" 1
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

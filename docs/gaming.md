@@ -567,6 +567,22 @@ to 127 raises a notification "<game> closed with an error": it points to
 suggests adding PROTON_LOG=1 to the game's ENV. 128 and above (killed by a
 signal, e.g. Steam's STOP) isn't treated as a crash.
 
+### Game profiles between PCs (BACKUP + LIBRARY → CHECK FOR THIS PC)
+- SYSTEM → BACKUP now saves a `gaming` block: profiles, each game's looks
+  (report, preset, ReShadePreset.ini, vkBasalt.conf), saved preset pages, the
+  FX keys and the scheduler setting. RESTORE brings it back along with the
+  apps; **GAMING ONLY** (`gaming-import <file>`) brings back just that. Only
+  what this PC lacks is added: a profile already here is never overwritten.
+- `gaudit` checks every profile against this PC and flags:
+  - variables of another GPU vendor (the same classes as the ProtonDB
+    suggestions: `__GL_*`/NVAPI → NVIDIA, `RADV_*`/`AMD_*`/`ACO_*`/`RADEONSI*`
+    → AMD, `MESA_*` → no effect on NVIDIA);
+  - ReShade that is on but not linked in the game's folder here;
+  - vkBasalt that is on but not installed.
+  LIBRARY shows them in an amber strip. FIX ALL (`gaudit fix all`) drops the
+  useless variables and sets ReShade up again, keeping the look; vkBasalt
+  points to FX → INSTALL.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

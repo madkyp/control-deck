@@ -307,6 +307,7 @@ ShellRoot {
         property var    pdbStat: ({})       // local ProtonDB index status
         property var    shaders: ({})       // shader caches (per game + driver)
         property var    health: ({})        // gaming health checks
+        property var    gaudit: ({})        // profiles vs this PC
         property var    fx: ({})            // visual shaders: install state + selected game
         property var    fxGames: []         // SweetFX DB games matching the search
         property string fxGameId: ""
@@ -923,6 +924,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.games = JSON.parse(text); } catch (e) { win.games = []; }
                     if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = true; fxScanProc.running = true; }
+                    if (!gauditProc.running) gauditProc.running = true;
                     win.gameStatus = win.games.length + " GAMES";
                     // keep the selection in sync (launch options / Proton may have changed)
                     var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
@@ -1037,6 +1039,11 @@ ShellRoot {
                     benchChart.requestPaint();
                 }
             }
+        }
+        Process {
+            id: gauditProc
+            command: [win.scriptPath, "gaudit"]
+            stdout: StdioCollector { onStreamFinished: { try { win.gaudit = JSON.parse(text); } catch (e) { win.gaudit = {}; } } }
         }
         Process {
             id: healthProc
@@ -2570,6 +2577,11 @@ ShellRoot {
                                 win.runSys(["restore", win.expandHome(restoreField.text.trim())], "RESTORING…");
                             }
                         }
+                        MiniBtn {
+                            width: 120; height: 34; label: "GAMING ONLY"; primary: false
+                            on: restoreField.text.trim() !== "" && !win.sysBusy
+                            onClicked: win.runSys(["gaming-import", win.expandHome(restoreField.text.trim())], "IMPORTING…")
+                        }
                     }
                     Item { Layout.fillHeight: true }
                 }
@@ -2847,6 +2859,42 @@ ShellRoot {
                 }
 
                 // ---- LIBRARY ----
+                // profiles that don't fit this PC (moved from the other one via BACKUP)
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: win.gameView === "library" && (win.gaudit.issues || []).length > 0
+                    implicitHeight: auditCol.implicitHeight + 16
+                    radius: 8; color: "#1a150c"; border.color: pal.amber; border.width: 1
+                    ColumnLayout {
+                        id: auditCol
+                        anchors.fill: parent; anchors.margins: 8; spacing: 4
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 8
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.amber; font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                text: "CHECK FOR THIS PC — " + (win.gaudit.issues || []).length + " setting(s) don't fit this "
+                                      + String(win.gaudit.vendor || "").toUpperCase() + " GPU or aren't set up here yet"
+                            }
+                            MiniBtn {
+                                width: 90; height: 28; label: "FIX ALL"; on: !win.gameBusy
+                                onClicked: win.runGame(["gaudit", "fix", "all"], "ADJUSTING PROFILES…")
+                            }
+                        }
+                        Repeater {
+                            model: win.gaudit.issues || []
+                            delegate: Text {
+                                required property var modelData
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                                color: pal.text; font.family: win.mono; font.pixelSize: 10
+                                text: "· " + win.gameName(String(modelData.key).replace(/^[a-z]+:/, "")) + ": "
+                                      + (modelData.kind === "env" ? modelData.var + " is " + (modelData.vendor === "mesa" ? "Mesa" : modelData.vendor.toUpperCase()) + "-only → remove"
+                                         : (modelData.kind === "reshade" ? "ReShade isn't installed in its folder on this PC → set it up"
+                                            : "vkBasalt isn't installed here → FX → INSTALL"))
+                            }
+                        }
+                    }
+                }
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     Layout.minimumHeight: 110

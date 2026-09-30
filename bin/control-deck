@@ -2575,17 +2575,67 @@ cmd_export() {
             jq -cn --arg file "$(basename "$f")" --rawfile c "$f" --arg icon "${ic##*/}" --arg b "$b64" \
                 '{file:$file, content:$c, icon:(if $b == "" then null else {name:$icon, data:$b} end)}'
         done | jq -s '.')"
+    # gaming: profiles, shader looks (small files), saved preset pages, keys, scheduler
+    local gaming; gaming="$(jq -n --argjson prof "$(profiles_json)" \
+        --argjson links "$(fx_links_json)" \
+        --argjson fxs "$(cat "$FX_SETTINGS" 2>/dev/null || echo '{}')" \
+        --argjson sched "$(cat "$SCHED_SETTINGS" 2>/dev/null || echo '{}')" \
+        --argjson looks "$(for d in "$FX_PROFILES"/*/; do
+                [[ -d "$d" ]] || continue
+                jq -n --arg id "$(basename "$d")" \
+                    --arg report "$(cat "$d/report.json" 2>/dev/null)" --arg preset "$(cat "$d/preset.ini" 2>/dev/null)" \
+                    --arg rs "$(cat "$d/ReShadePreset.ini" 2>/dev/null)" --arg vkb "$(cat "$d/vkBasalt.conf" 2>/dev/null)" \
+                    '{id:$id, report:$report, preset:$preset, reshadePreset:$rs, vkbasalt:$vkb}'
+            done | jq -s .)" \
+        '{profiles:$prof, links:$links, fx:$fxs, sched:$sched, looks:$looks}')"
     jq -n --arg date "$(date -Is)" --arg host "$(uname -n)" \
-          --argjson flat "$flat" --argjson appimgs "$appimgs" --argjson launchers "$launchers" \
+          --argjson flat "$flat" --argjson appimgs "$appimgs" --argjson launchers "$launchers" --argjson gaming "$gaming" \
           --arg repo "$(pacman -Qqen 2>/dev/null)" --arg aur "$(pacman -Qqem 2>/dev/null)" '
         {app:"control-deck", version:1, date:$date, host:$host,
          repo:($repo | split("\n") | map(select(. != ""))),
          aur:($aur | split("\n") | map(select(. != ""))),
-         flatpak:$flat, appimages:$appimgs, launchers:$launchers}' > "$out" \
+         flatpak:$flat, appimages:$appimgs, launchers:$launchers, gaming:$gaming}' > "$out" \
         || { err "could not write $out"; return 4; }
     log "✔ Backup saved to $out"
-    log "  $(jq -r '"\(.repo|length) repo · \(.aur|length) AUR · \(.flatpak|length) flatpak · \(.appimages|length) AppImage/tar · \(.launchers|length) edited launchers"' "$out")"
+    log "  $(jq -r '"\(.repo|length) repo · \(.aur|length) AUR · \(.flatpak|length) flatpak · \(.appimages|length) AppImage/tar · \(.launchers|length) edited launchers · \(.gaming.profiles | length) game profiles"' "$out")"
     history_add export backup "$(basename "$out")" 0
+}
+
+# the gaming part of a backup: only what this PC doesn't have yet is added
+gaming_import() {
+    local file="$1" n tmp d id
+    jq -e '.gaming' "$file" >/dev/null 2>&1 || return 0
+    mkdir -p "$GAMING_DIR" "$FX_PROFILES"; tmp="$(mktemp)"
+    n="$(jq --argjson here "$(profiles_json)" '[.gaming.profiles | keys[] | select($here[.] == null)] | length' "$file")"
+    # the backup's profiles, then this PC's on top: nothing here is overwritten
+    jq -n --argjson a "$(profiles_json)" --slurpfile b "$file" '($b[0].gaming.profiles // {}) + $a' > "$tmp"
+    mv "$tmp" "$PROFILES"
+    jq -n --argjson a "$(fx_links_json)" --slurpfile b "$file" '($b[0].gaming.links // {}) + $a' > "$tmp" && mv "$tmp" "$FX_LINKS"
+    [[ -f "$FX_SETTINGS" ]] || jq '.gaming.fx // {}' "$file" > "$FX_SETTINGS"
+    [[ -f "$SCHED_SETTINGS" ]] || jq '.gaming.sched // {}' "$file" > "$SCHED_SETTINGS"
+    while IFS= read -r id; do
+        [[ "$id" =~ ^[A-Za-z0-9._:-]+$ ]] || continue
+        d="$FX_PROFILES/$id"; [[ -e "$d" ]] && continue
+        mkdir -p "$d"
+        jq -r --arg i "$id" '.gaming.looks[] | select(.id == $i) | .report' "$file" | grep -q . \
+            && jq -r --arg i "$id" '.gaming.looks[] | select(.id == $i) | .report' "$file" > "$d/report.json"
+        local f k
+        for k in preset:preset.ini reshadePreset:ReShadePreset.ini vkbasalt:vkBasalt.conf; do
+            f="$(jq -r --arg i "$id" --arg k "${k%%:*}" '.gaming.looks[] | select(.id == $i) | .[$k] // ""' "$file")"
+            [[ -n "$f" ]] && printf '%s\n' "$f" > "$d/${k#*:}"
+        done
+    done < <(jq -r '.gaming.looks[]?.id' "$file")
+    log "→ Gaming: $n game profile(s) added (the ones already here were kept)"
+    local issues; issues="$(cmd_gaudit | jq '.issues | length')"
+    (( issues > 0 )) && log "  $issues thing(s) to adjust for this PC: GAMING → LIBRARY → CHECK FOR THIS PC"
+    return 0
+}
+
+# gaming-import <backup.json> — only the gaming part (e.g. from your other PC)
+cmd_gaming_import() {
+    [[ -f "$1" ]] && jq -e '.app == "control-deck"' "$1" >/dev/null 2>&1 || { err "not a Control Deck backup: $1"; return 2; }
+    gaming_import "$1"
+    history_add "gaming import" backup "$(basename "$1")" 0
 }
 
 cmd_restore() {
@@ -2648,6 +2698,8 @@ cmd_restore() {
         log "→ Launcher restored: $(dget "$lf" Name)"
     done
     refresh_menu
+
+    gaming_import "$file"
 
     # AUR last: it needs an interactive terminal
     missing="$(comm -23 <(jq -r '.aur[]' "$file" | sort -u) <(pacman -Qq | sort -u))"
@@ -3979,6 +4031,8 @@ Gaming
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
+  gaming-import <backup.json>   Add the game profiles, looks and settings of a backup (only what's missing here)
+  gaudit [fix <key|all>]        Check game profiles for this PC (other GPU vendor's variables, shaders not set up here)
   session <pid> <key>           For launchers like Umbral: TEMPS + scheduler while <pid> runs
   hook <umbral:id>              For Umbral: env (ReShade/vkBasalt) + TEMPS for a game it launches (JSON)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
@@ -5598,6 +5652,74 @@ game_crashed() {   # key rc started(epoch)
     history_add "game crashed" gaming "${name:-$key} (code $rc)" "$rc"
 }
 
+# --- profile check for this PC (after moving profiles between PCs) ---------------
+# Vendor-only variables (same classes as the ProtonDB suggestions) that do
+# nothing on this GPU, and shaders that aren't set up on this PC yet.
+env_vendor() {   # VAR → nvidia|amd|mesa|""
+    case "$1" in
+        __GL_*|__NV*|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX*|DXVK_NVAPI*) echo nvidia ;;
+        RADV_*|AMD_*|ACO_*|RADEONSI*) echo amd ;;
+        MESA_*|ENABLE_LAYER_MESA*) echo mesa ;;
+        *) echo "" ;;
+    esac
+}
+
+cmd_gaudit() {
+    local v; v="$(gpu_vendor)"
+    local k var issues=()
+    while IFS= read -r k; do
+        [[ -n "$k" && "$k" != default ]] || continue
+        local p; p="$(profile_get "$k")"
+        while IFS= read -r var; do
+            [[ -n "$var" ]] || continue
+            local ven; ven="$(env_vendor "$var")"
+            [[ -z "$ven" ]] && continue
+            if [[ "$ven" == nvidia && "$v" != nvidia ]] || [[ "$ven" == amd && "$v" != amd ]] || [[ "$ven" == mesa && "$v" == nvidia ]]; then
+                issues+=("$(jq -nc --arg k "$k" --arg var "$var" --arg ven "$ven" --arg val "$(jq -r --arg x "$var" '.env[$x]' <<<"$p")" \
+                    '{key:$k, kind:"env", var:$var, value:$val, vendor:$ven, fix:"remove"}')")
+            fi
+        done < <(jq -r '.env | keys[]' <<<"$p")
+        if [[ "$(jq -r .fx <<<"$p")" == true ]]; then
+            if [[ "$(jq -r '.fxMode // "vkbasalt"' <<<"$p")" == reshade ]]; then
+                local st ok=false; st="$(reshade_state "$k")"
+                if [[ -n "$st" ]]; then
+                    local l; l="$(jq -r '.dir + "/" + .api + ".dll"' <<<"$st")"
+                    [[ -L "$l" && -e "$l" ]] && ok=true
+                fi
+                [[ $ok == true ]] || issues+=("$(jq -nc --arg k "$k" '{key:$k, kind:"reshade", fix:"setup"}')")
+            elif [[ -z "$(pkg_ver vkbasalt)" ]]; then
+                issues+=("$(jq -nc --arg k "$k" '{key:$k, kind:"vkbasalt", fix:"install"}')")
+            fi
+        fi
+    done < <(profiles_json | jq -r 'keys[]')
+    printf '%s\n' "${issues[@]}" | jq -sc --arg v "$v" '{vendor:$v, issues:map(select(. != null))}'
+}
+
+# gaudit fix <key|all> — drop the other vendor's variables, set ReShade up here again
+cmd_gaudit_fix() {
+    local which="$1" a keys k n=0
+    a="$(cmd_gaudit)"
+    if [[ "$which" == all ]]; then keys="$(jq -r '[.issues[].key] | unique[]' <<<"$a")"
+    else valid_game_key "$which" || { err "not a game key: $which"; return 2; }; keys="$which"; fi
+    while IFS= read -r k; do
+        [[ -n "$k" ]] || continue
+        local drop; drop="$(jq -c --arg k "$k" '[.issues[] | select(.key == $k and .kind == "env") | .var]' <<<"$a")"
+        if [[ "$drop" != "[]" ]]; then
+            local tmp; tmp="$(mktemp)"
+            profiles_json | jq --arg k "$k" --argjson d "$drop" '.[$k].env |= (. // {} | with_entries(select(.key as $x | $d | index($x) | not)))' > "$tmp" \
+                && mv "$tmp" "$PROFILES"
+            log "→ $k: removed $(jq -r 'join(", ")' <<<"$drop") (no effect on this $(jq -r .vendor <<<"$a") GPU)"; n=$((n + 1))
+        fi
+        if jq -e --arg k "$k" 'any(.issues[]; .key == $k and .kind == "reshade")' <<<"$a" >/dev/null; then
+            cmd_fx_mode "$k" reshade >/dev/null 2>&1 && log "→ $k: ReShade set up on this PC" || log "✗ $k: ReShade couldn't be set up here (see FX)"
+            n=$((n + 1))
+        fi
+        jq -e --arg k "$k" 'any(.issues[]; .key == $k and .kind == "vkbasalt")' <<<"$a" >/dev/null \
+            && log "  $k: vkBasalt isn't installed here — FX → INSTALL"
+    done <<<"$keys"
+    log "✔ $n change(s)."
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5681,6 +5803,8 @@ main() {
         hook)        need "$1" "missing game key"; cmd_hook "$1" ;;
         session)     cmd_session "$1" "$2" ;;
         sched)       cmd_sched "$@" ;;
+        gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;
+        gaudit)      if [[ "${1:-}" == fix ]]; then cmd_gaudit_fix "${2:-all}"; else cmd_gaudit; fi ;;
         fx)          cmd_fx "$@" ;;
         overlay)     cmd_overlay "$1" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
