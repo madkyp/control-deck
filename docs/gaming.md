@@ -406,6 +406,17 @@ Studied from the community's reference script
   wrapper), AMD, and 32-bit/D3D9/OpenGL titles (none installed here).
 
 
+#### Guided steps (FX → THIS GAME → STEPS)
+A checklist built from the game's live state, with the pending step's own button:
+1. route (✓ when it's the recommended one; otherwise USE RESHADE ★),
+2. install (INSTALL),
+3. launch through Control Deck (USE IN STEAM; says to close Steam first),
+4. pick a look (quick look, SweetFX DB preset, or SEARCH NEXUS → download →
+   IMPORT…),
+5. play: the configured key opens ReShade's menu (or toggles vkBasalt).
+It can be hidden. When everything is done it collapses to "all set — press
+<key>".
+
 #### Importing a downloaded preset (FX → FROM A FILE)
 - Many recent games only have presets on Nexus Mods, which answers 403 to
   scripted requests. The flow is: SEARCH NEXUS ↗ (a web search), you download

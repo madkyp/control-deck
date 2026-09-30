@@ -318,7 +318,7 @@ ShellRoot {
         property var    fxRsGame: fx.reshade ? fx.reshade.game : null
         property bool   fxReady: fxReshade ? (!!fx.reshade && fx.reshade.ready === true) : (fx.vkbasalt === true && fx.shadersInstalled === true)
         function openFx() {
-            gameView = "fx"; fxConfirm = "";
+            gameView = "fx"; fxConfirm = ""; fxTopFor = "";
             if (selGameSource === "steam") {
                 fxStatProc.running = true;
                 if (fxQuery.text === "" || fxLastGame !== selGame) { fxQuery.text = selGameName; fxLastGame = selGame; fxSearch(selGameName); }
@@ -327,6 +327,31 @@ ShellRoot {
         property string fxLastGame: ""
         property string fxScope: "game"     // game | library
         property string fxImportFile: ""    // archive picked for IMPORT
+        property bool   fxGuideOpen: true   // FX steps card (per session)
+        property string fxTopFor: ""
+        function fxToTop() { fxScroll.contentItem.contentY = 0; }
+        // the FX steps, from the game's real state: [done, title, how]
+        property var    fxSteps: {
+            var key = (fx.key || "Home").toUpperCase(), rs = fxReshade;
+            return [
+                [rs || fx.recommended === "vkbasalt", "Route: " + (rs ? "ReShade" : "vkBasalt"),
+                 rs ? "ReShade itself runs presets exactly as made. vkBasalt (ROUTE below) only for Vulkan games."
+                    : (fx.recommended === "vkbasalt" ? "This game renders with Vulkan: vkBasalt is the one that works."
+                       : "ReShade is recommended here: presets run exactly as made (depth effects too), with its in-game menu.")],
+                [fxReady, "Install " + (rs ? "ReShade" : "vkBasalt + shaders"),
+                 rs ? "Downloaded from reshade.me into your user folder, no password." : "From chaotic-aur (asks for your password) plus the standard shaders."],
+                [fx.wrapped === true, "Launch it through Control Deck",
+                 fx.wrapped ? "Its Steam launch options go through the deck, which loads the shaders."
+                            : (fx.steamRunning ? "Close Steam, then USE IN STEAM." : "USE IN STEAM puts the deck in its launch options.")],
+                [fxActive, "Pick a look",
+                 fxActive ? "Active: " + fx.current.name + ". Change it any time below."
+                          : "Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…"],
+                [fxActive && fx.wrapped === true && fxReady, "Play and tweak",
+                 rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). Turn on Performance Mode once you like it."
+                    : "Launch the game; " + key + " turns the effects on/off to compare."]
+            ];
+        }
+        property int    fxStepsDone: fxSteps.filter(function (s) { return s[0]; }).length
         property var    fxImportList: []    // its presets, when there's more than one
         property var    fxScan: []          // fx scan: every game's best preset / compatibility
         property var    fxScanByKey: { var m = {}; fxScan.forEach(function (r) { m[r.key] = r; }); return m; }
@@ -986,7 +1011,13 @@ ShellRoot {
         Process {
             id: fxStatProc
             command: [win.scriptPath, "fx", "status", win.selGame]
-            stdout: StdioCollector { onStreamFinished: { try { win.fx = JSON.parse(text); } catch (e) { win.fx = {}; } } }
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.fx = JSON.parse(text); } catch (e) { win.fx = {}; }
+                    // a new game (or the tab just opened) starts at the top: loading content can leave it scrolled
+                    if (win.fxTopFor !== win.selGame) { win.fxTopFor = win.selGame; Qt.callLater(win.fxToTop); }
+                }
+            }
         }
         Process {
             id: fxPickProc
@@ -1035,6 +1066,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.fxPresets = JSON.parse(text); } catch (e) { win.fxPresets = []; }
                     win.fxMsg = win.fxPresets.length === 0 ? "This game has no presets yet." : win.fxPresets.length + " presets — newest first";
+                    Qt.callLater(win.fxToTop);
                 }
             }
         }
@@ -3362,6 +3394,79 @@ ShellRoot {
                                           : (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : "vkBasalt not installed"))
                                     color: (win.fxReshade ? (win.fx.reshade || {}).ready : win.fx.vkbasalt) ? pal.dim : pal.amber
                                     font.family: win.mono; font.pixelSize: 10
+                                }
+                            }
+
+                            // guided steps (live state of this game)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && !!win.fx.gpu
+                                implicitHeight: guideCol.implicitHeight + 16
+                                radius: 8; color: pal.card; border.width: 1
+                                border.color: win.fxStepsDone === 5 ? pal.ok : pal.accent
+                                ColumnLayout {
+                                    id: guideCol
+                                    anchors.fill: parent; anchors.margins: 8; spacing: 5
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        Text { text: "STEPS"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            font.family: win.mono; font.pixelSize: 10
+                                            color: win.fxStepsDone === 5 ? pal.ok : pal.dim
+                                            text: win.fxStepsDone === 5 ? "✓ all set — launch the game and press " + (win.fx.key || "Home").toUpperCase()
+                                                                        : win.fxStepsDone + " / 5 done"
+                                        }
+                                        Chip { label: win.fxGuideOpen ? "HIDE ▴" : "SHOW ▾"; onClicked: win.fxGuideOpen = !win.fxGuideOpen }
+                                    }
+                                    Repeater {
+                                        model: win.fxGuideOpen ? win.fxSteps : []
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            required property int index
+                                            Layout.fillWidth: true; spacing: 8
+                                            property bool next: !modelData[0] && win.fxSteps.slice(0, index).every(function (s) { return s[0]; })
+                                            Text {
+                                                text: modelData[0] ? "✓" : String(index + 1)
+                                                Layout.preferredWidth: 14; horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignTop
+                                                color: modelData[0] ? pal.ok : (next ? pal.amber : pal.dim)
+                                                font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true; spacing: 1
+                                                Text {
+                                                    text: modelData[1]; font.family: win.mono; font.pixelSize: 11; font.bold: next
+                                                    color: modelData[0] ? pal.dim : (next ? pal.text : pal.dim)
+                                                }
+                                                Text {
+                                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                                    text: modelData[2]; color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                                }
+                                            }
+                                            // the pending step's own button
+                                            MiniBtn {
+                                                visible: next && index === 0
+                                                width: 130; height: 28; label: "USE RESHADE ★"; on: !win.gameBusy
+                                                onClicked: win.fxApply("mode:reshade", "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
+                                            }
+                                            MiniBtn {
+                                                visible: next && index === 1
+                                                width: 90; height: 28; label: "INSTALL"; on: !win.gameBusy
+                                                onClicked: win.runGame(win.fxReshade ? ["fx", "reshade", "install"] : ["fx", "install"], "INSTALLING…")
+                                            }
+                                            MiniBtn {
+                                                visible: next && index === 2
+                                                width: 120; height: 28; label: "USE IN STEAM"
+                                                on: !win.gameBusy && !win.fx.steamRunning
+                                                onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
+                                            }
+                                            Chip {
+                                                visible: next && index === 3
+                                                label: "SEARCH NEXUS ↗"
+                                                onClicked: Qt.openUrlExternally("https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
