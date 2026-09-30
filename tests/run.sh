@@ -995,10 +995,10 @@ stub qs 'echo "qs $* pid=$CD_OVERLAY_PID ldp=${LD_LIBRARY_PATH:-none} pre=${LD_P
 touch "$T/overlay.qml"; export CONTROL_DECK_OVERLAY_QML="$T/overlay.qml"
 "$CD" gprofile set steam:300 overlay=maybe >/dev/null 2>&1; eq "overlay must be true/false" "$?" 2
 "$CD" gprofile set steam:300 overlay=true gamemode=false >/dev/null
-printf '#!/bin/sh\necho "pid=$$"\n' > "$T/fake/ogame"; chmod +x "$T/fake/ogame"
+printf '#!/bin/sh\necho "pid=$PPID"\n' > "$T/fake/ogame"; chmod +x "$T/fake/ogame"
 rm -f "$T/qs.log"; O="$(SteamAppId=300 "$CD" run "$T/fake/ogame")"
 for _ in $(seq 25); do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
-eq "overlay started with the game's own pid (the wrapper execs into the game)" "$(grep -o 'pid=[0-9]*' "$T/qs.log")" "$O"
+eq "overlay follows the wrapper, which lives exactly as long as the game (its parent)" "$(grep -o 'pid=[0-9]*' "$T/qs.log")" "$O"
 has "…from the overlay config" "$(cat "$T/qs.log")" "qs -p $T/overlay.qml"
 rm -f "$T/qs.log"; LD_LIBRARY_PATH=/steam/pinned_libs LD_PRELOAD=/steam/gameoverlayrenderer.so SteamAppId=300 "$CD" run "$T/fake/ogame" >/dev/null
 for _ in $(seq 25); do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
@@ -1319,11 +1319,41 @@ eq "short names don't match loosely" "$("$CD" fx status umbral:story | jq -r .on
 eq "ReShade next to the Umbral game's exe" "$(readlink "$UG/dxgi.dll")" "$HOME/.local/share/control-deck/reshade/bin/current/ReShade64.dll"
 "$CD" fx set umbral:story builtin:sharpen >/dev/null 2>&1
 "$CD" gprofile set umbral:story overlay=true >/dev/null
-eq "hook: DLL overrides + TEMPS for Umbral" "$("$CD" hook umbral:story)" '{"env":{"WINEDLLOVERRIDES":"d3dcompiler_47=n;dxgi=n,b"},"overlay":true}'
-eq "hook: nothing set → empty" "$("$CD" hook umbral:rpg)" '{"env":{},"overlay":false}'
+eq "hook: DLL overrides + TEMPS for Umbral" "$("$CD" hook umbral:story)" '{"env":{"WINEDLLOVERRIDES":"d3dcompiler_47=n;dxgi=n,b"},"overlay":true,"session":true}'
+eq "hook: nothing set → empty" "$("$CD" hook umbral:rpg)" '{"env":{},"overlay":false,"session":false}'
 "$CD" fx set umbral:story off >/dev/null
 yes "OFF cleans the Umbral game's folder" "[[ ! -e '$UG/dxgi.dll' ]]"
 unset CONTROL_DECK_UMBRAL_CONFIG CONTROL_DECK_AWACY_URL CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32
+section "CPU scheduler + game session + crash notice"
+stub scxctl 'echo "scxctl $*" >> "'"$T"'/scx.log"; case "$1" in start|switch) echo enabled > "'"$T"'/scxsys/kernel/sched_ext/state";; stop) echo disabled > "'"$T"'/scxsys/kernel/sched_ext/state";; esac'
+mkdir -p "$T/scxsys/kernel/sched_ext"; echo disabled > "$T/scxsys/kernel/sched_ext/state"
+export CONTROL_DECK_SYSFS="$T/scxsys" CONTROL_DECK_SCX_TOML="$T/scx_loader.toml"
+eq "status: nothing running, nothing set" "$("$CD" sched status | jq -c '[.running, .whilePlaying, .bootDefault]')" '[false,null,null]'
+"$CD" sched start lavd gaming >/dev/null; has "start → scxctl start" "$(cat "$T/scx.log")" "scxctl start --sched lavd --mode gaming"
+"$CD" sched start bpfland auto >/dev/null; has "already running → switch" "$(cat "$T/scx.log")" "scxctl switch --sched bpfland --mode auto"
+"$CD" sched stop >/dev/null; has "stop" "$(cat "$T/scx.log")" "scxctl stop"
+"$CD" sched start 'x;y' >/dev/null 2>&1; eq "bad name refused" "$?" 2
+"$CD" sched playing lavd:gaming >/dev/null
+eq "while-playing setting saved" "$("$CD" sched status | jq -r .whilePlaying)" "lavd:gaming"
+rm -f "$T/scx.log"; printf '#!/bin/sh\nexit 0\n' > "$T/fake/okgame"; chmod +x "$T/fake/okgame"
+SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+eq "game session: started lavd, stopped it at exit" "$(grep -o 'scxctl [a-z]*' "$T/scx.log" | paste -sd ,)" "scxctl start,scxctl stop"
+echo enabled > "$T/scxsys/kernel/sched_ext/state"; rm -f "$T/scx.log"
+SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+yes "a scheduler you already run is left alone" "[[ ! -s '$T/scx.log' ]]"
+echo disabled > "$T/scxsys/kernel/sched_ext/state"; "$CD" sched playing off >/dev/null
+rm -f "$T/scx.log"; SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+yes "setting off → scheduler untouched" "[[ ! -s '$T/scx.log' ]]"
+# exit code and crash notice
+stub notify-send 'echo "notify $*" >> "'"$T"'/notify.log"'
+printf '#!/bin/sh\nexit 3\n' > "$T/fake/badgame"; chmod +x "$T/fake/badgame"
+rm -f "$T/notify.log"; SteamAppId=100 "$CD" run "$T/fake/badgame" >/dev/null 2>&1; eq "the game's exit code is kept" "$?" 3
+has "crash notice with the game's name and code" "$(cat "$T/notify.log")" "closed with an error"
+has "…suggesting PROTON_LOG when there's no log" "$(cat "$T/notify.log")" "PROTON_LOG=1"
+rm -f "$T/notify.log"; printf '#!/bin/sh\nkill -TERM $$\n' > "$T/fake/killed"; chmod +x "$T/fake/killed"
+SteamAppId=100 "$CD" run "$T/fake/killed" >/dev/null 2>&1
+yes "killed by a signal (Steam's STOP) isn't a crash" "[[ ! -s '$T/notify.log' ]]"
+unset CONTROL_DECK_SYSFS CONTROL_DECK_SCX_TOML
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

@@ -537,6 +537,36 @@ reports:
   Forever → "World of Warcraft" (Warden) → red warning.
 - LIBRARY → an Umbral game has TEMPS and FX chips.
 
+### CPU scheduler (STATUS → CPU · MEMORY)
+- `scxctl` (scx-tools) talks to `scx_loader` over D-Bus. Starting, switching
+  and stopping are allowed by polkit action `org.scx.loader.manage-schedulers`
+  (`auth_admin_keep`: the password is asked, then kept for a while).
+  `scx_lavd` has a Gaming mode; modes here are Auto, Gaming, PowerSave,
+  LowLatency and Server.
+- **LAVD GAMING NOW / STOP**: `scxctl start|switch|stop`.
+- **WHILE PLAYING** (`sched playing lavd:gaming`): the wrapper (Steam) or
+  `control-deck session <pid> <key>` (Umbral) starts lavd Gaming when the game
+  starts, only if no sched-ext scheduler is running, and stops it when the
+  last such game ends. A scheduler you started yourself is never touched.
+- **AT BOOT**: `default_sched = "scx_lavd"` / `default_mode = "Gaming"` in
+  `/etc/scx_loader.toml`, written with pkexec. The file and keys were checked
+  in `scx_loader`'s strings and its shipped `/usr/share/scx_loader/config.toml`.
+  Needs a confirmation click.
+- **NO PASSWORD**: a polkit rule in `/etc/polkit-1/rules.d/49-control-deck-scx.rules`
+  allowing that action to this user in a local active session, so WHILE
+  PLAYING doesn't prompt at each launch. It relaxes a system policy, so it
+  needs a confirmation click, and it can be removed.
+
+### How a game ends (Steam wrapper)
+The wrapper now runs the game as its child instead of `exec`, forwarding
+TERM/INT/HUP, so it lives exactly as long as the game and knows its exit
+code. That code is kept as the wrapper's own. At the end the session is
+cleaned up (the scheduler stops if the deck started it). An exit code from 1
+to 127 raises a notification "<game> closed with an error": it points to
+`~/steam-<appid>.log` when PROTON_LOG wrote one during that run, and otherwise
+suggests adding PROTON_LOG=1 to the game's ENV. 128 and above (killed by a
+signal, e.g. Steam's STOP) isn't treated as a crash.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

@@ -461,6 +461,7 @@ ShellRoot {
             else { gPrefix.text = (gPrefix.text.trim() + " " + (x.token === "gamescope" ? "gamescope -f --" : x.token)).trim(); }
         }
         property var stHist: ({ gpuLoad: [], gpuTemp: [], cpuTemp: [], ram: [], vram: [] })
+        property string confirmSched: ""    // scheduler changes that touch /etc: second click
         function durationText(sec) {
             var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
             return h > 0 ? h + " h " + m + " min" : (m > 0 ? m + " min" : sec + " s");
@@ -4525,10 +4526,54 @@ ShellRoot {
                                 }
                                 StatRow { label: "KERNEL"; value: (win.gstat.system || {}).kernel || "?" }
                                 StatRow {
-                                    property var scx: (win.gstat.system || {}).scx || {}
+                                    property var sc: win.gstat.sched || {}
                                     label: "SCHEDULER"
-                                    value: scx.state === "enabled" && scx.ops ? "sched-ext: " + scx.ops : "kernel default (EEVDF)"
-                                    note: scx.state !== "enabled" && scx.loader ? "scx_loader is running without a scheduler — CachyOS Kernel Manager picks one" : ""
+                                    value: sc.running && sc.current ? "sched-ext: " + sc.current : "kernel default (EEVDF)"
+                                    note: !win.gstat.sched ? "scx-tools not installed"
+                                          : [sc.whilePlaying ? "while playing: " + sc.whilePlaying.replace(":", " · ") : "",
+                                             sc.bootDefault ? "at boot: " + sc.bootDefault + (sc.bootMode ? " · " + sc.bootMode : "") : ""]
+                                            .filter(function (x) { return x; }).join("  ·  ")
+                                }
+                                // lavd's Gaming mode: now, only while a game runs, or at every boot
+                                Flow {
+                                    Layout.fillWidth: true; spacing: 6
+                                    visible: !!win.gstat.sched
+                                    property var sc: win.gstat.sched || {}
+                                    Chip {
+                                        label: parent.sc.running ? "STOP" : "LAVD GAMING NOW"
+                                        on: !win.gameBusy
+                                        tip: parent.sc.running ? "Back to the kernel's scheduler (asks for your password)"
+                                             : "scx_lavd in Gaming mode until you stop it or reboot (asks for your password)"
+                                        onClicked: win.runGame(parent.sc.running ? ["sched", "stop"] : ["sched", "start", "lavd", "gaming"], "SCHEDULER…")
+                                    }
+                                    Chip {
+                                        label: "WHILE PLAYING"; tint: pal.ok; active: parent.sc.whilePlaying === "lavd:gaming"
+                                        on: !win.gameBusy
+                                        tip: "lavd Gaming starts with each game and stops when it closes (only if no scheduler was running)"
+                                        onClicked: win.runGame(["sched", "playing", parent.sc.whilePlaying ? "off" : "lavd:gaming"], "SAVING…")
+                                    }
+                                    Chip {
+                                        label: win.confirmSched === "boot" ? "CONFIRM?" : "AT BOOT"
+                                        tint: pal.ok; active: parent.sc.bootDefault === "lavd"
+                                        on: !win.gameBusy
+                                        tip: "Writes default_sched in /etc/scx_loader.toml (password): lavd Gaming from every boot"
+                                        onClicked: {
+                                            if (win.confirmSched !== "boot") { win.confirmSched = "boot"; return; }
+                                            win.confirmSched = "";
+                                            win.runGame(parent.sc.bootDefault === "lavd" ? ["sched", "boot", "none"] : ["sched", "boot", "lavd", "Gaming"], "SCHEDULER…");
+                                        }
+                                    }
+                                    Chip {
+                                        label: win.confirmSched === "nopass" ? "CONFIRM?" : "NO PASSWORD"
+                                        tint: pal.ok; active: parent.sc.noPassword === true
+                                        on: !win.gameBusy
+                                        tip: "A polkit rule so your user switches schedulers without a password (needed for WHILE PLAYING without prompts)"
+                                        onClicked: {
+                                            if (win.confirmSched !== "nopass") { win.confirmSched = "nopass"; return; }
+                                            win.confirmSched = "";
+                                            win.runGame(["sched", "nopassword", parent.sc.noPassword ? "off" : "on"], "SCHEDULER…");
+                                        }
+                                    }
                                 }
                                 StatRow {
                                     label: "MAX_MAP_COUNT"; value: String(win.gstat.max_map_count || "?")

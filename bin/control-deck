@@ -2931,9 +2931,24 @@ cmd_run() {
             else echo "  visual shaders on but no config at $fxc" >> "$rlog"; fi
         fi
     fi
-    # this process becomes the game (exec), so the overlay follows our pid
+    # the game runs as our child: we stay alive exactly as long as it (the
+    # overlay follows our pid) and see how it ended
     [[ "$(jq -r '.overlay' <<<"$p")" == true ]] && { cmd_overlay $$ || echo "  overlay not started" >> "$rlog"; }
-    exec "${pre[@]}" "$@" "${extra[@]}"
+    session_begin "$key" $$
+    local t0 child rc
+    t0="$(date +%s)"
+    "${pre[@]}" "$@" "${extra[@]}" &
+    child=$!
+    trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
+    wait "$child"; rc=$?
+    # a signal interrupts wait: wait again for the real exit code
+    while kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
+    trap - TERM INT HUP
+    session_end $$
+    printf '%s  %s  exit %s\n' "$(date '+%F %T')" "$key" "$rc" >> "$rlog"
+    # 128+n = killed by a signal (Steam's STOP, Ctrl+C): not a crash
+    if (( rc != 0 && rc < 128 )) && [[ "$key" == steam:* ]]; then game_crashed "$key" "$rc" "$t0"; fi
+    return "$rc"
 }
 
 # --- Steam launch options ------------------------------------------------------
@@ -3180,11 +3195,12 @@ cmd_gstatus() {
           --arg gov "$gov" --arg drv "$drv" --argjson mmc "${mmc:-0}" --argjson run "$run" \
           --argjson sys "$(gs_system)" --argjson gpu "$(gs_gpu)" --argjson displays "$(gs_displays)" --argjson tools "$(gs_tools)" \
           --argjson library "$(gs_library)" \
+          --argjson sched "$(if have scxctl; then cmd_sched_status; else echo null; fi)" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
         '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
           max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run,
-          system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library}'
+          system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library, sched:$sched}'
 }
 
 # join the gamemode group: lets gamemode switch the CPU governor without a
@@ -3962,6 +3978,8 @@ Gaming
   fx link add|note|rm|get steam:<appid> <url> [label|notes]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
+  sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
+  session <pid> <key>           For launchers like Umbral: TEMPS + scheduler while <pid> runs
   hook <umbral:id>              For Umbral: env (ReShade/vkBasalt) + TEMPS for a game it launches (JSON)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
   proton install [tag]          Install GE-Proton (latest by default; checksum-verified) into Steam's compatibilitytools.d
@@ -4882,7 +4900,9 @@ cmd_hook() {
             [[ -s "$fxc" ]] && env="$(jq -nc --arg c "$fxc" '{ENABLE_VKBASALT:"1", VKBASALT_CONFIG_FILE:$c}')"
         fi
     fi
-    jq -nc --argjson env "$env" --argjson overlay "$(jq '.overlay == true' <<<"$p")" '{env:$env, overlay:$overlay}'
+    jq -nc --argjson env "$env" --argjson overlay "$(jq '.overlay == true' <<<"$p")" \
+        --argjson session "$({ [[ "$(jq -r .overlay <<<"$p")" == true ]] || [[ -n "$(sched_setting whilePlaying)" ]]; } && echo true || echo false)" \
+        '{env:$env, overlay:$overlay, session:$session}'
 }
 
 reshade_state() { local f; f="$(fx_key_dir "$1")/reshade.json"; [[ -s "$f" ]] && cat "$f"; }
@@ -5458,6 +5478,126 @@ cmd_proton_install() {
     log "  Older GE builds no game uses show up in SYSTEM → CLEAN → Unused Proton versions."
 }
 
+# --- CPU scheduler (sched-ext via scx_loader) ------------------------------------
+# scxctl talks to scx_loader over D-Bus; polkit (org.scx.loader.manage-schedulers,
+# auth_admin_keep) asks for the password. The boot default lives in
+# /etc/scx_loader.toml (default_sched = "scx_<name>", default_mode = "<Mode>").
+SCHED_SETTINGS="$GAMING_DIR/sched.json"
+SCX_TOML="${CONTROL_DECK_SCX_TOML:-/etc/scx_loader.toml}"
+SCX_POLKIT_RULE="${CONTROL_DECK_SCX_RULE:-/etc/polkit-1/rules.d/49-control-deck-scx.rules}"
+sched_setting() { jq -r --arg k "$1" '.[$k] // empty' "$SCHED_SETTINGS" 2>/dev/null; }
+sched_running() { [[ "$(cat "$SYSFS/kernel/sched_ext/state" 2>/dev/null)" == enabled ]]; }
+
+cmd_sched_status() {
+    local ops def mode
+    ops="$(cat "$SYSFS/kernel/sched_ext/root/ops" 2>/dev/null)"
+    def="$(awk -F'"' '/^[[:space:]]*default_sched[[:space:]]*=/ { print $2 }' "$SCX_TOML" /etc/scx_loader/config.toml 2>/dev/null | head -1)"
+    mode="$(awk -F'"' '/^[[:space:]]*default_mode[[:space:]]*=/ { print $2 }' "$SCX_TOML" /etc/scx_loader/config.toml 2>/dev/null | head -1)"
+    jq -nc --argjson have "$(have scxctl && echo true || echo false)" \
+        --argjson loader "$(systemctl is-active --quiet scx_loader 2>/dev/null && echo true || echo false)" \
+        --argjson running "$(sched_running && echo true || echo false)" --arg ops "$ops" \
+        --arg def "$def" --arg mode "$mode" --arg playing "$(sched_setting whilePlaying)" \
+        --argjson rule "$([[ -f "$SCX_POLKIT_RULE" ]] && echo true || echo false)" \
+        '{scxctl:$have, loader:$loader, running:$running, current:(if $ops == "" then null else ($ops | sub("_[0-9].*$"; "")) end),
+          bootDefault:(if $def == "" then null else ($def | sub("^scx_"; "")) end), bootMode:(if $mode == "" then null else $mode end),
+          whilePlaying:(if $playing == "" then null else $playing end), noPassword:$rule}'
+}
+
+# sched start <name> [mode] | stop | playing <name:mode|off> | boot <name|none> [mode] | nopassword on|off
+cmd_sched() {
+    local sub="${1:-}"; shift 2>/dev/null
+    have scxctl || { err "scxctl isn't installed (scx-tools)"; return 4; }
+    case "$sub" in
+        status) cmd_sched_status ;;
+        start)
+            local s="${1:-lavd}" m="${2:-gaming}"
+            [[ "$s" =~ ^[a-z0-9_]+$ && "$m" =~ ^[a-z]+$ ]] || { err "bad scheduler or mode"; return 2; }
+            if sched_running; then scxctl switch --sched "$s" --mode "$m" || { err "scxctl switch failed (cancelled?)"; return 4; }
+            else scxctl start --sched "$s" --mode "$m" || { err "scxctl start failed (cancelled?)"; return 4; }; fi
+            log "✔ scx_$s running in $m mode." ;;
+        stop)
+            sched_running || { log "No sched-ext scheduler is running."; return 0; }
+            scxctl stop || { err "scxctl stop failed (cancelled?)"; return 4; }
+            log "✔ Back to the kernel's default scheduler." ;;
+        playing)
+            local v="${1:-}"; mkdir -p "$GAMING_DIR"
+            [[ "$v" == off || "$v" =~ ^[a-z0-9_]+:[a-z]+$ ]] || { err "use: sched playing <name:mode|off>"; return 2; }
+            jq -n --arg v "$([[ "$v" == off ]] || echo "$v")" '{whilePlaying:$v}' > "$SCHED_SETTINGS"
+            if [[ "$v" == off ]]; then log "✔ While playing: the scheduler is left alone."
+            else log "✔ While playing: scx_${v%%:*} (${v#*:} mode), stopped when the game ends."; fi ;;
+        boot)
+            local s="${1:-}" m="${2:-Gaming}"
+            [[ "$s" == none || "$s" =~ ^[a-z0-9_]+$ ]] && [[ "$m" =~ ^[A-Za-z]+$ ]] || { err "use: sched boot <name|none> [Mode]"; return 2; }
+            log "→ pkexec: default scheduler in $SCX_TOML"
+            # shellcheck disable=SC2016
+            pkexec sh -c 'f="$1"; s="$2"; m="$3"; touch "$f"
+                sed -i "/^[[:space:]]*#\{0,1\}[[:space:]]*default_sched[[:space:]]*=/d; /^[[:space:]]*#\{0,1\}[[:space:]]*default_mode[[:space:]]*=/d" "$f"
+                if [ "$s" != none ]; then printf "default_sched = \"scx_%s\"\ndefault_mode = \"%s\"\n" "$s" "$m" | cat - "$f" > "$f.new" && mv "$f.new" "$f"; fi' \
+                sh "$SCX_TOML" "$s" "$m" || { err "couldn't write $SCX_TOML"; return 4; }
+            log "✔ At boot: ${s/none/kernel default}${s:+ }$([[ "$s" != none ]] && echo "($m)")" ;;
+        nopassword)
+            case "${1:-}" in
+                on)
+                    log "→ pkexec: polkit rule so $(id -un) can switch schedulers without a password"
+                    # shellcheck disable=SC2016
+                    pkexec sh -c 'printf "%s\n" "// Control Deck: let $2 switch sched-ext schedulers (scxctl) without a password" \
+                        "polkit.addRule(function (action, subject) {" \
+                        "    if (action.id == \"org.scx.loader.manage-schedulers\" && subject.user == \"$2\" && subject.local && subject.active)" \
+                        "        return polkit.Result.YES;" "});" > "$1" && chmod 644 "$1"' sh "$SCX_POLKIT_RULE" "$(id -un)" \
+                        || { err "couldn't write the polkit rule"; return 4; }
+                    log "✔ No password needed to switch schedulers." ;;
+                off)
+                    [[ -f "$SCX_POLKIT_RULE" ]] || { log "No rule installed."; return 0; }
+                    pkexec rm -f "$SCX_POLKIT_RULE" || { err "couldn't remove the rule"; return 4; }
+                    log "✔ Rule removed: switching schedulers asks for the password again." ;;
+                *) err "use: sched nopassword on|off"; return 2 ;;
+            esac ;;
+        *) err "use: sched status | start <name> [mode] | stop | playing <name:mode|off> | boot <name|none> [Mode] | nopassword on|off"; return 2 ;;
+    esac
+}
+
+# --- game session: things that start with a game and end with it ---------------
+# The scheduler "while playing" only if none runs yet (we stop what we started;
+# a marker per game handles two games at once).
+session_begin() {   # key pid
+    local want; want="$(sched_setting whilePlaying)"
+    [[ -n "$want" ]] && have scxctl || return 0
+    mkdir -p "$STATE_DIR/sessions"
+    if ! sched_running; then
+        scxctl start --sched "${want%%:*}" --mode "${want#*:}" >/dev/null 2>&1 && touch "$STATE_DIR/sessions/sched-owner"
+    fi
+    [[ -f "$STATE_DIR/sessions/sched-owner" ]] && echo "$1" > "$STATE_DIR/sessions/$2"
+}
+session_end() {   # pid
+    rm -f "$STATE_DIR/sessions/$1"
+    [[ -f "$STATE_DIR/sessions/sched-owner" ]] || return 0
+    compgen -G "$STATE_DIR/sessions/[0-9]*" >/dev/null && return 0     # another game still running
+    rm -f "$STATE_DIR/sessions/sched-owner"
+    scxctl stop >/dev/null 2>&1 || true
+}
+
+# session <pid> <key> — for launchers that start the game themselves (Umbral):
+# overlay if the profile asks, scheduler while playing, cleaned up at exit
+cmd_session() {
+    local pid="$1" key="$2"
+    [[ "$pid" =~ ^[0-9]+$ ]] && valid_game_key "$key" || { err "use: session <pid> <key>"; return 2; }
+    [[ "$(profile_get "$key" | jq -r .overlay)" == true ]] && cmd_overlay "$pid"
+    [[ -n "$(sched_setting whilePlaying)" ]] || return 0
+    session_begin "$key" "$pid"
+    ( while [[ -d "${PROC_ROOT:-/proc}/$pid" ]]; do sleep 5; done; session_end "$pid" ) </dev/null >/dev/null 2>&1 &
+    disown
+}
+
+# a game that ended with an error: notify, with its Proton log when there is one
+game_crashed() {   # key rc started(epoch)
+    local key="$1" rc="$2" t0="$3" name log="" id="${1#steam:}"
+    name="$(steam_games | awk -v i="$id" 'NR % 5 == 1 { x = $0 } NR % 5 == 2 && x == i { print; exit }')"
+    [[ -f "$HOME/steam-$id.log" && "$(stat -c %Y "$HOME/steam-$id.log")" -ge "$t0" ]] && log="$HOME/steam-$id.log"
+    notify "${name:-$key} closed with an error ✗" \
+        "Exit code $rc. $([[ -n "$log" ]] && echo "Proton log: ${log/#$HOME/\~}" || echo "For a log next time, add PROTON_LOG=1 to its ENV (LIBRARY).")"
+    history_add "game crashed" gaming "${name:-$key} (code $rc)" "$rc"
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5539,6 +5679,8 @@ main() {
         health)      cmd_health ;;
         temps)       cmd_temps "$1" ;;
         hook)        need "$1" "missing game key"; cmd_hook "$1" ;;
+        session)     cmd_session "$1" "$2" ;;
+        sched)       cmd_sched "$@" ;;
         fx)          cmd_fx "$@" ;;
         overlay)     cmd_overlay "$1" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
