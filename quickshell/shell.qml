@@ -416,6 +416,11 @@ ShellRoot {
         function runBench(v) { pendingRun = v; saveBench([]); }
         function pct(v) { return v === undefined || v === null ? "" : (v > 0 ? "+" : "") + v + "%"; }
         function dateOfEpoch(e) { return e ? new Date(e * 1000).toISOString().substring(0, 10) : "?"; }
+        property bool pendingPlay: false
+        function playGame() {
+            if (selGameSource === "steam") { pendingPlay = true; saveGameProfile(); }
+            else runGame(["gplay", selGame], "LAUNCHING…");
+        }
         function saveGameProfile() {
             runGame(["gprofile", "set", selGame,
                      "gamemode=" + (gp.gamemode === true), "mangohud=" + (gp.mangohud === true),
@@ -874,6 +879,11 @@ ShellRoot {
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
+                // PLAY on a Steam game saves the editor first, then launches
+                if (win.gameArgs[0] === "gprofile" && win.gameArgs[1] === "set" && win.pendingPlay) {
+                    win.pendingPlay = false;
+                    if (c === 0) { Qt.callLater(function () { win.runGame(["gplay", win.selGame], "LAUNCHING…"); }); return; }
+                }
                 if (win.gameArgs[0] === "bench" && win.gameArgs[1] === "set" && win.pendingRun !== "") {
                     var v = win.pendingRun; win.pendingRun = "";
                     // started after this handler returns (restarting a Process from its own onExited is unsafe)
@@ -2963,7 +2973,7 @@ ShellRoot {
                         MiniBtn {
                             width: 76; height: 32; label: "▶ PLAY"; tint: pal.ok
                             on: !win.gameBusy
-                            onClicked: win.runGame(["gplay", win.selGame], "LAUNCHING…")
+                            onClicked: win.playGame()
                         }
                     }
                 }
