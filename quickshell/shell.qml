@@ -3368,6 +3368,26 @@ ShellRoot {
                                             text: "✓ " + (win.fxRsGame ? win.fxRsGame.api : "") + ".dll + d3dcompiler_47 linked in the game folder · OFF removes them"
                                         }
                                     }
+                                    // the in-game key (ReShade's menu / vkBasalt on-off), one for all games
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "MENU KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: [["Home", "HOME", ""], ["Insert", "INSERT", ""], ["F10", "F10", ""], ["F11", "F11", ""],
+                                                    ["F12", "F12", "Steam takes screenshots with F12 by default"]]
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData[1]; active: (win.fx.key || "Home") === modelData[0]
+                                                on: !win.gameBusy; tip: modelData[2]
+                                                onClicked: win.runGame(["fx", "key", modelData[0]], "SETTING KEY…")
+                                            }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: win.fxReshade ? "opens ReShade's menu in game" : "turns the effects on/off in game"
+                                        }
+                                    }
                                     // must launch through the wrapper
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 8
@@ -3503,8 +3523,8 @@ ShellRoot {
                                     }
                                     Text {
                                         visible: win.fxActive
-                                        text: win.fxReshade ? "In game: HOME opens ReShade's menu — tweak values, switch effects on/off; changes are saved to this game's preset."
-                                                            : "In game: HOME turns the effects on/off to compare."
+                                        text: win.fxReshade ? "In game: " + (win.fx.key || "Home").toUpperCase() + " opens ReShade's menu — tweak values, switch effects on/off; changes are saved to this game's preset."
+                                                            : "In game: " + (win.fx.key || "Home").toUpperCase() + " turns the effects on/off to compare."
                                         color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                     }
                                 }

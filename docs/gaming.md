@@ -352,7 +352,8 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   `fx search <name>`, `fx presets <id>`,
   `fx set <key> builtin:<look>|sfx:<id>|off`,
   `fx mode <key> reshade [exe] [dxgi|d3d9|opengl32] | vkbasalt`,
-  `fx exes <key>`, `fx reshade install | off <key>`.
+  `fx exes <key>`, `fx reshade install | off <key>`, `fx key <Home|Insert|F10|F11|F12>`.
+- **In-game key** (FX → MENU KEY), one for all games: opens ReShade's menu (`[INPUT] KeyOverlay`, Windows VK code: Home 36, Insert 45, F10 121, F11 122, F12 123) and toggles vkBasalt (`toggleKey`, X11 key name). A change is pushed to every game already set up. F12 is flagged because Steam takes screenshots with it.
 
 #### ReShade under Proton (the DLL route)
 Studied from the community's reference script

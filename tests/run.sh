@@ -1147,6 +1147,13 @@ RP="$HOME/.local/share/control-deck/gaming/fx/steam_5000"
 has "preset used as it is (depth effects too)" "$(cat "$RP/ReShadePreset.ini")" "Techniques=Vibrance@Vibrance.fx,DOF@DOF.fx"
 eq "report: only the missing shader is flagged" "$(jq -c '[.mode, .effects, [.skipped[].effect]]' "$RP/report.json")" '["reshade",["DOF.fx","Vibrance.fx"],["Missing"]]'
 eq "wrapper: DLL overrides, no vkBasalt" "$(WINEDLLOVERRIDES=foo=b SteamAppId=5000 "$CD" run "$T/fake/rsgame")" "o=foo=b;d3dcompiler_47=n;dxgi=n,b vkb="
+has "menu key defaults to HOME (VK 36)" "$(cat "$W/ReShade.ini")" "KeyOverlay=36,0,0,0"
+"$CD" fx key F13 >/dev/null 2>&1; eq "unknown key refused" "$?" 2
+"$CD" fx key F11 >/dev/null
+has "key change reaches games already set up (VK 122)" "$(cat "$W/ReShade.ini")" "KeyOverlay=122,0,0,0"
+"$CD" fx mode steam:4002 vkbasalt >/dev/null 2>&1; "$CD" fx set steam:4002 builtin:sharpen >/dev/null 2>&1
+eq "…and vkBasalt configs" "$(grep '^toggleKey' "$HOME/.local/share/control-deck/gaming/fx/steam_4002/vkBasalt.conf")" "toggleKey = F11"
+eq "status reports it" "$("$CD" fx status | jq -r .key)" F11
 "$CD" fx mode steam:5000 reshade "$W/Old9.exe" d3d9 >/dev/null 2>&1
 eq "switching exe/API moves the links" "$(readlink "$W/d3d9.dll") $([[ -e "$W/dxgi.dll" ]] && echo left || echo gone)" "$FXB/current/ReShade32.dll gone"
 eq "32-bit d3dcompiler for a 32-bit exe" "$(readlink "$W/d3dcompiler_47.dll")" "$FXB/d3dcompiler_47.dll.32"

@@ -3907,7 +3907,7 @@ Gaming
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
-  fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id>
+  fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id> | key <Home|Insert|F10|F11|F12>
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
   health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
@@ -4185,6 +4185,29 @@ FX_UA="control-deck (+https://github.com/madkyp/control-deck)"
 
 fx_key_dir() { echo "$FX_PROFILES/${1//:/_}"; }
 
+# the key that opens ReShade's menu / toggles vkBasalt (one for every game)
+FX_SETTINGS="$GAMING_DIR/fx.json"
+fx_key() { local k; k="$(jq -r '.key // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-Home}"; }
+fx_vk() {   # key name → Windows virtual-key code (ReShade.ini)
+    case "$1" in Home) echo 36 ;; Insert) echo 45 ;; F10) echo 121 ;; F11) echo 122 ;; F12) echo 123 ;; *) echo 36 ;; esac
+}
+# fx key <Home|Insert|F10|F11|F12> — saved and pushed to every game already set up
+cmd_fx_key() {
+    local k="$1" f st dir
+    [[ "$k" =~ ^(Home|Insert|F10|F11|F12)$ ]] || { err "use: fx key Home|Insert|F10|F11|F12"; return 2; }
+    mkdir -p "$GAMING_DIR"
+    jq -n --arg k "$k" '{key:$k}' > "$FX_SETTINGS"
+    for f in "$FX_PROFILES"/*/vkBasalt.conf; do
+        [[ -f "$f" ]] && sed -i "s/^toggleKey = .*/toggleKey = $k/" "$f"
+    done
+    for f in "$FX_PROFILES"/*/reshade.json; do
+        [[ -f "$f" ]] || continue
+        dir="$(jq -r .dir "$f")"
+        [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyOverlay "$(fx_vk "$k"),0,0,0"
+    done
+    log "✔ In-game shader key: $k"
+}
+
 # cached download: fx_cached <file> <max age s> <url>  (stale copy beats nothing)
 fx_cached() {
     local f="$FX_CACHE/$1" age="$2" url="$3" tmp
@@ -4300,14 +4323,14 @@ cmd_fx_status() {
     jq -nc --arg v64 "$v64" --arg v32 "$v32" --argjson n "$n" --arg vendor "$(gpu_vendor)" --arg gpu "$(gpu_name)" \
         --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
         --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" \
-        --argjson steamRunning "$(steam_running && echo true || echo false)" \
+        --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" \
         --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
         --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
         --arg chaotic "$(grep -qE '^[[:space:]]*\[chaotic-aur\]' "$PACMAN_CONF" 2>/dev/null && echo 1 || echo 0)" '{
         vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
         chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
         installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end),
-        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning,
+        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key,
         reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
                  update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
         recommended:(($exes[0].api // "unknown") as $a
@@ -4417,7 +4440,7 @@ fx_convert() {   # preset.ini out.conf → report JSON on stdout
         echo "reshadeTexturePath = \"$FX_DIR/Textures\""
         echo "reshadeIncludePath = \"$FX_DIR/Shaders\""
         echo "depthCapture = off"
-        echo "toggleKey = Home"
+        echo "toggleKey = $(fx_key)"
         echo "enableOnLaunch = True"
         printf '%s' "$opts"
     } > "$out"
@@ -4434,7 +4457,7 @@ fx_builtin() {   # name out.conf
         clarity)    body=$'effects = dls\ndlsSharpness = 0.5\ndlsDenoise = 0.17' ;;
         *) return 2 ;;
     esac
-    printf '# written by Control Deck (built-in look: %s)\n%s\ntoggleKey = Home\nenableOnLaunch = True\n' "$1" "$body" > "$2"
+    printf '# written by Control Deck (built-in look: %s)\n%s\ntoggleKey = %s\nenableOnLaunch = True\n' "$1" "$body" "$(fx_key)" > "$2"
 }
 
 # fx set <key> builtin:<name> | sfx:<preset id> | off — applied through the
@@ -4751,8 +4774,9 @@ cmd_reshade_on() {
     ini="$dir/ReShade.ini"; local created=false
     if [[ ! -f "$ini" ]]; then
         created=true
-        printf '[GENERAL]\n[INPUT]\nKeyOverlay=36,0,0,0\n[OVERLAY]\nTutorialProgress=4\n' > "$ini"
+        printf '[GENERAL]\n[INPUT]\n[OVERLAY]\nTutorialProgress=4\n' > "$ini"
     fi
+    ini_set "$ini" INPUT KeyOverlay "$(fx_vk "$(fx_key)"),0,0,0"
     ini_set "$ini" GENERAL EffectSearchPaths "$(winpath "$FX_DIR/Shaders")\\**"
     ini_set "$ini" GENERAL TextureSearchPaths "$(winpath "$FX_DIR/Textures")\\**"
     ini_set "$ini" GENERAL PresetPath "$(winpath "$d/ReShadePreset.ini")"
@@ -4762,7 +4786,7 @@ cmd_reshade_on() {
         '{exe:$exe, dir:$dir, api:$api, arch:$arch, d3dcompiler:$d3dc, iniCreated:$created, version:$v}' > "$d/reshade.json"
     profile_write "$key" '{"fx":true,"fxMode":"reshade"}'
     history_add "reshade on" gaming "$key $api" 0
-    log "✔ ReShade on: ${exe#"$(dirname "$dir")"/} ($arch-bit, $api.dll). In game, HOME opens its menu."
+    log "✔ ReShade on: ${exe#"$(dirname "$dir")"/} ($arch-bit, $api.dll). In game, $(fx_key) opens its menu."
 }
 
 # fx reshade off <key> — remove only what we put there
@@ -4825,12 +4849,13 @@ cmd_fx() {
         set)      cmd_fx_set "${1:-}" "${2:-}" ;;
         mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
         exes)     cmd_fx_exes "${1:-}" ;;
+        key)      cmd_fx_key "${1:-}" ;;
         reshade)  case "${1:-}" in
                       install) cmd_reshade_install ;;
                       off)     cmd_reshade_off "${2:-}" ;;
                       *) err "use: fx reshade install | off <key>"; return 2 ;;
                   esac ;;
-        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | reshade install|off"; return 2 ;;
+        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | key <name> | reshade install|off"; return 2 ;;
     esac
 }
 
