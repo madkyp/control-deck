@@ -2773,7 +2773,7 @@ control_deck_bin() {
 # --- profiles ----------------------------------------------------------------
 GAMING_DIR="$STATE_DIR/gaming"
 PROFILES="$GAMING_DIR/profiles.json"
-DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
+DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"overlay":false,"ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
 
 profiles_json() { if [[ -s "$PROFILES" ]]; then cat "$PROFILES"; else echo '{}'; fi; }
 
@@ -2806,7 +2806,7 @@ cmd_gprofile() {
             for kv in "$@"; do
                 f="${kv%%=*}"; v="${kv#*=}"
                 case "$f" in
-                    gamemode|mangohud|ionice)
+                    gamemode|mangohud|overlay|ionice)
                         [[ "$v" == true || "$v" == false ]] || { err "$f must be true or false"; return 2; }
                         patch="$(jq -c --arg f "$f" --argjson v "$v" '.[$f] = $v' <<<"$patch")" ;;
                     nice)
@@ -2875,6 +2875,8 @@ cmd_run() {
     [[ "$(jq -r '.mangohud' <<<"$p")" == true ]] && { have mangohud && pre+=(mangohud) || echo "  mangohud not installed" >> "$rlog"; }
     read -ra extra <<<"$(jq -r '.prefix' <<<"$p")"; pre+=("${extra[@]}")
     read -ra extra <<<"$(jq -r '.args' <<<"$p")"
+    # this process becomes the game (exec), so the overlay follows our pid
+    [[ "$(jq -r '.overlay' <<<"$p")" == true ]] && { cmd_overlay $$ || echo "  overlay not started" >> "$rlog"; }
     exec "${pre[@]}" "$@" "${extra[@]}"
 }
 
@@ -3875,7 +3877,7 @@ Maintain
 Gaming
   games                         Installed games (Steam) with profile/launch/Proton state (JSON)
   gstatus                       gamemode, CPU governor, vm.max_map_count, running games (JSON)
-  gprofile get|set|reset <key>  Per-game profile: gamemode mangohud ionice nice env prefix args
+  gprofile get|set|reset <key>  Per-game profile: gamemode mangohud overlay ionice nice env prefix args
   run [--profile <key>] -- cmd  Launch a game with its profile (Steam: "control-deck run %command%")
   steamwrap <appid> on|off      Launch a Steam game through Control Deck (Steam must be closed)
   compattools                   Proton versions Steam can use (JSON)
@@ -3891,6 +3893,7 @@ Gaming
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
+  temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
   health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
 EOF
 }
@@ -4090,6 +4093,61 @@ cmd_health() {
     }'
 }
 
+# --- temperature overlay ------------------------------------------------------
+# A one-line CPU/GPU temperature readout drawn on a Wayland overlay layer (top
+# right, above fullscreen games, click-through). `run` starts it for games whose
+# profile has overlay on; it closes itself when the game's process ends.
+OVERLAY_QML="${CONTROL_DECK_OVERLAY_QML:-$HOME/.config/quickshell/control-deck-overlay/shell.qml}"
+
+# first temperature (°C, integer) of a hwmon chip whose label matches, else temp1
+hwmon_temp() {   # name regex · label regex
+    local h t l
+    for h in "$SYSFS"/class/hwmon/hwmon*; do
+        [[ "$(cat "$h/name" 2>/dev/null)" =~ ^($1)$ ]] || continue
+        for t in "$h"/temp*_input; do
+            [[ -f "$t" ]] || continue
+            l="$(cat "${t%_input}_label" 2>/dev/null)"
+            [[ -z "$2" || "$l" =~ ^($2)$ ]] || continue
+            echo $(( $(cat "$t") / 1000 )); return 0
+        done
+        [[ -f "$h/temp1_input" ]] && { echo $(( $(cat "$h/temp1_input") / 1000 )); return 0; }
+    done
+    return 1
+}
+
+# temps [pid] → CPU=<°C> GPU=<°C> (empty when unknown) and, with a pid, ALIVE=0|1
+cmd_temps() {
+    local cpu gpu=""
+    # Intel package, AMD Tctl/Tdie (k10temp / zenpower), else ACPI
+    cpu="$(hwmon_temp coretemp 'Package id 0' || hwmon_temp 'k10temp|zenpower' 'Tctl|Tdie' \
+           || hwmon_temp 'cpu_thermal|acpitz' '')"
+    case "$(gpu_vendor)" in
+        nvidia) have nvidia-smi && gpu="$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc 0-9)" ;;
+        amd)    gpu="$(hwmon_temp amdgpu edge)" ;;
+        intel)  gpu="$(hwmon_temp 'i915|xe' '')" ;;
+    esac
+    printf 'CPU=%s\nGPU=%s\n' "$cpu" "$gpu"
+    [[ -n "${1:-}" ]] && printf 'ALIVE=%s\n' "$([[ -d "${PROC_ROOT:-/proc}/$1" ]] && echo 1 || echo 0)"
+    return 0
+}
+
+# overlay [pid] — show the readout until <pid> exits (no pid: a 10 s preview)
+cmd_overlay() {
+    local pid="${1:-}"
+    [[ -f "$OVERLAY_QML" ]] || { err "overlay not installed ($OVERLAY_QML): run install.sh"; return 4; }
+    have qs || { err "quickshell (qs) is needed for the overlay"; return 4; }
+    if [[ -z "$pid" ]]; then sleep 10 & pid=$!; disown; fi
+    [[ "$pid" =~ ^[0-9]+$ ]] || { err "use: overlay [pid]"; return 2; }
+    # Steam may start games without the session's Wayland socket in the environment
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+        local s; for s in "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/wayland-[0-9]; do
+            [[ -S "$s" ]] && { export WAYLAND_DISPLAY="${s##*/}"; break; }
+        done
+    fi
+    CD_OVERLAY_PID="$pid" CD_OVERLAY_BIN="$(readlink -f "${BASH_SOURCE[0]}")" \
+        setsid -f qs -p "$OVERLAY_QML" >/dev/null 2>&1 </dev/null
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -4167,6 +4225,8 @@ main() {
         prefixes)    cmd_prefixes ;;
         prefix)      cmd_prefix "$@" ;;
         health)      cmd_health ;;
+        temps)       cmd_temps "$1" ;;
+        overlay)     cmd_overlay "$1" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

@@ -414,7 +414,7 @@ ShellRoot {
         function saveGameProfile() {
             runGame(["gprofile", "set", selGame,
                      "gamemode=" + (gp.gamemode === true), "mangohud=" + (gp.mangohud === true),
-                     "ionice=" + (gp.ionice === true), "nice=" + (gp.nice || 0),
+                     "overlay=" + (gp.overlay === true), "ionice=" + (gp.ionice === true), "nice=" + (gp.nice || 0),
                      "env=" + gEnv.text.trim(), "prefix=" + gPrefix.text.trim(), "args=" + gArgs.text.trim()],
                     "SAVING…");
         }
@@ -2800,6 +2800,8 @@ ShellRoot {
                                 Layout.fillWidth: true; spacing: 6
                                 Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
                                 Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
+                                Chip { label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; onClicked: win.gpSet("overlay", !win.gp.overlay)
+                                       tip: "A CPU · GPU temperature line at the top right while the game runs (click-through, closes with the game)" }
                                 Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
                                        tip: "ionice best-effort level 0 for the game" }
                                 Item { Layout.fillWidth: true }

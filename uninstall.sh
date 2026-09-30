@@ -9,6 +9,8 @@ fi
 
 rm -f "$HOME/.local/bin/control-deck"
 rm -f "$HOME/.config/quickshell/control-deck/shell.qml"
+rm -f "$HOME/.config/quickshell/control-deck-overlay/shell.qml"
+rmdir "$HOME/.config/quickshell/control-deck-overlay" 2>/dev/null || true
 rmdir "$HOME/.config/quickshell/control-deck" 2>/dev/null || true
 rm -f "$HOME/.local/share/applications/control-deck.desktop"
 rm -f "$HOME/.local/share/icons/hicolor/scalable/apps/control-deck.svg"

@@ -267,6 +267,27 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   is listed; GE-Proton11-7 is kept because Umbral's "GE-Proton" prefixes use
   it. Faugus/Lutris/Heroic runner references aren't read (none installed).
 
+### Temperature overlay (from 2.12) — `LIBRARY → TEMPS`
+- Asked for instead of the full session monitor: one line, CPU and GPU °C, top
+  right, over the game. Built from scratch (not MangoHud): `quickshell/overlay.qml`,
+  installed as the `control-deck-overlay` Quickshell config, a `PanelWindow` on
+  the `WlrLayer.Overlay` layer (above fullscreen windows on Hyprland), empty
+  input mask (clicks go to the game), no keyboard focus, on the monitor focused
+  when the game starts.
+- `control-deck run` starts it when the profile has `overlay: true`, passing its
+  own pid: the wrapper then `exec`s into the game command, so that pid lives
+  until the game ends (for Proton games it's Steam's reaper/Proton chain). The
+  overlay polls `control-deck temps <pid>` every 2 s and quits on `ALIVE=0`.
+- Sensors: CPU = hwmon `coretemp` "Package id 0" (Intel), `k10temp`/`zenpower`
+  Tctl/Tdie (AMD), else ACPI; GPU = `nvidia-smi` (17 ms here), `amdgpu` hwmon
+  "edge", `i915`/`xe` hwmon. Colours: amber ≥ 75 °C, red ≥ 85 °C.
+- If Steam's environment has no `WAYLAND_DISPLAY`, the first
+  `$XDG_RUNTIME_DIR/wayland-N` socket is used.
+- Verified here: preview (`control-deck overlay`, 10 s) shows `CPU 54° · GPU 51°`
+  at the top right of DP-3 and closes itself. Only Steam games (through the
+  wrapper) get it; Umbral games don't go through the wrapper.
+- CLI: `temps [pid]`, `overlay [pid]`.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

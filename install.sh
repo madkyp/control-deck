@@ -101,6 +101,7 @@ echo "→ version   ${commit:0:7}"
 
 # the GUI goes last: a running deck reloads as soon as shell.qml changes
 echo "→ GUI       ~/.config/quickshell/control-deck/shell.qml"
+install -Dm644 "$SRC/quickshell/overlay.qml" "$HOME/.config/quickshell/control-deck-overlay/shell.qml"
 install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/control-deck/shell.qml"
 
 echo

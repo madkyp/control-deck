@@ -965,6 +965,35 @@ ptrun clean protons >/dev/null 2>&1
 eq "clean removes exactly the unused ones" "$(ls "$PT/compatibilitytools.d" | paste -sd ,)" "Busy One,Mapped Dir,OldPfx"
 eq "shader and prefix rows present" "$(ptrun cleanscan | jq -c '[.[] | select(.id == "shaders" or .id == "prefixes") | .count]')" "[0,0]"
 rm -rf "$HOME/Games/umbral/pfx" "$PT"
+# ------------------------------------------------ temperature overlay ----
+section "temperature overlay"
+TS="$T/tsys/class/hwmon"; mkdir -p "$TS/hwmon0" "$TS/hwmon1" "$TS/hwmon2"
+echo acpitz > "$TS/hwmon0/name"; echo 27000 > "$TS/hwmon0/temp1_input"
+echo coretemp > "$TS/hwmon1/name"
+echo "Core 0" > "$TS/hwmon1/temp2_label"; echo 44000 > "$TS/hwmon1/temp2_input"
+echo "Package id 0" > "$TS/hwmon1/temp1_label"; echo 48500 > "$TS/hwmon1/temp1_input"
+echo amdgpu > "$TS/hwmon2/name"
+echo junction > "$TS/hwmon2/temp2_label"; echo 80000 > "$TS/hwmon2/temp2_input"
+echo edge > "$TS/hwmon2/temp1_label"; echo 61000 > "$TS/hwmon2/temp1_input"
+eq "Intel package temp + AMD GPU edge temp" "$(CONTROL_DECK_SYSFS="$T/tsys" CONTROL_DECK_GPU_VENDOR=amd "$CD" temps | paste -sd ' ')" "CPU=48 GPU=61"
+echo k10temp > "$TS/hwmon1/name"; echo Tctl > "$TS/hwmon1/temp1_label"
+eq "AMD CPU (k10temp Tctl)" "$(CONTROL_DECK_SYSFS="$T/tsys" CONTROL_DECK_GPU_VENDOR=amd "$CD" temps | head -1)" "CPU=48"
+rm -rf "$TS/hwmon1"
+eq "no CPU chip → ACPI fallback" "$(CONTROL_DECK_SYSFS="$T/tsys" CONTROL_DECK_GPU_VENDOR=amd "$CD" temps | head -1)" "CPU=27"
+eq "pid alive" "$(CONTROL_DECK_SYSFS="$T/tsys" "$CD" temps $$ | tail -1)" "ALIVE=1"
+eq "pid gone" "$(CONTROL_DECK_SYSFS="$T/tsys" "$CD" temps 99999999 | tail -1)" "ALIVE=0"
+stub qs 'echo "qs $* pid=$CD_OVERLAY_PID" >> "'"$T"'/qs.log"'
+touch "$T/overlay.qml"; export CONTROL_DECK_OVERLAY_QML="$T/overlay.qml"
+"$CD" gprofile set steam:300 overlay=maybe >/dev/null 2>&1; eq "overlay must be true/false" "$?" 2
+"$CD" gprofile set steam:300 overlay=true gamemode=false >/dev/null
+printf '#!/bin/sh\necho "pid=$$"\n' > "$T/fake/ogame"; chmod +x "$T/fake/ogame"
+rm -f "$T/qs.log"; O="$(SteamAppId=300 "$CD" run "$T/fake/ogame")"
+for _ in 1 2 3 4 5; do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
+eq "overlay started with the game's own pid (the wrapper execs into the game)" "$(grep -o 'pid=[0-9]*' "$T/qs.log")" "$O"
+has "…from the overlay config" "$(cat "$T/qs.log")" "qs -p $T/overlay.qml"
+rm -f "$T/qs.log"; SteamAppId=301 "$CD" run "$T/fake/ogame" >/dev/null; sleep 0.3
+yes "no overlay when the profile doesn't ask for it" "[[ ! -e '$T/qs.log' ]]"
+unset CONTROL_DECK_OVERLAY_QML; "$CD" gprofile reset steam:300 >/dev/null
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
