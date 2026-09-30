@@ -239,10 +239,11 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   LACT (per-game LACT profiles with process rules) and then removed on purpose:
   too risky for the benefit, and there were no per-game GPU needs to justify it.
   Use LACT's own GUI if you ever need GPU tuning.
+- **2.7 Save backups.** Skipped: the games in use keep their saves in the cloud
+  (Steam Cloud, Battle.net), so a local backup adds little.
 
 ## Not implemented yet
 
-2.7 save backups ·
 2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
