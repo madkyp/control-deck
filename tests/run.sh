@@ -790,69 +790,6 @@ hasnt "restore puts the default back" "$(cat "$ST/config/config.vdf")" '"100"'
 eq "clear drops the results" "$("$CD" bench get steam:100 | jq -r '.results.A')" null
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 
-section "Gaming: GPU tuner (LACT)"
-cat > "$T/bin/fake-lact" <<'EOF'
-#!/usr/bin/env bash
-# fake LACT daemon: answers one request, logs it
-req="$(cat)"; echo "$req" >> "${FAKE_LACT_LOG}"
-cmd="$(jq -r .command <<<"$req")"
-dev="${FAKE_LACT_DEV:-10DE:1F07-1462:3732-0000:01:00.0}"
-ok() { jq -cn --argjson d "$1" '{status:"ok", data:$d}'; }
-case "$cmd" in
-    list_devices) ok "[{\"id\":\"$dev\",\"name\":\"Test GPU\",\"device_type\":\"Dedicated\"}]" ;;
-    system_info)  ok '{"version":"0.10.1"}' ;;
-    device_stats) ok '{"power":{"current":40,"cap_current":225,"cap_min":112.5,"cap_max":250,"cap_default":225},"temps":{"GPU":{"current":50}},"fan":{"pwm_current":0,"pwm_max":255,"speed_current":0,"control_enabled":false},"nvidia_thermal_info":{"target_temp":{"current":81,"allowed_range":[65,88]}},"clockspeed":{"gpu_clockspeed":420}}' ;;
-    device_clocks_info)
-        if [[ "$dev" == 1002* ]]; then ok '{"table":{"type":"amd","value":{"voltage_offset":{"current":0,"min":-200,"max":0}}}}'
-        else ok '{"table":{"type":"nvidia","value":{"gpu_offsets":{"0":{"min":-1000,"max":1000},"2":{"min":-1000,"max":1000}},"mem_offsets":{"0":{"min":-2000,"max":6000},"2":{"min":-2000,"max":6000}}}}}'; fi ;;
-    list_profiles) ok "{\"profiles\":{},\"auto_switch\":${FAKE_LACT_AUTO:-false},\"current_profile\":null}" ;;
-    process_list) ok '{"processes":{"4242":{"name":"reaper","memory_used":10},"4300":{"name":"game.exe","memory_used":900000},"999":{"name":"Hyprland","memory_used":5}}}' ;;
-    create_profile|delete_profile|set_profile) ok null ;;
-    *) echo '{"status":"error","data":{"description":"unexpected"}}' ;;
-esac
-EOF
-chmod +x "$T/bin/fake-lact"
-export CONTROL_DECK_LACT_CMD="$T/bin/fake-lact" FAKE_LACT_LOG="$T/lact.log"
-GS="$("$CD" gpu status)"
-eq "status: vendor from the PCI id" "$(jq -r .device.vendor <<<"$GS")" nvidia
-eq "power limits from the card" "$(jq -c .limits.power <<<"$GS")" "[112.5,250]"
-eq "core offset limits from LACT" "$(jq -c .limits.core <<<"$GS")" "[-1000,1000]"
-eq "conservative band shown" "$(jq -c .safe.core <<<"$GS")" "[-300,100]"
-"$CD" gpu profile set steam:100 power=180 >/dev/null 2>&1;                          eq "needs the game's process" "$?" 2
-"$CD" gpu profile set steam:100 power=300 process=game.exe >/dev/null 2>&1;         eq "power above the card's maximum refused" "$?" 2
-"$CD" gpu profile set steam:100 core=200 process=game.exe >/dev/null 2>&1;          eq "core offset outside the conservative band needs unlock" "$?" 3
-"$CD" gpu profile set steam:100 core=1500 unlock=true process=game.exe >/dev/null 2>&1; eq "…and never beyond the GPU's own limit" "$?" 2
-"$CD" gpu profile set steam:100 voltage=-50 process=game.exe >/dev/null 2>&1;       eq "voltage offset refused on NVIDIA (not supported)" "$?" 2
-"$CD" gpu profile set steam:100 fan=turbo process=game.exe >/dev/null 2>&1;         eq "unknown fan preset refused" "$?" 2
-"$CD" gpu profile set steam:100 'process=a b' power=180 >/dev/null 2>&1;            eq "weird process name refused" "$?" 2
-: > "$T/lact.log"
-"$CD" gpu profile set steam:100 power=180 core=-100 mem=200 temp=75 fan=balanced process=game.exe >/dev/null
-CP="$(grep '"create_profile"' "$T/lact.log")"
-eq "profile named after the game" "$(jq -r .args.name <<<"$CP")" "control-deck:steam:100"
-eq "process rule" "$(jq -c .args.base.provided.rule <<<"$CP")" '{"type":"process","filter":{"name":"game.exe"}}'
-GC="$(jq -c '.args.base.provided.gpus["10DE:1F07-1462:3732-0000:01:00.0"]' <<<"$CP")"
-eq "power cap" "$(jq -r .power_cap <<<"$GC")" 180
-eq "core offset on every power state" "$(jq -c .gpu_clock_offsets <<<"$GC")" '{"0":-100,"2":-100}'
-eq "memory offset" "$(jq -c .mem_clock_offsets <<<"$GC")" '{"0":200,"2":200}'
-eq "NVIDIA target temperature" "$(jq -r .nvidia_thermal_options.target_temperature <<<"$GC")" 75
-eq "fan curve preset reaches 100 %" "$(jq -r '.fan_control_settings.curve["85"] == 1' <<<"$GC")" true
-has "automatic switching enabled for the rule to work" "$(cat "$T/lact.log")" '"auto_switch":true'
-yes "old profile replaced (deleted first)" "grep -q delete_profile '$T/lact.log'"
-eq "stored for the UI" "$("$CD" gpu profile get steam:100 | jq -r '.input.core + "/" + .process')" "-100/game.exe"
-: > "$T/lact.log"
-FAKE_LACT_AUTO=true "$CD" gpu profile set steam:100 power=200 process=game.exe >/dev/null
-hasnt "switching already on: not touched" "$(cat "$T/lact.log")" "set_profile"
-FAKE_LACT_DEV="1002:7550-1002:0000-0000:03:00.0" "$CD" gpu profile set steam:200 voltage=-50 process=g2.exe >/dev/null
-has "AMD: voltage offset (undervolt) accepted" "$(grep create_profile "$T/lact.log" | tail -1)" '"voltage_offset":-50'
-FAKE_LACT_DEV="1002:7550-1002:0000-0000:03:00.0" "$CD" gpu profile set steam:200 voltage=-150 process=g2.exe >/dev/null 2>&1
-eq "AMD: deeper undervolt needs unlock" "$?" 3
-"$CD" gpu profile delete steam:100 >/dev/null
-eq "delete removes it" "$("$CD" gpu profile get steam:100)" "{}"
-mkdir -p "$T/proc/4300"; printf 'SteamAppId=100\0' > "$T/proc/4300/environ"
-eq "detect: the game's GPU process as LACT sees it" "$(PROC_ROOT="$T/proc" "$CD" gpu detect steam:100)" game.exe
-PROC_ROOT="$T/proc" "$CD" gpu detect steam:555 >/dev/null 2>&1; eq "detect: game not running" "$?" 3
-unset CONTROL_DECK_LACT_CMD FAKE_LACT_LOG
-
 section "Gaming: Wine/Proton prefixes"
 export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
 mkpfx() { mkdir -p "$1/drive_c/windows"; printf 'WINE REGISTRY Version 2\n#arch=win64\n' > "$1/system.reg"; head -c 1000 /dev/zero > "$1/drive_c/file"; [[ -n "${2:-}" ]] && echo "$2" > "$1/../version" || true; }

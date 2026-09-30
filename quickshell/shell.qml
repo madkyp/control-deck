@@ -303,10 +303,6 @@ ShellRoot {
         property var    bench: ({})         // A/B benchmark of the selected game
         property string benchLoadedFor: ""  // game whose variants are in the editors (unsaved edits survive refreshes)
         property string pendingRun: ""      // "A"/"B": run right after the variants are saved
-        property var    gpuSt: ({})         // LACT status, limits, safe bands
-        property string gpuFan: ""          // "", auto, quiet, balanced, performance
-        property bool   gpuUnlock: false
-        property bool   confirmGpu: false
         property var    pfx: ({})           // Wine/Proton prefixes
         property var    pfxBackups: []
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
@@ -398,13 +394,6 @@ ShellRoot {
             runGame(a.concat(extra || []), "SAVING…");
         }
         function runBench(v) { pendingRun = v; saveBench([]); }
-        function loadGpuProfile() {
-            var g = (gpuSt.games || {})[selGame] || {}, i = g.input || {};
-            gPow.text = i.power || ""; gCore.text = i.core || ""; gMem.text = i.mem || "";
-            gTemp.text = i.temp || ""; gVolt.text = i.voltage || ""; gProc.text = g.process || "";
-            gpuFan = i.fan || ""; gpuUnlock = false; confirmGpu = false;
-        }
-        function rangeText(r) { return r ? r[0] + " … " + r[1] : "n/a"; }
         function pct(v) { return v === undefined || v === null ? "" : (v > 0 ? "+" : "") + v + "%"; }
         function dateOfEpoch(e) { return e ? new Date(e * 1000).toISOString().substring(0, 10) : "?"; }
         function saveGameProfile() {
@@ -871,10 +860,6 @@ ShellRoot {
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
-                if (win.gameArgs[0] === "gpu") {
-                    if (win.gameArgs[1] === "detect" && c === 0) { gProc.text = win.gameLog.trim().split("\n").pop(); }
-                    else gpuProc.running = true;
-                }
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -906,11 +891,6 @@ ShellRoot {
         Process {
             id: pfxOpenProc
             command: ["xdg-open", win.home + "/control-deck-backups/prefixes"]
-        }
-        Process {
-            id: gpuProc
-            command: [win.scriptPath, "gpu", "status"]
-            stdout: StdioCollector { onStreamFinished: { try { win.gpuSt = JSON.parse(text); } catch (e) { win.gpuSt = {}; } win.loadGpuProfile(); } }
         }
         Process {
             id: benchProc
@@ -2603,7 +2583,6 @@ ShellRoot {
                     Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
                     Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame) benchProc.running = true; } }
-                    Chip { label: "GPU";     active: win.gameView === "gpu";     onClicked: { win.gameView = "gpu"; gpuProc.running = true; } }
                     Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
@@ -2931,130 +2910,6 @@ ShellRoot {
                         }
                         MiniBtn { width: 100; label: "BACKUPS ↗"; primary: false; onClicked: pfxOpenProc.running = true }
                     }
-                }
-
-                // ---- GPU (LACT) ----
-                ColumnLayout {
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    visible: win.gameView === "gpu"
-                    spacing: 8
-
-                    // LACT is required
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: win.gpuSt.lact !== undefined && !(win.gpuSt.lact.installed && win.gpuSt.lact.running)
-                        implicitHeight: lactNote.implicitHeight + 16
-                        radius: 8; color: "#1a0f16"; border.color: pal.bad; border.width: 1
-                        Text {
-                            id: lactNote
-                            anchors.fill: parent; anchors.margins: 8; wrapMode: Text.WordWrap
-                            color: pal.text; font.family: win.mono; font.pixelSize: 10
-                            text: "  This function requires LACT (Linux GPU Configuration Tool). " + (win.gpuSt.note || "")
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        visible: !!win.gpuSt.device
-
-                        // live status
-                        Text {
-                            Layout.fillWidth: true; elide: Text.ElideRight
-                            color: pal.text; font.family: win.mono; font.pixelSize: 11
-                            text: !win.gpuSt.device ? "" : win.gpuSt.device.name + "  ·  "
-                                  + (win.gpuSt.stats.power ? Math.round(win.gpuSt.stats.power.current) + " / " + win.gpuSt.stats.power.cap_current + " W" : "")
-                                  + "  ·  " + Object.keys(win.gpuSt.stats.temps || {}).map(function (k) { return k + " " + win.gpuSt.stats.temps[k] + "°C"; }).join(" · ")
-                                  + "  ·  fan " + (win.gpuSt.stats.fan.rpm !== null ? win.gpuSt.stats.fan.rpm + " rpm" : "?")
-                        }
-                        Hint {
-                            text: "Requires LACT " + ((win.gpuSt.lact || {}).version || "") + " (lactd running). Profiles are LACT profiles with a process rule: LACT applies them only while the game's process runs and reverts them when it exits, even if Control Deck is closed. Your default GPU settings are never changed."
-                                  + (win.gpuSt.autoSwitch ? "" : " LACT's automatic profile switching will be turned on with the first profile.")
-                        }
-                        Rectangle {
-                            Layout.fillWidth: true
-                            implicitHeight: riskText.implicitHeight + 14
-                            radius: 6; color: "#1a150c"; border.color: pal.amber; border.width: 1
-                            Text {
-                                id: riskText
-                                anchors.fill: parent; anchors.margins: 7; wrapMode: Text.WordWrap
-                                color: pal.amber; font.family: win.mono; font.pixelSize: 10
-                                text: "  Risky function. Wrong clock offsets or undervolts can crash games or freeze the desktop. Power limits come from the card itself; clock/voltage offsets are kept inside a conservative band (a heuristic, not a vendor guarantee) unless you unlock it on purpose."
-                            }
-                        }
-
-                        Section { Layout.fillWidth: true; label: "GAME PROFILE"; info: win.selGame ? win.selGameName : "pick a game in LIBRARY" }
-
-                        GridLayout {
-                            Layout.fillWidth: true
-                            visible: win.selGame !== ""
-                            columns: 4; columnSpacing: 10; rowSpacing: 6
-                            Text { text: "POWER W"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                            Field { id: gPow; Layout.preferredWidth: 90; font.pixelSize: 11; placeholderText: "default" }
-                            Text { Layout.columnSpan: 2; color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                   text: "card " + win.rangeText((win.gpuSt.limits || {}).power) + " W · default " + ((win.gpuSt.limits || {}).powerDefault || "?") }
-                            Text { text: "CORE MHz"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                            Field { id: gCore; Layout.preferredWidth: 90; font.pixelSize: 11; placeholderText: "offset" }
-                            Text { Layout.columnSpan: 2; color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                   text: (win.gpuSt.limits || {}).core ? "safe " + win.rangeText((win.gpuSt.safe || {}).core) + " · limit " + win.rangeText(win.gpuSt.limits.core) : "not adjustable on this GPU" }
-                            Text { text: "MEM MHz"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                            Field { id: gMem; Layout.preferredWidth: 90; font.pixelSize: 11; placeholderText: "offset" }
-                            Text { Layout.columnSpan: 2; color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                   text: (win.gpuSt.limits || {}).mem ? "safe " + win.rangeText((win.gpuSt.safe || {}).mem) + " · limit " + win.rangeText(win.gpuSt.limits.mem) : "not adjustable on this GPU" }
-                            Text { text: "TARGET °C"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; visible: !!(win.gpuSt.limits || {}).targetTemp }
-                            Field { id: gTemp; Layout.preferredWidth: 90; font.pixelSize: 11; placeholderText: "driver"; visible: !!(win.gpuSt.limits || {}).targetTemp }
-                            Text { Layout.columnSpan: 2; color: pal.dim; font.family: win.mono; font.pixelSize: 9; visible: !!(win.gpuSt.limits || {}).targetTemp
-                                   text: "NVIDIA thermal target " + win.rangeText((win.gpuSt.limits || {}).targetTemp) }
-                            Text { text: "UNDERVOLT mV"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; visible: !!(win.gpuSt.limits || {}).voltage }
-                            Field { id: gVolt; Layout.preferredWidth: 90; font.pixelSize: 11; placeholderText: "e.g. -50"; visible: !!(win.gpuSt.limits || {}).voltage }
-                            Text { Layout.columnSpan: 2; color: pal.dim; font.family: win.mono; font.pixelSize: 9; visible: !!(win.gpuSt.limits || {}).voltage
-                                   text: "AMD voltage offset · safe " + win.rangeText((win.gpuSt.safe || {}).voltage) + " · limit " + win.rangeText((win.gpuSt.limits || {}).voltage) }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 6
-                            visible: win.selGame !== ""
-                            Text { text: "FAN"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                            Repeater {
-                                model: [["", "DRIVER"], ["quiet", "QUIET"], ["balanced", "BALANCED"], ["performance", "PERFORMANCE"]]
-                                delegate: Chip { required property var modelData; label: modelData[1]; active: win.gpuFan === modelData[0]
-                                                 onClicked: win.gpuFan = modelData[0] }
-                            }
-                            Item { Layout.fillWidth: true }
-                            Chip { label: win.gpuUnlock ? "✓ FULL RANGE" : "UNLOCK FULL RANGE"; tint: pal.bad; active: win.gpuUnlock
-                                   onClicked: win.gpuUnlock = !win.gpuUnlock }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 8
-                            visible: win.selGame !== ""
-                            Text { text: "PROCESS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                            Field { id: gProc; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "the game's executable, e.g. deadlock.exe — launch the game and DETECT" }
-                            MiniBtn { width: 76; label: "DETECT"; primary: false; on: !win.gameBusy
-                                      onClicked: win.runGame(["gpu", "detect", win.selGame], "DETECTING…") }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 8
-                            visible: win.selGame !== ""
-                            Item { Layout.fillWidth: true }
-                            MiniBtn {
-                                width: 70; label: "DELETE"; primary: false
-                                on: !win.gameBusy && !!(win.gpuSt.games || {})[win.selGame]
-                                onClicked: win.runGame(["gpu", "profile", "delete", win.selGame], "DELETING…")
-                            }
-                            MiniBtn {
-                                width: 150; tint: pal.amber
-                                label: win.confirmGpu ? "CONFIRM — I ACCEPT THE RISK" : "APPLY GPU PROFILE"
-                                on: !win.gameBusy && gProc.text.trim() !== ""
-                                onClicked: {
-                                    if (!win.confirmGpu) { win.confirmGpu = true; return; }
-                                    win.confirmGpu = false;
-                                    win.runGame(["gpu", "profile", "set", win.selGame, "power=" + gPow.text.trim(), "core=" + gCore.text.trim(),
-                                                 "mem=" + gMem.text.trim(), "temp=" + gTemp.text.trim(), "voltage=" + gVolt.text.trim(),
-                                                 "fan=" + win.gpuFan, "process=" + gProc.text.trim()].concat(win.gpuUnlock ? ["unlock=true"] : []),
-                                                "SAVING GPU PROFILE…");
-                                }
-                            }
-                        }
-                    }
-                    Item { Layout.fillHeight: true }
                 }
 
                 // ---- BENCH (A/B) ----
