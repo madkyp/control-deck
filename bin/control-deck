@@ -2335,14 +2335,14 @@ user_compat_tools() {
 # no non-Steam prefix made by them (Umbral/umu keep using the prefix's Proton),
 # and not running. Proton that comes with Steam or a package isn't listed.
 unused_compat_tools() {
-    local pfx="${1:-}" steam_used umbral_used pfx_vers ge d name ver
+    local pfx="${1:-}" steam_used umbral_used pfx_vers ge d g name ver
     [[ -n "$pfx" ]] || pfx="$(cmd_prefixes)"
     steam_used="$(steam_compat_used)"
     umbral_used="$(umbral_json | jq -r '[.. | objects | .runner? | strings] | unique[]' 2>/dev/null)"
     if grep -qx GE-Proton <<<"$umbral_used"; then
         ge="$(for d in "$DATA_HOME/umbral/runners" "$(steam_root)/compatibilitytools.d" \
                        "$HOME/.steam/root/compatibilitytools.d" /usr/share/steam/compatibilitytools.d; do
-                  for d in "$d"/GE-Proton*/; do [[ -f "$d/proton" ]] && basename "$d"; done
+                  for g in "$d"/GE-Proton*/; do [[ -f "$g/proton" ]] && basename "$g"; done
               done | sort -V | tail -1)"
         umbral_used+=$'\n'"$ge"
     fi
