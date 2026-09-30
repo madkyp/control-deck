@@ -4144,8 +4144,11 @@ cmd_overlay() {
             [[ -S "$s" ]] && { export WAYLAND_DISPLAY="${s##*/}"; break; }
         done
     fi
-    CD_OVERLAY_PID="$pid" CD_OVERLAY_BIN="$(readlink -f "${BASH_SOURCE[0]}")" \
-        setsid -f qs -p "$OVERLAY_QML" >/dev/null 2>&1 </dev/null
+    # Steam's LD_LIBRARY_PATH (its runtime's libcurl…) and overlay LD_PRELOAD
+    # break Qt: qs dies before showing anything
+    mkdir -p "$STATE_DIR/logs"
+    env -u LD_LIBRARY_PATH -u LD_PRELOAD CD_OVERLAY_PID="$pid" CD_OVERLAY_BIN="$(readlink -f "${BASH_SOURCE[0]}")" \
+        setsid -f qs -p "$OVERLAY_QML" >"$STATE_DIR/logs/overlay.log" 2>&1 </dev/null
 }
 
 main() {

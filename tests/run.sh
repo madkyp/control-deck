@@ -982,7 +982,7 @@ rm -rf "$TS/hwmon1"
 eq "no CPU chip → ACPI fallback" "$(CONTROL_DECK_SYSFS="$T/tsys" CONTROL_DECK_GPU_VENDOR=amd "$CD" temps | head -1)" "CPU=27"
 eq "pid alive" "$(CONTROL_DECK_SYSFS="$T/tsys" "$CD" temps $$ | tail -1)" "ALIVE=1"
 eq "pid gone" "$(CONTROL_DECK_SYSFS="$T/tsys" "$CD" temps 99999999 | tail -1)" "ALIVE=0"
-stub qs 'echo "qs $* pid=$CD_OVERLAY_PID" >> "'"$T"'/qs.log"'
+stub qs 'echo "qs $* pid=$CD_OVERLAY_PID ldp=${LD_LIBRARY_PATH:-none} pre=${LD_PRELOAD:-none}" >> "'"$T"'/qs.log"'
 touch "$T/overlay.qml"; export CONTROL_DECK_OVERLAY_QML="$T/overlay.qml"
 "$CD" gprofile set steam:300 overlay=maybe >/dev/null 2>&1; eq "overlay must be true/false" "$?" 2
 "$CD" gprofile set steam:300 overlay=true gamemode=false >/dev/null
@@ -991,6 +991,9 @@ rm -f "$T/qs.log"; O="$(SteamAppId=300 "$CD" run "$T/fake/ogame")"
 for _ in 1 2 3 4 5; do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
 eq "overlay started with the game's own pid (the wrapper execs into the game)" "$(grep -o 'pid=[0-9]*' "$T/qs.log")" "$O"
 has "…from the overlay config" "$(cat "$T/qs.log")" "qs -p $T/overlay.qml"
+rm -f "$T/qs.log"; LD_LIBRARY_PATH=/steam/pinned_libs LD_PRELOAD=/steam/gameoverlayrenderer.so SteamAppId=300 "$CD" run "$T/fake/ogame" >/dev/null
+for _ in 1 2 3 4 5; do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
+has "Steam's LD_LIBRARY_PATH / LD_PRELOAD don't reach the overlay (they break Qt)" "$(cat "$T/qs.log")" "ldp=none pre=none"
 rm -f "$T/qs.log"; SteamAppId=301 "$CD" run "$T/fake/ogame" >/dev/null; sleep 0.3
 yes "no overlay when the profile doesn't ask for it" "[[ ! -e '$T/qs.log' ]]"
 unset CONTROL_DECK_OVERLAY_QML; "$CD" gprofile reset steam:300 >/dev/null
