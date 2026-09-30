@@ -2685,7 +2685,7 @@ profile_write() {   # profile_write <key> <json object to merge>; "null" deletes
         && mv "$tmp" "$PROFILES"
 }
 
-valid_game_key() { [[ "$1" =~ ^(default|steam:[0-9]+|[a-z]+:[A-Za-z0-9._-]+)$ ]]; }
+valid_game_key() { [[ "$1" =~ ^(default|steam:[0-9]+|[a-z]+:[A-Za-z0-9._:-]+)$ ]]; }
 
 # gprofile get <key> | set <key> FIELD=VALUE… | reset <key>
 cmd_gprofile() {
@@ -2873,6 +2873,73 @@ cmd_steamcompat() {
     history_add "proton $tool" steam "$id" 0
 }
 
+# --- Umbral (github.com/madkyp/umbral-project) ---------------------------------------
+# Umbral is the user's launcher for Battle.net and games from no store. Its
+# library lives in ~/.config/umbral/config.json ({prefixes:[…], games:[…]});
+# games start with `umbral --launch <id>`. Read-only here: launch options of
+# Umbral games are Umbral's business.
+UMBRAL_CONFIG="${CONTROL_DECK_UMBRAL_CONFIG:-$CONFIG_HOME/umbral/config.json}"
+
+umbral_json() { if [[ -s "$UMBRAL_CONFIG" ]]; then cat "$UMBRAL_CONFIG"; else echo '{}'; fi; }
+
+# JSON list of Umbral's (non-hidden) games, in the same shape as cmd_games entries
+umbral_games() {
+    [[ -s "$UMBRAL_CONFIG" ]] || { echo '[]'; return; }
+    local g sizes="" exe
+    # size of each game's folder (the .exe's directory); none for the Battle.net client itself
+    while IFS=$'\t' read -r g exe; do
+        [[ -n "$exe" && -f "$exe" ]] && sizes+="$g"$'\t'"$(dir_bytes "$(dirname "$exe")")"$'\n'
+    done < <(jq -r '.games[]? | select(.hidden != true) | [.id, (.exe // "")] | @tsv' "$UMBRAL_CONFIG")
+    jq -c --arg sizes "$sizes" '
+        ($sizes | split("\n") | map(select(. != "") | split("\t") | {key:.[0], value:(.[1]|tonumber)}) | from_entries) as $sz
+        | (.prefixes // []) as $px
+        | [.games[]? | select(.hidden != true) | . as $g
+           | ($px | map(select(.id == $g.prefix_id)) | first // {}) as $p
+           | {key:("umbral:" + .id), source:"umbral", id:.id, name:.name, umbralKind:.kind,
+              installdir:(if .exe != "" then (.exe | sub("/[^/]*$"; "")) else "" end), exe:.exe,
+              size:($sz[.id] // 0), library:"", launch:"", wrapped:false,
+              compat:($p.runner // ""), prefix:(($p.path // "") != ""), prefixPath:($p.path // ""),
+              prefixName:($p.name // ""), playtime:(.playtime // 0), lastPlayed:(.last_played // ""),
+              cover:(.cover // "")}]' "$UMBRAL_CONFIG"
+}
+
+# Umbral games running now: a process with the game's .exe as an argument.
+# Read in bash (no grep/pgrep with the name in its own command line, which
+# would find itself); exact file-name match.
+umbral_running() {
+    local list f pid a id exe
+    list="$(jq -r '.games[]? | select((.exe // "") != "") | [.id, (.exe | split("/") | last)] | @tsv' "$UMBRAL_CONFIG" 2>/dev/null)"
+    [[ -n "$list" ]] || return 0
+    declare -A want=() found=()
+    while IFS=$'\t' read -r id exe; do want["$exe"]="$id"; done <<<"$list"
+    for f in "${PROC_ROOT:-/proc}"/[0-9]*/cmdline; do
+        pid="${f%/cmdline}"; pid="${pid##*/}"
+        while IFS= read -r -d '' a; do
+            a="${a##*[/\\]}"
+            if [[ -n "${want[$a]:-}" && -z "${found[$a]:-}" ]]; then
+                found["$a"]=1; printf 'umbral:%s\t%s\n' "${want[$a]}" "$pid"
+            fi
+        done < "$f" 2>/dev/null
+    done
+}
+
+# gplay <key> — start a game from its own launcher
+cmd_gplay() {
+    local key="$1"
+    case "$key" in
+        steam:*)
+            [[ "${key#steam:}" =~ ^[0-9]+$ ]] || { err "bad Steam key"; return 2; }
+            setsid -f steam "steam://rungameid/${key#steam:}" >/dev/null 2>&1 ;;
+        umbral:*)
+            have umbral || { err "Umbral is not installed"; return 4; }
+            umbral_json | jq -e --arg i "${key#umbral:}" 'any(.games[]?; .id == $i)' >/dev/null || { err "Umbral has no game $key"; return 2; }
+            setsid -f umbral --launch "${key#umbral:}" >/dev/null 2>&1 ;;
+        *) err "use: gplay steam:<appid> | umbral:<id>"; return 2 ;;
+    esac
+    log "▶ Launching $key"
+    history_add play "${key%%:*}" "$key" 0
+}
+
 # --- library -------------------------------------------------------------------
 # JSON list of installed games with their profile / launch / Proton state
 cmd_games() {
@@ -2889,7 +2956,10 @@ cmd_games() {
          size:($l[$i+3]|tonumber? // 0), library:$l[$i+4], launch:$l[$i+5],
          wrapped:($l[$i+5] | contains("control-deck run")), compat:$l[$i+6], prefix:($l[$i+7] == "1"),
          profile:($profs | has("steam:" + $l[$i])),
-         new:(($known != null) and (($known | index("steam:" + $l[$i])) == null))}] | sort_by(.name | ascii_downcase)' \
+         new:(($known != null) and (($known | index("steam:" + $l[$i])) == null))}]' \
+    | jq -c --argjson u "$(umbral_games)" --argjson known "$(known_games_json)" '
+        . + ($u | map(. as $g | $g + {profile:false, new:(($known != null) and (($known | index($g.key)) == null))}))
+        | sort_by(.name | ascii_downcase)' \
     | tee >(jq -r '.[].key' | known_games_init)
 }
 
@@ -2932,8 +3002,9 @@ cmd_gstatus() {
     gov="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
     drv="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver 2>/dev/null)"
     mmc="$(cat /proc/sys/vm/max_map_count 2>/dev/null || echo 0)"
-    run="$(running_games | while IFS=$'\t' read -r id pid; do
-            printf '%s\n%s\n' "$id" "$pid"; done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i | {id:$l[$i], pid:($l[$i+1]|tonumber)}]')"
+    run="$( { running_games | sed 's/^/steam:/'; umbral_running; } | while IFS=$'\t' read -r key pid; do
+            printf '%s\n%s\n' "$key" "$pid"; done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i |
+              {key:$l[$i], id:($l[$i] | sub("^[a-z]+:"; "")), pid:($l[$i+1]|tonumber)}]')"
     jq -n --argjson gi "$gm_inst" --argjson ga "$gm_active" --argjson grp "$ingroup" --argjson add "$added" \
           --arg gov "$gov" --arg drv "$drv" --argjson mmc "${mmc:-0}" --argjson run "$run" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
@@ -3553,7 +3624,9 @@ cmd_prefixes() {
             fi
             ver="$(cat "$root/version" 2>/dev/null)"
         else
-            case "$p" in
+            local un; un="$(umbral_json | jq -r --arg p "$p" '(.prefixes // [])[] | select((.path | rtrimstr("/")) == $p) | .name' 2>/dev/null | head -1)"
+            [[ -n "$un" ]] && { owner=umbral; name="$un"; }
+            [[ -z "$un" ]] && case "$p" in
                 */Heroic/Prefixes/*) owner=heroic ;;
                 */bottles/bottles/*) owner=bottles ;;
                 "$fdir"/*) [[ -n "$fdir" ]] && owner=faugus ;;
@@ -3705,6 +3778,7 @@ Gaming
   pdbindex update [--force]|status   Index ProtonDB's open data (all games' launch options)
   gsuggest <appid>              Launch options players use for a game, with shares (JSON)
   gtips <appid…> / gseen <key>  Suggestion counts per game · mark a new game as seen
+  gplay <key>                   Start a game (steam:<appid> via Steam, umbral:<id> via Umbral)
   shadercache                   Shader caches per game + driver caches, stale/orphan detection (JSON)
   shaderclean <target> [part]   steam:<appid> [driver|all] · orphans · stale · global:<id>
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
@@ -3795,6 +3869,7 @@ main() {
         gsuggest)    cmd_gsuggest "$1" ;;
         gtips)       cmd_gtips "$@" ;;
         gseen)       cmd_gseen "$1" ;;
+        gplay)       cmd_gplay "$1" ;;
         shadercache) cmd_shadercache ;;
         bench)       cmd_bench "$@" ;;
         prefixes)    cmd_prefixes ;;

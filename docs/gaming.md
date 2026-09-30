@@ -71,6 +71,23 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - Tools: gamemode (recommended), mangohud (optional), gamescope (optional).
 - CLI: `games`, `gstatus`, `gprofile get|set|reset`, `run`, `steamwrap`, `gamejoin`.
 
+### Umbral games in the library
+- [Umbral](https://github.com/madkyp/umbral-project) is the user's launcher for
+  Battle.net and games from no store. Its library
+  (`~/.config/umbral/config.json`: `prefixes[]`, `games[]`) is read — never
+  written — and its non-hidden games join the Steam ones in LIBRARY as
+  `umbral:<id>`: kind (Battle.net client / Battle.net game / own game), prefix
+  and Proton runner, game folder size, playtime and last play. New Umbral games
+  are flagged **NEW** like Steam ones.
+- **▶ PLAY** starts any library game from its own launcher:
+  `steam://rungameid/<appid>` or `umbral --launch <id>`.
+- Umbral games have their own launch options in Umbral (Proton, gamemode,
+  MangoHud, gamescope…), so the profile editor, ProtonDB and BENCH stay
+  Steam-only. Their prefixes appear in PREFIXES as **UMBRAL** with Umbral's names.
+- A running Umbral game is found by its `.exe` in a process's arguments (exact
+  file name, read in bash so the search can't match itself).
+- CLI: `games` (includes them), `gplay <key>`.
+
 ### 2.2 Shader-cache assistant — `GAMING → SHADERS`
 - Per game, Steam's `steamapps/shadercache/<appid>/` (every library) split
   into **pipelines** (`fozpipelinesv6`, Fossilize recordings — driver-

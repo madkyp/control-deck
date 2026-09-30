@@ -39,6 +39,7 @@ esac'
 stub gtk-update-icon-cache 'exit 0'
 stub steam 'echo "steam $*" >> "'"$T"'/steam.log"'
 stub mangohud 'exec "$@"'
+stub umbral 'echo "umbral $*" >> "'"$T"'/umbral.log"'
 stub pgrep '[[ -n "${FAKE_FOSSILIZE:-}" && "$*" == *fossilize* ]] && exit 0; exit 1'
 stub xdg-open 'exit 0'
 stub checkupdates 'printf "%s" "${FAKE_UPDATES:-}"'
@@ -826,6 +827,37 @@ yes "Steam orphan deleted as a whole compatdata folder" "[[ ! -e '$CD_/777' ]]"
 yes "…after an automatic backup" "ls '$T/pbak'/steam-uninstalled_app_777-* >/dev/null"
 eq "backups listed" "$("$CD" prefix backups | jq length)" 2
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_PREFIX_BACKUPS
+
+section "Gaming: Umbral games"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_UMBRAL_CONFIG="$T/umbral.json"
+mkpfx "$HOME/Games/umbral/game-2"; mkdir -p "$HOME/Games/umbral/games/Poke"; head -c 5000 /dev/zero > "$HOME/Games/umbral/games/Poke/Game.exe"
+cat > "$T/umbral.json" <<EOF
+{"prefixes":[{"id":"battlenet","name":"Battle.net","path":"$HOME/Games/umbral/battlenet","runner":"UMU-Proton-10.0-4"},
+             {"id":"p-game-2","name":"Game","path":"$HOME/Games/umbral/game-2/","runner":"GE-Proton"}],
+ "games":[{"id":"battlenet","name":"Battle.net","kind":"battlenet","prefix_id":"battlenet","exe":""},
+          {"id":"battlenet:wow","name":"WoW","kind":"blizzard","prefix_id":"battlenet","exe":"/nope/WowB.exe","playtime":29},
+          {"id":"1484d426be","name":"Pokemon Iberia","kind":"custom","prefix_id":"p-game-2","exe":"$HOME/Games/umbral/games/Poke/Game.exe","playtime":145,"last_played":"2026-09-30T11:34:25"},
+          {"id":"hid","name":"Hidden one","kind":"custom","prefix_id":"p-game-2","exe":"","hidden":true}]}
+EOF
+G="$("$CD" games)"
+eq "Umbral games listed next to Steam's (hidden ones skipped)" "$(jq '[.[] | select(.source == "umbral")] | length' <<<"$G")" 3
+eq "key keeps Umbral's id (with colons)" "$(jq -r '.[] | select(.name == "WoW") | .key' <<<"$G")" "umbral:battlenet:wow"
+eq "prefix and Proton from Umbral's config" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.prefixName)/\(.compat)"' <<<"$G")" "Game/GE-Proton"
+eq "game folder size" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | .size' <<<"$G")" 5000
+eq "playtime and last play" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.playtime) \(.lastPlayed)"' <<<"$G")" "145 2026-09-30T11:34:25"
+eq "Umbral prefix named from Umbral's config" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/game-2" '.prefixes[] | select(.path == $p) | "\(.owner)/\(.name)"')" "umbral/Game"
+mkdir -p "$T/proc2/6000" "$T/proc2/6001"
+printf '%s\0%s\0' "/usr/bin/umu-run" 'C:\games\Poke\Game.exe' > "$T/proc2/6000/cmdline"
+printf '%s\0%s\0' "grep" "WowB.exe.bak" > "$T/proc2/6001/cmdline"
+eq "running Umbral game found by its .exe (Windows path too), no partial matches" "$(PROC_ROOT="$T/proc2" "$CD" gstatus | jq -c '[.running[] | .key]')" '["umbral:1484d426be"]'
+rm -f "$T/umbral.log" "$T/steam.log"
+"$CD" gplay umbral:1484d426be >/dev/null
+has "PLAY starts an Umbral game through Umbral" "$(cat "$T/umbral.log")" "umbral --launch 1484d426be"
+"$CD" gplay steam:100 >/dev/null
+has "PLAY starts a Steam game through Steam" "$(cat "$T/steam.log")" "steam://rungameid/100"
+"$CD" gplay umbral:nope >/dev/null 2>&1; eq "unknown Umbral game refused" "$?" 2
+"$CD" gplay 'steam:1;rm' >/dev/null 2>&1; eq "bad key refused" "$?" 2
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_UMBRAL_CONFIG
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

@@ -294,6 +294,7 @@ ShellRoot {
         property string selGameLaunch: ""
         property string selGameCompat: ""
         property bool   selGameWrapped: false
+        property var    selGameObj: ({})
         property bool   confirmJoin: false
         property var    sug: ({})           // launch options players use (ProtonDB open data)
         property var    tips: ({})          // suggestion count per appid
@@ -328,8 +329,8 @@ ShellRoot {
         }
         function selectGame(g) {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
-            selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped;
-            gameLog = ""; gprofProc.running = true;
+            selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped; selGameObj = g;
+            gameLog = ""; if (g.source === "steam") gprofProc.running = true;
             sug = {}; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
         }
@@ -367,6 +368,11 @@ ShellRoot {
             } else if (x.token === "gamemoderun") { gpSet("gamemode", true); }
             else if (x.token === "mangohud") { gpSet("mangohud", true); }
             else { gPrefix.text = (gPrefix.text.trim() + " " + (x.token === "gamescope" ? "gamescope -f --" : x.token)).trim(); }
+        }
+        function playtimeText(sec) {
+            if (!sec) return "never played";
+            var h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+            return (h > 0 ? h + " h " : "") + m + " min played";
         }
         function gpSet(k, v) { var o = Object.assign({}, gp); o[k] = v; gp = o; }
         function envString(e) {
@@ -2582,7 +2588,7 @@ ShellRoot {
                     Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
                     Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
-                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame) benchProc.running = true; } }
+                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame && win.selGameSource === "steam") benchProc.running = true; } }
                     Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
@@ -2601,7 +2607,7 @@ ShellRoot {
                     EmptyHint {
                         visible: win.games.length === 0
                         title: gamesProc.running ? "READING YOUR LIBRARY…" : "NO GAMES FOUND"
-                        sub: gamesProc.running ? "" : "installed Steam games show up here"
+                        sub: gamesProc.running ? "" : "installed Steam games and Umbral games show up here"
                     }
 
                     ListView {
@@ -2616,7 +2622,7 @@ ShellRoot {
                             color: win.selGame === modelData.key ? pal.cardHi : "transparent"
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
-                                Badge { label: modelData.source; tint: pal.sky; width: 52 }
+                                Badge { label: modelData.source; tint: modelData.source === "umbral" ? pal.pink : pal.sky; width: 58 }
                                 Text {
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                     text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12
@@ -2661,10 +2667,33 @@ ShellRoot {
                     Layout.fillWidth: true; spacing: 8
                     visible: win.gameView === "library" && win.selGame !== ""
 
-                    Section { Layout.fillWidth: true; label: "PROFILE"; info: win.selGameName + (win.gp.custom ? "" : " · default") }
+                    Section { Layout.fillWidth: true; label: win.selGameSource === "steam" ? "PROFILE" : "GAME"
+                              info: win.selGameName + (win.selGameSource === "steam" ? (win.gp.custom ? "" : " · default") : "") }
+
+                    // Umbral games: info + launch; their options live in Umbral
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 6
+                        visible: win.selGameSource === "umbral"
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            color: pal.text; font.family: win.mono; font.pixelSize: 11
+                            text: "Umbral · " + (win.selGameObj.umbralKind === "battlenet" ? "Battle.net client"
+                                   : (win.selGameObj.umbralKind === "blizzard" ? "Battle.net game" : "own game"))
+                                  + "  ·  prefix " + (win.selGameObj.prefixName || "?") + " (" + (win.selGameObj.compat || "?") + ")"
+                                  + "  ·  " + win.playtimeText(win.selGameObj.playtime)
+                                  + (win.selGameObj.lastPlayed ? "  ·  last " + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
+                        }
+                        Text {
+                            Layout.fillWidth: true; elide: Text.ElideMiddle; visible: !!win.selGameObj.exe
+                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                            text: String(win.selGameObj.exe || "").replace(win.home, "~")
+                        }
+                        Hint { text: "Launch options (Proton, gamemode, MangoHud, gamescope…) of Umbral games are set in Umbral itself; Control Deck lists them, starts them and manages their prefixes (PREFIXES)." }
+                    }
 
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
+                        visible: win.selGameSource === "steam"
                         Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
                         Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
                         Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice) }
@@ -2681,11 +2710,13 @@ ShellRoot {
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
+                        visible: win.selGameSource === "steam"
                         Text { text: "ENV"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
                         Field { id: gEnv; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "VAR=value VAR2=value" }
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
+                        visible: win.selGameSource === "steam"
                         Text { text: "PREFIX"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
                         Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "before the game, e.g. gamescope -f --" }
                         Text { text: "ARGS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
@@ -2812,7 +2843,13 @@ ShellRoot {
                                      : "Current Steam options: " + (win.selGameLaunch || "(none)") + ". Use it in Steam to apply the profile (Steam must be closed).")
                         }
                         MiniBtn {
+                            width: 76; height: 32; label: "▶ PLAY"; tint: pal.ok
+                            on: !win.gameBusy
+                            onClicked: win.runGame(["gplay", win.selGame], "LAUNCHING…")
+                        }
+                        MiniBtn {
                             width: 90; height: 32; label: "SAVE"
+                            visible: win.selGameSource === "steam"
                             on: !win.gameBusy
                             onClicked: win.saveGameProfile()
                         }
@@ -2826,6 +2863,7 @@ ShellRoot {
                         }
                         MiniBtn {
                             width: 70; height: 32; primary: false; label: "RESET"
+                            visible: win.selGameSource === "steam"
                             on: win.gp.custom === true && !win.gameBusy
                             onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
                         }
@@ -2920,13 +2958,13 @@ ShellRoot {
 
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
-                        visible: win.selGame === ""
-                        EmptyHint { title: "PICK A GAME IN LIBRARY FIRST" }
+                        visible: win.selGame === "" || win.selGameSource !== "steam"
+                        EmptyHint { title: win.selGame === "" ? "PICK A GAME IN LIBRARY FIRST" : "A/B BENCHMARKS ARE FOR STEAM GAMES" }
                     }
 
                     ColumnLayout {
                         Layout.fillWidth: true; Layout.fillHeight: true; spacing: 8
-                        visible: win.selGame !== ""
+                        visible: win.selGame !== "" && win.selGameSource === "steam"
 
                         Section { Layout.fillWidth: true; label: "A / B"; info: win.selGameName }
 
