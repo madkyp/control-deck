@@ -314,6 +314,9 @@ ShellRoot {
         property string fxConfirm: ""       // anti-cheat games: second click applies
         property bool   fxActive: !!fx.current && !!win.gp.fx
         property bool   fxAnticheat: !!fx.online && fx.online.level === "anticheat"
+        property bool   fxReshade: fx.mode === "reshade"
+        property var    fxRsGame: fx.reshade ? fx.reshade.game : null
+        property bool   fxReady: fxReshade ? (!!fx.reshade && fx.reshade.ready === true) : (fx.vkbasalt === true && fx.shadersInstalled === true)
         function openFx() {
             gameView = "fx"; fxConfirm = "";
             if (selGameSource === "steam") {
@@ -331,10 +334,10 @@ ShellRoot {
             fxGameId = id; fxPresets = []; fxMsg = "Loading presets…";
             fxPresetsProc.command = [scriptPath, "fx", "presets", id]; fxPresetsProc.running = true;
         }
-        function fxApply(k, label) {
+        function fxApply(k, label, cmd) {
             if (fxAnticheat && fxConfirm !== k) { fxConfirm = k; return; }
             fxConfirm = "";
-            runGame(["fx", "set", selGame, k], label);
+            runGame(cmd || ["fx", "set", selGame, k], label);
         }
         property string copiedFix: ""       // fix command just copied (for feedback)
         property string confirmShader: ""   // target awaiting a second click
@@ -922,7 +925,7 @@ ShellRoot {
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
-                if (win.gameArgs[0] === "fx") fxStatProc.running = true;
+                if (win.gameArgs[0] === "fx" || (win.gameArgs[0] === "steamwrap" && win.gameView === "fx")) fxStatProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -3257,215 +3260,345 @@ ShellRoot {
                 }
 
                 // ---- FX (visual shaders) ----
-                ColumnLayout {
+                ScrollView {
+                    id: fxScroll
                     Layout.fillWidth: true; Layout.fillHeight: true
                     visible: win.gameView === "fx"
-                    spacing: 8
+                    contentWidth: availableWidth
+                    clip: true
+                    ColumnLayout {
+                        width: fxScroll.availableWidth
+                        spacing: 8
 
-                    EmptyHint {
-                        Layout.alignment: Qt.AlignCenter; anchors.centerIn: undefined
-                        visible: win.selGameSource !== "steam"
-                        title: "PICK A STEAM GAME IN LIBRARY"
-                    }
-
-                    // header: game · GPU · vkBasalt
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 9
-                        visible: win.selGameSource === "steam"
-                        Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
-                        Text { text: "VISUAL SHADERS"; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
-                        Text { Layout.fillWidth: true; elide: Text.ElideRight; text: win.selGameName; color: pal.dim; font.family: win.mono; font.pixelSize: 11 }
-                        Text {
-                            text: (win.fx.gpu || "") + "  ·  " + (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : "vkBasalt not installed")
-                            color: win.fx.vkbasalt ? pal.dim : pal.amber; font.family: win.mono; font.pixelSize: 10
-                        }
-                    }
-
-                    // one-time setup
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: win.selGameSource === "steam" && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
-                        implicitHeight: fxSetup.implicitHeight + 20
-                        radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
-                        RowLayout {
-                            id: fxSetup
-                            anchors.fill: parent; anchors.margins: 10; spacing: 10
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                color: pal.text; font.family: win.mono; font.pixelSize: 11
-                                text: win.fx.chaotic === false && !win.fx.vkbasalt
-                                      ? "vkBasalt comes from chaotic-aur, which isn't enabled here. Enable it (or build vkbasalt + lib32-vkbasalt from the AUR), then come back."
-                                      : "One-time setup: vkBasalt (the Vulkan layer that draws the effects, 64 + 32-bit, from chaotic-aur) and the standard ReShade shaders (official packages, ~0.5 MB). Works the same on AMD and NVIDIA."
+                            EmptyHint {
+                                Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 40; anchors.centerIn: undefined
+                                visible: win.selGameSource !== "steam"
+                                title: "PICK A STEAM GAME IN LIBRARY"
                             }
-                            MiniBtn {
-                                visible: win.fx.chaotic !== false || win.fx.vkbasalt
-                                width: 96; height: 32; label: "INSTALL"
-                                on: !win.gameBusy
-                                onClicked: win.runGame(["fx", "install"], "INSTALLING SHADERS…")
-                            }
-                        }
-                    }
 
-                    // online / anti-cheat warning
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: win.selGameSource === "steam" && !!win.fx.online && win.fx.online.level !== "none"
-                        implicitHeight: fxWarn.implicitHeight + 16
-                        radius: 8; border.width: 1
-                        color: win.fxAnticheat ? "#1f0d14" : "#1a150c"
-                        border.color: win.fxAnticheat ? pal.bad : pal.amber
-                        Text {
-                            id: fxWarn
-                            anchors.fill: parent; anchors.margins: 8
-                            wrapMode: Text.WordWrap; font.family: win.mono; font.pixelSize: 10
-                            color: win.fxAnticheat ? pal.bad : pal.amber
-                            text: win.fxAnticheat
-                                  ? "⚠ ONLINE GAME WITH ANTI-CHEAT (" + win.fx.online.anticheats.join(", ") + "). Shaders hook into the game's rendering; an anti-cheat may treat that as a modification and ban the account. Use them only if you accept that risk — applying one here asks for confirmation."
-                                  : "⚠ Online multiplayer game: some online games forbid visual mods in their rules. Check before using shaders there."
-                        }
-                    }
-
-                    // route + what's active
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: win.selGameSource === "steam" && !!win.fx.route
-                        implicitHeight: fxCur.implicitHeight + 20
-                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
-                        ColumnLayout {
-                            id: fxCur
-                            anchors.fill: parent; anchors.margins: 10; spacing: 6
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                font.family: win.mono; font.pixelSize: 10
-                                color: (win.fx.route || {}).ok ? pal.dim : pal.bad
-                                text: ((win.fx.route || {}).ok ? "✓ " : "✗ ") + ((win.fx.route || {}).reason || "")
-                            }
+                            // header: game · GPU · vkBasalt
                             RowLayout {
-                                Layout.fillWidth: true; spacing: 8
+                                Layout.fillWidth: true; spacing: 9
+                                visible: win.selGameSource === "steam"
+                                Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
+                                Text { text: "VISUAL SHADERS"; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
+                                Text { Layout.fillWidth: true; elide: Text.ElideRight; text: win.selGameName; color: pal.dim; font.family: win.mono; font.pixelSize: 11 }
                                 Text {
-                                    Layout.fillWidth: true; elide: Text.ElideRight
-                                    font.family: win.mono; font.pixelSize: 11; font.bold: true
-                                    color: win.fxActive ? pal.ok : pal.dim
-                                    text: win.fxActive
-                                          ? "● ACTIVE: " + win.fx.current.name + "  ·  " + win.fx.current.applied + " effect" + (win.fx.current.applied > 1 ? "s" : "")
-                                            + ((win.fx.current.skipped || []).length ? "  ·  " + win.fx.current.skipped.length + " skipped" : "")
-                                          : "○ No shaders on this game"
-                                }
-                                Chip {
-                                    visible: win.fxActive && win.fx.current.source === "sfx"
-                                    label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fx.current.url)
-                                }
-                                MiniBtn {
-                                    visible: win.fxActive
-                                    width: 60; height: 28; primary: false; label: "OFF"
-                                    on: !win.gameBusy
-                                    onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                    text: (win.fx.gpu || "") + "  ·  " + (win.fxReshade
+                                          ? (win.fx.reshade && win.fx.reshade.version ? "ReShade " + win.fx.reshade.version : "ReShade not installed")
+                                          : (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : "vkBasalt not installed"))
+                                    color: (win.fxReshade ? (win.fx.reshade || {}).ready : win.fx.vkbasalt) ? pal.dim : pal.amber
+                                    font.family: win.mono; font.pixelSize: 10
                                 }
                             }
-                            Repeater {
-                                model: win.fxActive ? (win.fx.current.skipped || []) : []
-                                delegate: Text {
-                                    required property var modelData
-                                    Layout.fillWidth: true; elide: Text.ElideRight
-                                    text: "✗ " + modelData.effect + " — " + modelData.why
-                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                }
-                            }
-                            Text {
-                                visible: win.fxActive
-                                text: "In game: HOME turns the effects on/off to compare."
-                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                            }
-                        }
-                    }
 
-                    // quick looks (vkBasalt's own effects) + presets from the internet
-                    Rectangle {
-                        Layout.fillWidth: true; Layout.fillHeight: true
-                        visible: win.selGameSource === "steam" && !!win.fx.route && win.fx.route.ok
-                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
-                        ColumnLayout {
-                            anchors.fill: parent; anchors.margins: 10; spacing: 8
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: 6
-                                Text { text: "QUICK LOOK"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
-                                Repeater {
-                                    model: [["sharpen", "SHARPEN", "AMD FidelityFX CAS: crisper image, almost free"],
-                                            ["sharpen-aa", "SHARPEN + AA", "SMAA anti-aliasing, then CAS sharpening"],
-                                            ["fxaa", "FXAA", "Light anti-aliasing, softer edges"],
-                                            ["clarity", "CLARITY", "Denoised luma sharpening: detail without boosting grain"]]
-                                    delegate: Chip {
-                                        required property var modelData
-                                        property string k: "builtin:" + modelData[0]
-                                        label: win.fxConfirm === k ? "CONFIRM?" : modelData[1]
-                                        tint: pal.ok; tip: modelData[2]
-                                        active: win.fxActive && win.fx.current.source === "builtin" && win.fx.current.name === modelData[0]
-                                        on: !win.gameBusy && win.fx.vkbasalt === true
-                                        onClicked: win.fxApply(k, "APPLYING…")
-                                    }
-                                }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: 6
-                                Text { text: "PRESETS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
-                                Field {
-                                    id: fxQuery; Layout.fillWidth: true; font.pixelSize: 11
-                                    placeholderText: "game name on SweetFX Settings DB"
-                                    onAccepted: win.fxSearch(text)
-                                }
-                                Chip { label: fxSearchProc.running ? "SEARCHING…" : "SEARCH"; on: !fxSearchProc.running; onClicked: win.fxSearch(fxQuery.text) }
-                            }
-                            Flow {
-                                Layout.fillWidth: true; spacing: 6
-                                visible: win.fxGames.length > 1
-                                Repeater {
-                                    model: win.fxGames
-                                    delegate: Chip {
-                                        required property var modelData
-                                        label: modelData.title; active: win.fxGameId === modelData.id
-                                        onClicked: win.fxLoadPresets(modelData.id)
-                                    }
-                                }
-                            }
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                visible: win.fxMsg !== ""
-                                text: win.fxMsg; color: pal.dim; font.family: win.mono; font.pixelSize: 10
-                            }
-                            ListView {
-                                id: fxList
-                                Layout.fillWidth: true; Layout.fillHeight: true
-                                clip: true; spacing: 3
-                                model: win.fxPresets
-                                ScrollBar.vertical: ScrollBar {}
-                                delegate: Rectangle {
-                                    required property var modelData
-                                    property string k: "sfx:" + modelData.id
-                                    width: fxList.width - 10; height: 34; radius: 6
-                                    color: pal.panel; border.width: 1
-                                    border.color: win.fxActive && win.fx.current.id === modelData.id ? pal.ok : pal.border
+                            // route: ReShade (DLL) or vkBasalt (Vulkan layer)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && !!win.fx.gpu
+                                implicitHeight: fxRoute.implicitHeight + 20
+                                radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                                ColumnLayout {
+                                    id: fxRoute
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 6
                                     RowLayout {
-                                        anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 6
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "ROUTE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Chip {
+                                            property string k: "mode:reshade"
+                                            label: win.fxConfirm === k ? "CONFIRM?" : "RESHADE" + (win.fx.recommended === "reshade" ? "  ★" : "")
+                                            tint: pal.ok; active: win.fxReshade
+                                            on: !win.gameBusy
+                                            tip: "ReShade itself: presets exactly as made (depth effects too) and its in-game menu. For D3D9–12 and OpenGL games."
+                                            onClicked: if (!win.fxReshade) win.fxApply(k, "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
+                                        }
+                                        Chip {
+                                            property string k: "mode:vkbasalt"
+                                            label: win.fxConfirm === k ? "CONFIRM?" : "VKBASALT" + (win.fx.recommended === "vkbasalt" ? "  ★" : "")
+                                            tint: pal.ok; active: !win.fxReshade
+                                            on: !win.gameBusy
+                                            tip: "A Vulkan layer: simplest, no files in the game folder; presets are converted and effects that need depth are skipped."
+                                            onClicked: if (win.fxReshade) win.fxApply(k, "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
+                                        }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
-                                            text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "★ recommended: " + (win.fx.recommended === "vkbasalt"
+                                                  ? "this game renders with Vulkan, ReShade's DLL can't hook it"
+                                                  : "full presets (depth effects included) and ReShade's in-game menu")
                                         }
-                                        Chip { label: "↗"; tip: "Open the preset's page"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
-                                        Chip {
-                                            label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fx.current.id === modelData.id ? "ACTIVE ✓" : "APPLY")
-                                            tint: pal.ok; on: !win.gameBusy && win.fx.shadersInstalled === true && win.fx.vkbasalt === true
-                                            tip: win.fx.shadersInstalled && win.fx.vkbasalt ? "Download, fetch the shaders it needs and convert it for vkBasalt" : "Run INSTALL above first"
-                                            onClicked: win.fxApply(k, "APPLYING PRESET…")
+                                    }
+                                    // ReShade: which .exe, which API
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxReshade
+                                        Text { text: "EXECUTABLE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Flow {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Repeater {
+                                                model: (win.fx.reshade || {}).exes || []
+                                                delegate: Chip {
+                                                    required property var modelData
+                                                    label: modelData.rel + "  ·  " + modelData.arch + "-bit"
+                                                    active: !!win.fxRsGame && win.fxRsGame.exe === modelData.path
+                                                    on: !win.gameBusy
+                                                    tip: "Install ReShade next to this .exe (detected API: " + modelData.api + ")"
+                                                    onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", modelData.path], "MOVING RESHADE…")
+                                                }
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxReshade && !!win.fxRsGame
+                                        Text { text: "HOOKS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: [["dxgi", "DXGI · DX10–12"], ["d3d9", "D3D9"], ["opengl32", "OPENGL"]]
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData[1]; active: !!win.fxRsGame && win.fxRsGame.api === modelData[0]
+                                                on: !win.gameBusy
+                                                tip: "Only change it if ReShade doesn't show up in game"
+                                                onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", win.fxRsGame.exe, modelData[0]], "SWITCHING API…")
+                                            }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "✓ " + (win.fxRsGame ? win.fxRsGame.api : "") + ".dll + d3dcompiler_47 linked in the game folder · OFF removes them"
+                                        }
+                                    }
+                                    // must launch through the wrapper
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        visible: win.fx.wrapped === false && (win.fxReshade || win.fxActive)
+                                        Text {
+                                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                            color: pal.amber; font.family: win.mono; font.pixelSize: 10
+                                            text: "⚠ This game doesn't launch through Control Deck yet, so the shaders won't load. " + (win.fx.steamRunning ? "Close Steam, then press USE IN STEAM." : "Press USE IN STEAM.")
+                                        }
+                                        MiniBtn {
+                                            width: 120; height: 28; label: "USE IN STEAM"
+                                            on: !win.gameBusy && !win.fx.steamRunning
+                                            onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
                                         }
                                     }
                                 }
                             }
-                            Text {
-                                Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                text: "Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade — effects that need the depth buffer can't run in vkBasalt and are skipped. Shaders: the packages the official ReShade installer lists."
-                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+
+                            // one-time setup (ReShade: no password, all user files)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && win.fxReshade && !!win.fx.reshade && (!win.fx.reshade.ready || win.fx.reshade.update)
+                                implicitHeight: fxRsSetup.implicitHeight + 20
+                                radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
+                                RowLayout {
+                                    id: fxRsSetup
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 10
+                                    Text {
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                        color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                        text: win.fx.reshade && win.fx.reshade.update
+                                              ? "ReShade " + win.fx.reshade.latest + " is out (you have " + win.fx.reshade.version + "). Games pick it up on their next launch."
+                                              : "One-time setup, no password: ReShade " + ((win.fx.reshade || {}).latest || "") + " from reshade.me, d3dcompiler_47 (Mozilla's Firefox installer, checksum-verified, like winetricks) and the standard shaders."
+                                    }
+                                    MiniBtn {
+                                        width: 96; height: 32; label: win.fx.reshade && win.fx.reshade.update ? "UPDATE" : "INSTALL"
+                                        on: !win.gameBusy
+                                        onClicked: win.runGame(["fx", "reshade", "install"], "DOWNLOADING RESHADE…")
+                                    }
+                                }
                             }
-                        }
+
+                            // one-time setup
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && !win.fxReshade && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
+                                implicitHeight: fxSetup.implicitHeight + 20
+                                radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
+                                RowLayout {
+                                    id: fxSetup
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 10
+                                    Text {
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                        color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                        text: win.fx.chaotic === false && !win.fx.vkbasalt
+                                              ? "vkBasalt comes from chaotic-aur, which isn't enabled here. Enable it (or build vkbasalt + lib32-vkbasalt from the AUR), then come back."
+                                              : "One-time setup: vkBasalt (the Vulkan layer that draws the effects, 64 + 32-bit, from chaotic-aur) and the standard ReShade shaders (official packages, ~0.5 MB). Works the same on AMD and NVIDIA."
+                                    }
+                                    MiniBtn {
+                                        visible: win.fx.chaotic !== false || win.fx.vkbasalt
+                                        width: 96; height: 32; label: "INSTALL"
+                                        on: !win.gameBusy
+                                        onClicked: win.runGame(["fx", "install"], "INSTALLING SHADERS…")
+                                    }
+                                }
+                            }
+
+                            // online / anti-cheat warning
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && !!win.fx.online && win.fx.online.level !== "none"
+                                implicitHeight: fxWarn.implicitHeight + 16
+                                radius: 8; border.width: 1
+                                color: win.fxAnticheat ? "#1f0d14" : "#1a150c"
+                                border.color: win.fxAnticheat ? pal.bad : pal.amber
+                                Text {
+                                    id: fxWarn
+                                    anchors.fill: parent; anchors.margins: 8
+                                    wrapMode: Text.WordWrap; font.family: win.mono; font.pixelSize: 10
+                                    color: win.fxAnticheat ? pal.bad : pal.amber
+                                    text: win.fxAnticheat
+                                          ? "⚠ ONLINE GAME WITH ANTI-CHEAT (" + win.fx.online.anticheats.join(", ") + "). Shaders hook into the game's rendering; an anti-cheat may treat that as a modification and ban the account. Use them only if you accept that risk — applying one here asks for confirmation."
+                                          : "⚠ Online multiplayer game: some online games forbid visual mods in their rules. Check before using shaders there."
+                                }
+                            }
+
+                            // route + what's active
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.selGameSource === "steam" && !!win.fx.route
+                                implicitHeight: fxCur.implicitHeight + 20
+                                radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                                ColumnLayout {
+                                    id: fxCur
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 6
+                                    Text {
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                        font.family: win.mono; font.pixelSize: 10
+                                        visible: !win.fxReshade
+                                        color: (win.fx.route || {}).ok ? pal.dim : pal.bad
+                                        text: ((win.fx.route || {}).ok ? "✓ " : "✗ ") + ((win.fx.route || {}).reason || "")
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                            color: win.fxActive ? pal.ok : pal.dim
+                                            text: win.fxActive
+                                                  ? "● ACTIVE: " + win.fx.current.name + "  ·  " + win.fx.current.applied + " effect" + (win.fx.current.applied > 1 ? "s" : "")
+                                                    + ((win.fx.current.skipped || []).length ? "  ·  " + win.fx.current.skipped.length + " skipped" : "")
+                                                  : "○ No shaders on this game"
+                                        }
+                                        Chip {
+                                            visible: win.fxActive && win.fx.current.source === "sfx"
+                                            label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fx.current.url)
+                                        }
+                                        MiniBtn {
+                                            visible: win.fxActive
+                                            width: 60; height: 28; primary: false; label: "OFF"
+                                            on: !win.gameBusy
+                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                        }
+                                    }
+                                    Repeater {
+                                        model: win.fxActive ? (win.fx.current.skipped || []) : []
+                                        delegate: Text {
+                                            required property var modelData
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            text: "✗ " + modelData.effect + " — " + modelData.why
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                        }
+                                    }
+                                    Text {
+                                        visible: win.fxActive
+                                        text: win.fxReshade ? "In game: HOME opens ReShade's menu — tweak values, switch effects on/off; changes are saved to this game's preset."
+                                                            : "In game: HOME turns the effects on/off to compare."
+                                        color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    }
+                                }
+                            }
+
+                            // quick looks (vkBasalt's own effects) + presets from the internet
+                            Rectangle {
+                                Layout.fillWidth: true; Layout.preferredHeight: 380
+                                visible: win.selGameSource === "steam" && !!win.fx.route && (win.fx.route.ok || win.fxReshade)
+                                radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                                ColumnLayout {
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "QUICK LOOK"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: [["sharpen", "SHARPEN", "AMD FidelityFX CAS: crisper image, almost free"],
+                                                    ["sharpen-aa", "SHARPEN + AA", "SMAA anti-aliasing, then CAS sharpening"],
+                                                    ["fxaa", "FXAA", "Light anti-aliasing, softer edges"],
+                                                    ["clarity", "CLARITY", "Denoised luma sharpening: detail without boosting grain"]]
+                                            delegate: Chip {
+                                                required property var modelData
+                                                property string k: "builtin:" + modelData[0]
+                                                label: win.fxConfirm === k ? "CONFIRM?" : modelData[1]
+                                                tint: pal.ok; tip: modelData[2]
+                                                active: win.fxActive && win.fx.current.source === "builtin" && win.fx.current.name === modelData[0]
+                                                on: !win.gameBusy && win.fxReady
+                                                onClicked: win.fxApply(k, "APPLYING…")
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "PRESETS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Field {
+                                            id: fxQuery; Layout.fillWidth: true; font.pixelSize: 11
+                                            placeholderText: "game name on SweetFX Settings DB"
+                                            onAccepted: win.fxSearch(text)
+                                        }
+                                        Chip { label: fxSearchProc.running ? "SEARCHING…" : "SEARCH"; on: !fxSearchProc.running; onClicked: win.fxSearch(fxQuery.text) }
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxGames.length > 1
+                                        Repeater {
+                                            model: win.fxGames
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData.title; active: win.fxGameId === modelData.id
+                                                onClicked: win.fxLoadPresets(modelData.id)
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                        visible: win.fxMsg !== ""
+                                        text: win.fxMsg; color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                    }
+                                    ListView {
+                                        id: fxList
+                                        Layout.fillWidth: true; Layout.fillHeight: true
+                                        clip: true; spacing: 3
+                                        model: win.fxPresets
+                                        ScrollBar.vertical: ScrollBar {}
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            property string k: "sfx:" + modelData.id
+                                            width: fxList.width - 10; height: 34; radius: 6
+                                            color: pal.panel; border.width: 1
+                                            border.color: win.fxActive && win.fx.current.id === modelData.id ? pal.ok : pal.border
+                                            RowLayout {
+                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 6
+                                                Text {
+                                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                                    text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                                }
+                                                Chip { label: "↗"; tip: "Open the preset's page"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
+                                                Chip {
+                                                    label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fx.current.id === modelData.id ? "ACTIVE ✓" : "APPLY")
+                                                    tint: pal.ok; on: !win.gameBusy && win.fxReady
+                                                    tip: !win.fxReady ? "Run INSTALL above first"
+                                                         : (win.fxReshade ? "Download it and fetch the shaders it needs; ReShade runs it as it is" : "Download, fetch the shaders it needs and convert it for vkBasalt")
+                                                    onClicked: win.fxApply(k, "APPLYING PRESET…")
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                        text: "Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade" + (win.fxReshade ? "" : " — in vkBasalt, effects that need the depth buffer are skipped") + ". Shaders: the packages the official ReShade installer lists."
+                                        color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    }
+                                }
+                            }
                     }
                 }
 

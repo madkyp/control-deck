@@ -295,10 +295,11 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   same on AMD (RADV) and NVIDIA, and CAS is AMD FidelityFX sharpening. Not
   offered when the profile forces `PROTON_USE_WINED3D=1` (OpenGL) or for
   non-Steam games (they don't go through the wrapper).
-- **Real ReShade (DLL injection) is not automated:** under Proton it only
-  helps games that don't draw through Vulkan (rare there), it needs a DLL
-  and override per game and per API, and it's the riskier one with
-  anti-cheats. The FX tab says so rather than half-supporting it.
+- **Two routes, chosen per game** (FX → ROUTE; ★ marks the recommended one):
+  **ReShade** (the real one, below) for D3D9–12 / OpenGL games — presets run
+  exactly as made, depth effects included, with ReShade's in-game menu — and
+  **vkBasalt** for Vulkan-only games or when nothing should touch the game
+  folder. Switching keeps the current look.
 - **Install (one click):** `vkbasalt` + `lib32-vkbasalt` from chaotic-aur
   through the deck's pkexec pacman (snapshot first without snap-pac), then the
   shader packages the official ReShade installer enables by default, from
@@ -349,7 +350,59 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
     logs the error).
 - CLI: `fx status [key]`, `fx install`, `fx packages`, `fx package <idx>`,
   `fx search <name>`, `fx presets <id>`,
-  `fx set <key> builtin:<look>|sfx:<id>|off`.
+  `fx set <key> builtin:<look>|sfx:<id>|off`,
+  `fx mode <key> reshade [exe] [dxgi|d3d9|opengl32] | vkbasalt`,
+  `fx exes <key>`, `fx reshade install | off <key>`.
+
+#### ReShade under Proton (the DLL route)
+Studied from the community's reference script
+(kevinlekiller/reshade-steam-proton), then every step checked here:
+- **ReShade itself:** `ReShade_Setup_<v>.exe` from reshade.me (the newest
+  non-Addon link on its home page, currently 6.8.0). The installer is a zip
+  behind an MZ stub, so `bsdtar` pulls `ReShade64.dll` and `ReShade32.dll` out
+  of it (no 7z needed). The files are kept under
+  `~/.local/share/control-deck/reshade/bin/ReShade-<v>/`, and `current` points
+  at the newest, so an UPDATE reaches every game on its next launch.
+- **d3dcompiler_47.dll** (ReShade compiles shaders with it on D3D9–11):
+  winetricks' method. It's taken from Mozilla's Firefox 62.0.3 installer (32
+  and 64-bit), and the installers' SHA-256 must match winetricks' values
+  (`721977f3…` / `d6edb4ff…`, verified here). `bsdtar` reads the 7z inside.
+- **Which executable:** candidates are the `.exe` files of the game folder,
+  minus crash reporters, redistributables, setups and helpers. The ranking
+  prefers UE's `-Shipping.exe`, a name that matches the game, an .exe whose
+  folder has graphics imports, and big files; launchers, consoles, editors,
+  servers and config tools rank down. Here it picks `deadlock.exe`,
+  `Balls.exe` and `WH40KRT.exe`.
+- **Which API:** the arch comes from the PE header and the API from the
+  imports of the .exe and of the DLLs beside it, read with a small PE reader
+  (Python, `mmap`; the system objdump here can't read PE files). Unity's
+  `UnityPlayer.dll` imports d3d11/dxgi, which maps to `dxgi.dll` (DX10–12);
+  d3d9 maps to `d3d9.dll`, and OpenGL-only to `opengl32.dll`. A Vulkan-only
+  game is refused, with vkBasalt suggested instead. The tab lets you override
+  the executable and the API.
+- **Install in the game folder:** only symlinks: `<api>.dll` points to
+  ReShade32/64 and `d3dcompiler_47.dll` to ours, unless the game ships its own.
+  A game's own `<api>.dll` is never replaced. `ReShade.ini` is created only
+  if missing. Otherwise only these keys are set:
+  - `EffectSearchPaths` and `TextureSearchPaths` point at the shared shader
+    folders with `\**`, which is recursive per ReShade's source
+    (`search_path.filename() == L"**"`);
+  - `PresetPath` points at `gaming/fx/<game>/ReShadePreset.ini`.
+  OFF removes the links (and the ini/log if the deck made them): the folder
+  goes back to its exact previous listing (checked on BALL x PIT).
+- **Launch:** the wrapper adds `WINEDLLOVERRIDES=d3dcompiler_47=n;<api>=n,b`,
+  appended to any overrides already set. Wine then loads ReShade from the
+  game folder, and ReShade chains to Proton's DXVK/VKD3D.
+- **Wrapper required:** applying a look turns on USE IN STEAM automatically
+  when Steam is closed. Otherwise the tab says to close Steam and shows the
+  button.
+- **Presets:** the SweetFX DB file is saved as the game's `ReShadePreset.ini`
+  unchanged; the effect files it names are fetched from the official packages
+  (see above). The quick looks are small ReShade presets built from SweetFX
+  effects (CAS, SMAA, FXAA, LumaSharpen + Vibrance). In game, HOME opens
+  ReShade's menu, and tweaks are saved to that preset.
+- Not verified yet: an actual in-game run (needs the game launched through the
+  wrapper), AMD, and 32-bit/D3D9/OpenGL titles (none installed here).
 
 ## Compatibility report
 

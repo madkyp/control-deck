@@ -1082,6 +1082,85 @@ printf 'https://www.nexusmods.com/x/mods/1' > "$FXS/sfx/games/preset/501/downloa
 O="$("$CD" fx set steam:4002 sfx:501 2>&1)"; eq "a link instead of a preset is refused" "$?" 4
 has "…saying what it is" "$O" "not a ReShade preset"
 unset CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL
+# ------------------------------------------------ ReShade under Proton ----
+section "ReShade (DLL) under Proton"
+RS="$T/rs"; mkdir -p "$RS/web/downloads" "$RS/zip" "$RS/ff/win64/ach" "$RS/ff/win32/ach" "$RS/7z/core"
+echo '<a href="/downloads/ReShade_Setup_6.9.1_Addon.exe">addon</a> <a href="/downloads/ReShade_Setup_6.9.1.exe">get</a>' > "$RS/web/index.html"
+echo dll64 > "$RS/zip/ReShade64.dll"; echo dll32 > "$RS/zip/ReShade32.dll"
+( cd "$RS/zip" && bsdtar -a -cf ../r.zip ReShade64.dll ReShade32.dll )
+{ printf 'MZ'; head -c 512 /dev/zero; cat "$RS/r.zip"; } > "$RS/web/downloads/ReShade_Setup_6.9.1.exe"
+echo d3dc > "$RS/7z/core/d3dcompiler_47.dll"
+( cd "$RS/7z" && bsdtar --format 7zip -cf "$RS/ff.7z" core )
+cp "$RS/ff.7z" "$RS/ff/win64/ach/Firefox%20Setup%2062.0.3.exe"; cp "$RS/ff.7z" "$RS/ff/win32/ach/Firefox%20Setup%2062.0.3.exe"
+FFSHA="$(sha256sum "$RS/ff.7z" | cut -d' ' -f1)"
+# a minimal 64-bit PE that imports dxgi.dll
+mkpe() {   # out dllname machine(0x8664|0x14c)
+    python3 - "$@" <<'PYPE'
+import struct, sys
+out, dll, mach = sys.argv[1], sys.argv[2].encode(), int(sys.argv[3], 16)
+pe64 = mach == 0x8664; optsz = 240 if pe64 else 224
+d = bytearray(0x400)
+d[0:2] = b'MZ'; struct.pack_into('<I', d, 0x3C, 0x40)
+d[0x40:0x44] = b'PE\0\0'; struct.pack_into('<HH', d, 0x44, mach, 1); struct.pack_into('<H', d, 0x54, optsz)
+opt = 0x58; struct.pack_into('<H', d, opt, 0x20b if pe64 else 0x10b)
+ddir = opt + (112 if pe64 else 96); struct.pack_into('<II', d, ddir + 8, 0x1000, 40)
+sec = opt + optsz; d[sec:sec+8] = b'.idata\0\0'; struct.pack_into('<IIII', d, sec + 8, 0x200, 0x1000, 0x200, 0x200)
+struct.pack_into('<I', d, 0x200 + 12, 0x1000 + 40); d[0x200 + 40:0x200 + 40 + len(dll)] = dll
+open(out, 'wb').write(bytes(d) + b'\0' * 200000)
+PYPE
+}
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_RESHADE_URL="file://$RS/web" \
+       CONTROL_DECK_FF_D3DC_URL="file://$RS/ff" CONTROL_DECK_FF_D3DC_SHA64="$FFSHA" CONTROL_DECK_FF_D3DC_SHA32="$FFSHA" \
+       CONTROL_DECK_FX_PACKAGES_URL="file://$FXS/EffectPackages.ini" CONTROL_DECK_SFX_URL="file://$FXS/sfx" \
+       CONTROL_DECK_AWACY_URL="file://$FXS/awacy.json" CONTROL_DECK_STEAM_STORE_API="file://$FXS/store-4002.json#"
+man 5000 "Story Game" StoryGame 100
+SG="$ST/steamapps/common/StoryGame"; mkdir -p "$SG/Binaries/Win64" "$SG/Redist"
+mkpe "$SG/StoryGame.exe" kernel32.dll 0x8664
+mkpe "$SG/Binaries/Win64/StoryGame-Win64-Shipping.exe" dxgi.dll 0x8664
+mkpe "$SG/Binaries/Win64/CrashReportClient.exe" kernel32.dll 0x8664
+mkpe "$SG/Redist/vcredist_x64.exe" kernel32.dll 0x8664
+mkpe "$SG/Binaries/Win64/Old9.exe" d3d9.dll 0x14c
+EX="$("$CD" fx exes steam:5000)"
+eq "Unreal Shipping exe first, crash reporter and redist left out" "$(jq -c '[.[] | .rel]' <<<"$EX")" '["Binaries/Win64/StoryGame-Win64-Shipping.exe","StoryGame.exe","Binaries/Win64/Old9.exe"]'
+eq "arch and API from the PE imports (DLLs beside it count)" "$(jq -c '[.[] | [.arch, .api]]' <<<"$EX")" '[[64,"dxgi"],[64,"unknown"],[32,"dxgi"]]'
+"$CD" fx reshade install >/dev/null 2>&1
+FXB="$HOME/.local/share/control-deck/reshade/bin"
+eq "latest non-addon ReShade from the site" "$(readlink "$FXB/current")" "ReShade-6.9.1"
+eq "DLLs pulled out of the installer" "$(cat "$FXB/current/ReShade64.dll")" dll64
+eq "d3dcompiler_47 from the (checksummed) Firefox installer" "$(cat "$FXB/d3dcompiler_47.dll.64")" d3dc
+rm -f "$FXB/d3dcompiler_47.dll.32"
+CONTROL_DECK_FF_D3DC_SHA32=0000 "$CD" fx reshade install >/dev/null 2>&1; eq "checksum mismatch refused" "$?" 4
+yes "…and nothing kept" "[[ ! -e '$FXB/d3dcompiler_47.dll.32' ]]"
+"$CD" fx reshade install >/dev/null 2>&1
+BEFORE="$(ls -A "$SG/Binaries/Win64" | paste -sd ,)"
+"$CD" fx mode steam:5000 reshade >/dev/null 2>&1
+W="$SG/Binaries/Win64"
+eq "dxgi.dll → ReShade64 beside the Shipping exe" "$(readlink "$W/dxgi.dll")" "$FXB/current/ReShade64.dll"
+eq "d3dcompiler_47 linked (64-bit)" "$(readlink "$W/d3dcompiler_47.dll")" "$FXB/d3dcompiler_47.dll.64"
+has "ReShade.ini: shaders searched recursively (Windows path)" "$(cat "$W/ReShade.ini")" 'EffectSearchPaths=Z:'"${HOME//\//\\}"'\.local\share\control-deck\reshade\Shaders\**'
+has "…preset kept in the deck's folder" "$(cat "$W/ReShade.ini")" 'PresetPath=Z:'"${HOME//\//\\}"'\.local\share\control-deck\gaming\fx\steam_5000\ReShadePreset.ini'
+printf '#!/bin/sh\necho "o=$WINEDLLOVERRIDES vkb=$ENABLE_VKBASALT"\n' > "$T/fake/rsgame"; chmod +x "$T/fake/rsgame"
+"$CD" fx set steam:5000 sfx:501 >/dev/null 2>&1 || true
+printf -- '--> Nice preset\r\nTechniques=Vibrance@Vibrance.fx,DOF@DOF.fx,Missing@Missing.fx\r\n\r\n[Vibrance.fx]\r\nVibrance=0.300000\r\n' > "$FXS/sfx/games/preset/501/download/index.html"
+"$CD" fx set steam:5000 sfx:501 >/dev/null 2>&1
+RP="$HOME/.local/share/control-deck/gaming/fx/steam_5000"
+has "preset used as it is (depth effects too)" "$(cat "$RP/ReShadePreset.ini")" "Techniques=Vibrance@Vibrance.fx,DOF@DOF.fx"
+eq "report: only the missing shader is flagged" "$(jq -c '[.mode, .effects, [.skipped[].effect]]' "$RP/report.json")" '["reshade",["DOF.fx","Vibrance.fx"],["Missing"]]'
+eq "wrapper: DLL overrides, no vkBasalt" "$(WINEDLLOVERRIDES=foo=b SteamAppId=5000 "$CD" run "$T/fake/rsgame")" "o=foo=b;d3dcompiler_47=n;dxgi=n,b vkb="
+"$CD" fx mode steam:5000 reshade "$W/Old9.exe" d3d9 >/dev/null 2>&1
+eq "switching exe/API moves the links" "$(readlink "$W/d3d9.dll") $([[ -e "$W/dxgi.dll" ]] && echo left || echo gone)" "$FXB/current/ReShade32.dll gone"
+eq "32-bit d3dcompiler for a 32-bit exe" "$(readlink "$W/d3dcompiler_47.dll")" "$FXB/d3dcompiler_47.dll.32"
+echo real > "$SG/dxgi.dll"
+O="$("$CD" fx mode steam:5000 reshade "$SG/StoryGame.exe" dxgi 2>&1)"; eq "a game's own dxgi.dll is never replaced" "$?" 3
+eq "…left untouched" "$(cat "$SG/dxgi.dll")" real
+rm -f "$SG/dxgi.dll"
+"$CD" fx mode steam:5000 reshade "$W/StoryGame-Win64-Shipping.exe" >/dev/null 2>&1
+"$CD" fx set steam:5000 off >/dev/null
+eq "OFF leaves the game folder as it was" "$(ls -A "$W" | paste -sd ,)" "$BEFORE"
+eq "profile off" "$("$CD" gprofile get steam:5000 | jq -c '[.fx]')" '[false]'
+"$CD" fx mode steam:5000 reshade /etc/passwd >/dev/null 2>&1; eq "only the game's own executables" "$?" 2
+unset CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 CONTROL_DECK_STEAM_ROOT \
+      CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

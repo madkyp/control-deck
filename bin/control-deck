@@ -2773,7 +2773,7 @@ control_deck_bin() {
 # --- profiles ----------------------------------------------------------------
 GAMING_DIR="$STATE_DIR/gaming"
 PROFILES="$GAMING_DIR/profiles.json"
-DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"overlay":false,"fx":false,"ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
+DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"overlay":false,"fx":false,"fxMode":"vkbasalt","ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
 
 profiles_json() { if [[ -s "$PROFILES" ]]; then cat "$PROFILES"; else echo '{}'; fi; }
 
@@ -2877,9 +2877,17 @@ cmd_run() {
     read -ra extra <<<"$(jq -r '.args' <<<"$p")"
     # visual shaders: vkBasalt layer with this game's config
     if [[ "$(jq -r '.fx' <<<"$p")" == true ]]; then
-        local fxc; fxc="$(fx_key_dir "$key")/vkBasalt.conf"
-        if [[ -s "$fxc" ]]; then export ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE="$fxc"
-        else echo "  visual shaders on but no config at $fxc" >> "$rlog"; fi
+        if [[ "$(jq -r '.fxMode // "vkbasalt"' <<<"$p")" == reshade ]]; then
+            local rst api; rst="$(reshade_state "$key")"
+            if [[ -n "$rst" ]]; then
+                api="$(jq -r .api <<<"$rst")"
+                export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}d3dcompiler_47=n;$api=n,b"
+            else echo "  ReShade on but not installed in the game folder" >> "$rlog"; fi
+        else
+            local fxc; fxc="$(fx_key_dir "$key")/vkBasalt.conf"
+            if [[ -s "$fxc" ]]; then export ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE="$fxc"
+            else echo "  visual shaders on but no config at $fxc" >> "$rlog"; fi
+        fi
     fi
     # this process becomes the game (exec), so the overlay follows our pid
     [[ "$(jq -r '.overlay' <<<"$p")" == true ]] && { cmd_overlay $$ || echo "  overlay not started" >> "$rlog"; }
@@ -4273,7 +4281,7 @@ fx_route() {
 
 # fx status [key] → install state, GPU, and (with a key) route, online risk, current preset
 cmd_fx_status() {
-    local key="${1:-}" v64 v32 n cur="null" route="null" online="null" d
+    local key="${1:-}" v64 v32 n cur="null" route="null" online="null" d rs="null" exes="[]" mode="vkbasalt" wrapped=false
     v64="$(pkg_ver vkbasalt)"; v32="$(pkg_ver lib32-vkbasalt)"
     n="$(find "$FX_DIR/Shaders" -name '*.fx' 2>/dev/null | wc -l)"
     if [[ -n "$key" ]]; then
@@ -4281,14 +4289,30 @@ cmd_fx_status() {
         d="$(fx_key_dir "$key")"
         [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
         route="$(fx_route "$key")"
-        [[ "$key" == steam:* ]] && online="$(fx_online "${key#steam:}")"
+        if [[ "$key" == steam:* ]]; then
+            online="$(fx_online "${key#steam:}")"
+            exes="$(cmd_fx_exes "$key" 2>/dev/null | jq -c '.[0:6] | map({path, rel, arch, api})')"; [[ -n "$exes" ]] || exes="[]"
+            rs="$(reshade_state "$key")"; [[ -n "$rs" ]] || rs="null"
+            mode="$(profile_get "$key" | jq -r '.fxMode // "vkbasalt"')"
+            wrapped="$(game_wrapped "${key#steam:}" && echo true || echo false)"
+        fi
     fi
     jq -nc --arg v64 "$v64" --arg v32 "$v32" --argjson n "$n" --arg vendor "$(gpu_vendor)" --arg gpu "$(gpu_name)" \
         --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
+        --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" \
+        --argjson steamRunning "$(steam_running && echo true || echo false)" \
+        --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
+        --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
         --arg chaotic "$(grep -qE '^[[:space:]]*\[chaotic-aur\]' "$PACMAN_CONF" 2>/dev/null && echo 1 || echo 0)" '{
         vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
         chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
-        installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end)}'
+        installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end),
+        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning,
+        reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
+                 update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
+        recommended:(($exes[0].api // "unknown") as $a
+                     | if ($a == "dxgi" or $a == "d3d9" or $a == "opengl32") then "reshade"
+                       elif $a == "vulkan" then "vkbasalt" else "reshade" end)}'
 }
 
 # fx install — vkBasalt (pkexec pacman, chaotic-aur) + the default shader packages
@@ -4413,49 +4437,380 @@ fx_builtin() {   # name out.conf
     printf '# written by Control Deck (built-in look: %s)\n%s\ntoggleKey = Home\nenableOnLaunch = True\n' "$1" "$body" > "$2"
 }
 
-# fx set <key> builtin:<name> | sfx:<preset id> | off
+# fx set <key> builtin:<name> | sfx:<preset id> | off — applied through the
+# game's mode: vkBasalt (converted config) or ReShade (the preset as it is)
 cmd_fx_set() {
-    local key="$1" what="$2" d rep name
+    local key="$1" what="$2" d rep name mode
     valid_game_key "$key" && [[ "$key" != default ]] || { err "not a game key: $key"; return 2; }
     d="$(fx_key_dir "$key")"
+    mode="$(profile_get "$key" | jq -r '.fxMode // "vkbasalt"')"
     case "$what" in
         off)
-            rm -rf "$d"; profile_write "$key" '{"fx":false}'
+            [[ -n "$(reshade_state "$key")" ]] && cmd_reshade_off "$key" --keep-profile >/dev/null
+            rm -f "$d/vkBasalt.conf" "$d/preset.ini" "$d/report.json"
+            profile_write "$key" '{"fx":false}'
             log "✔ Visual shaders off for $key."; return 0 ;;
         builtin:*)
             name="${what#builtin:}"; mkdir -p "$d"
-            fx_builtin "$name" "$d/vkBasalt.conf.new" || { rm -f "$d/vkBasalt.conf.new"; err "unknown built-in look: $name"; return 2; }
-            mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"; rm -f "$d/preset.ini"
-            rep="$(jq -nc --arg n "$name" '{source:"builtin", name:$n, applied:1, effects:[$n], skipped:[], partial:[]}')" ;;
+            if [[ "$mode" == reshade ]]; then
+                [[ -n "$(reshade_state "$key")" ]] || { cmd_reshade_on "$key" || return $?; }
+                reshade_builtin "$name" "$d/ReShadePreset.ini.new" || { rm -f "$d/ReShadePreset.ini.new"; err "unknown built-in look: $name"; return 2; }
+                rep="$(reshade_need_files "$d/ReShadePreset.ini.new")"; mv "$d/ReShadePreset.ini.new" "$d/ReShadePreset.ini"
+                rep="$(jq -c --arg n "$name" '. + {source:"builtin", name:$n}' <<<"$rep")"
+            else
+                fx_builtin "$name" "$d/vkBasalt.conf.new" || { rm -f "$d/vkBasalt.conf.new"; err "unknown built-in look: $name"; return 2; }
+                mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"
+                rep="$(jq -nc --arg n "$name" '{source:"builtin", name:$n, applied:1, effects:[$n], skipped:[], partial:[]}')"
+            fi
+            rm -f "$d/preset.ini" ;;
         sfx:*)
-            local id="${what#sfx:}" tmp r
+            local id="${what#sfx:}" tmp r rc=0
             [[ "$id" =~ ^[0-9]+$ ]] || { err "bad preset id"; return 2; }
-            [[ "$(find "$FX_DIR/Shaders" -name '*.fx' 2>/dev/null | head -1)" ]] || { err "install the shaders first (fx install)"; return 3; }
             mkdir -p "$d"; tmp="$(mktemp)"
             curl -fsSL --max-time 20 -A "$FX_UA" "$SFX_URL/games/preset/$id/download/" -o "$tmp" \
                 || { rm -f "$tmp"; err "couldn't download the preset"; return 4; }
-            name="$(tr -d '\r' < "$tmp" | head -1 | sed -E 's/^-->[[:space:]]*//' | cut -c1-80)"
-            local rc=0; r="$(fx_convert "$tmp" "$d/vkBasalt.conf.new")" || rc=$?
-            if (( rc != 0 )); then
-                rm -f "$tmp" "$d/vkBasalt.conf.new"
-                if [[ -n "$r" ]]; then
-                    jq -r '.skipped[] | "  ✗ \(.effect): \(.why)"' <<<"$r"
-                    err "nothing in this preset works with vkBasalt"
-                fi
-                return "$rc"
+            if ! tr -d '\r' < "$tmp" | grep -qE '^Techniques='; then
+                err "not a ReShade preset (no Techniques= line); it only says: $(tr -d '\r' < "$tmp" | head -c 120)"; rm -f "$tmp"; return 4
             fi
-            mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"; mv "$tmp" "$d/preset.ini"
+            name="$(tr -d '\r' < "$tmp" | head -1 | sed -E 's/^-->[[:space:]]*//' | cut -c1-80)"
+            [[ "$name" == Techniques=* || "$name" == \[* ]] && name="preset $id"
+            if [[ "$mode" == reshade ]]; then
+                [[ -n "$(reshade_state "$key")" ]] || { cmd_reshade_on "$key" || { rc=$?; rm -f "$tmp"; return $rc; }; }
+                r="$(reshade_need_files "$tmp")"
+                tr -d '\r' < "$tmp" | grep -vE '^-->' > "$d/ReShadePreset.ini"
+            else
+                [[ "$(find "$FX_DIR/Shaders" -name '*.fx' 2>/dev/null | head -1)" ]] || { rm -f "$tmp"; err "install the shaders first (fx install)"; return 3; }
+                r="$(fx_convert "$tmp" "$d/vkBasalt.conf.new")" || rc=$?
+                if (( rc != 0 )); then
+                    rm -f "$tmp" "$d/vkBasalt.conf.new"
+                    if [[ -n "$r" ]]; then
+                        jq -r '.skipped[] | "  ✗ \(.effect): \(.why)"' <<<"$r"
+                        err "nothing in this preset works with vkBasalt"
+                    fi
+                    return "$rc"
+                fi
+                mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"
+            fi
+            mv "$tmp" "$d/preset.ini"
             rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
                    '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")" ;;
         *) err "use: fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off"; return 2 ;;
     esac
+    rep="$(jq -c --arg m "$mode" '. + {mode:$m}' <<<"$rep")"
     printf '%s\n' "$rep" > "$d/report.json"
     profile_write "$key" '{"fx":true}'
-    log "✔ $(jq -r '.name' <<<"$rep") → $key ($(jq -r '.applied' <<<"$rep") effect(s))"
+    log "✔ $(jq -r '.name' <<<"$rep") → $key via $mode ($(jq -r '.applied' <<<"$rep") effect(s))"
+    [[ "$key" == steam:* ]] && fx_ensure_wrapped "$key"
     jq -r '.skipped[]? | "  ✗ \(.effect): \(.why)"' <<<"$rep"
     [[ "$(jq '.partial | length' <<<"$rep")" != 0 ]] && log "  ~ $(jq '.partial | length' <<<"$rep") colour value(s) kept at the shader's default (vkBasalt can't set vectors)"
-    history_add "visual shaders" gaming "$key $(jq -r '.name' <<<"$rep")" 0
+    history_add "visual shaders" gaming "$key $(jq -r '.name' <<<"$rep") ($mode)" 0
     return 0
+}
+
+# fx mode <key> reshade [exe] [api] | vkbasalt — switch route, keep the look
+cmd_fx_mode() {
+    local key="$1" mode="$2" d look=""
+    [[ "$key" == steam:* ]] || { err "only Steam games"; return 2; }
+    d="$(fx_key_dir "$key")"
+    if [[ -s "$d/report.json" ]]; then
+        look="$(jq -r 'if .source == "sfx" then "sfx:\(.id)" else "builtin:\(.name)" end' "$d/report.json")"
+    fi
+    case "$mode" in
+        reshade)
+            cmd_reshade_on "$key" "${3:-}" "${4:-}" || return $?
+            rm -f "$d/vkBasalt.conf" ;;
+        vkbasalt)
+            [[ -n "$(reshade_state "$key")" ]] && cmd_reshade_off "$key" --keep-profile >/dev/null
+            profile_write "$key" '{"fxMode":"vkbasalt"}' ;;
+        *) err "use: fx mode <key> reshade [exe] [dxgi|d3d9|opengl32] | vkbasalt"; return 2 ;;
+    esac
+    if [[ -n "$look" ]]; then cmd_fx_set "$key" "$look"
+    elif [[ "$mode" == vkbasalt ]]; then profile_write "$key" '{"fx":false}'; fi
+    log "✔ $key now uses $mode."
+}
+
+# --- ReShade (real, DLL) under Proton -------------------------------------------
+# For D3D9–12 / OpenGL games: ReShade's own DLL next to the game's .exe, named
+# after the API it hooks (dxgi.dll for D3D10–12, d3d9.dll, opengl32.dll), loaded
+# through WINEDLLOVERRIDES=<dll>=n,b; it then chains to Proton's DXVK/VKD3D.
+# Unlike vkBasalt it runs presets as they are (depth effects included) and has
+# its in-game menu (HOME). Files come from their official sources:
+#  - ReShade_Setup_<v>.exe from reshade.me (a zip: ReShade64/32.dll inside),
+#  - d3dcompiler_47.dll, which ReShade needs to compile shaders on D3D9–11, from
+#    Mozilla's Firefox 62.0.3 installer, checked by SHA-256 (same as winetricks).
+# Nothing is copied into the game folder: symlinks to ~/.local/share, removed
+# on OFF; ReShade.ini is written only when the game had none.
+RESHADE_URL="${CONTROL_DECK_RESHADE_URL:-https://reshade.me}"
+FF_D3DC_URL="${CONTROL_DECK_FF_D3DC_URL:-https://download-installer.cdn.mozilla.net/pub/firefox/releases/62.0.3}"
+declare -A FF_D3DC_SHA=(
+    [64]=721977f36c008af2b637aedd3f1b529f3cfed6feb10f68ebe17469acb1934986
+    [32]=d6edb4ff0a713f417ebd19baedfe07527c6e45e84a6c73ed8c66a33377cc0aca
+)
+[[ -n "${CONTROL_DECK_FF_D3DC_SHA64:-}" ]] && FF_D3DC_SHA[64]="$CONTROL_DECK_FF_D3DC_SHA64"
+[[ -n "${CONTROL_DECK_FF_D3DC_SHA32:-}" ]] && FF_D3DC_SHA[32]="$CONTROL_DECK_FF_D3DC_SHA32"
+RESHADE_BIN="$FX_DIR/bin"
+
+reshade_latest() {
+    fx_cached reshade-home.html 86400 "$RESHADE_URL/" \
+        | grep -oE '/downloads/ReShade_Setup_[0-9][0-9.]*[0-9]\.exe' | head -1 \
+        | sed -E 's|.*ReShade_Setup_([0-9.]+)\.exe|\1|'
+}
+reshade_version() { [[ -L "$RESHADE_BIN/current" ]] && basename "$(readlink "$RESHADE_BIN/current")"; }
+
+# fx reshade install — ReShade (latest from reshade.me) + d3dcompiler_47 (32/64)
+cmd_reshade_install() {
+    local v tmp a
+    v="$(reshade_latest)"; [[ -n "$v" ]] || { err "couldn't read the current ReShade version from $RESHADE_URL"; return 4; }
+    mkdir -p "$RESHADE_BIN"
+    if [[ ! -f "$RESHADE_BIN/ReShade-$v/ReShade64.dll" ]]; then
+        log "→ ReShade $v  ($RESHADE_URL/downloads/ReShade_Setup_$v.exe)"
+        tmp="$(mktemp -d)"
+        curl -fsSL --max-time 120 -A "$FX_UA" "$RESHADE_URL/downloads/ReShade_Setup_$v.exe" -o "$tmp/setup.exe" \
+            || { rm -rf "$tmp"; err "download failed"; return 4; }
+        [[ "$(head -c 2 "$tmp/setup.exe")" == MZ ]] || { rm -rf "$tmp"; err "that isn't the ReShade installer"; return 4; }
+        mkdir -p "$tmp/x"
+        bsdtar -xf "$tmp/setup.exe" -C "$tmp/x" ReShade64.dll ReShade32.dll 2>/dev/null
+        [[ -f "$tmp/x/ReShade64.dll" && -f "$tmp/x/ReShade32.dll" ]] || { rm -rf "$tmp"; err "ReShade64/32.dll not found in the installer"; return 4; }
+        mkdir -p "$RESHADE_BIN/ReShade-$v"; mv "$tmp/x/ReShade64.dll" "$tmp/x/ReShade32.dll" "$RESHADE_BIN/ReShade-$v/"
+        rm -rf "$tmp"
+    fi
+    ln -sfn "ReShade-$v" "$RESHADE_BIN/current"
+    for a in 64 32; do
+        [[ -f "$RESHADE_BIN/d3dcompiler_47.dll.$a" ]] && continue
+        log "→ d3dcompiler_47.dll ($a-bit) from Mozilla's Firefox 62.0.3 installer"
+        tmp="$(mktemp -d)"
+        curl -fsSL --max-time 300 -A "$FX_UA" "$FF_D3DC_URL/win$a/ach/Firefox%20Setup%2062.0.3.exe" -o "$tmp/ff.exe" \
+            || { rm -rf "$tmp"; err "download failed"; return 4; }
+        [[ "$(sha256sum "$tmp/ff.exe" | cut -d' ' -f1)" == "${FF_D3DC_SHA[$a]}" ]] \
+            || { rm -rf "$tmp"; err "Firefox installer checksum mismatch: not using it"; return 4; }
+        bsdtar -xf "$tmp/ff.exe" -C "$tmp" core/d3dcompiler_47.dll 2>/dev/null \
+            && mv "$tmp/core/d3dcompiler_47.dll" "$RESHADE_BIN/d3dcompiler_47.dll.$a" \
+            || { rm -rf "$tmp"; err "d3dcompiler_47.dll not found in the installer"; return 4; }
+        rm -rf "$tmp"
+    done
+    # the standard shaders too (same folders vkBasalt uses)
+    local idx
+    while IFS= read -r idx; do
+        [[ -n "$idx" ]] && { fx_install_pkg "$idx" || return 4; }
+    done < <(fx_packages | jq -r '.[] | select(.default and (.installed | not)) | .idx')
+    history_add "reshade install" gaming "ReShade $v" 0
+    log "✔ ReShade $v ready."
+}
+
+# PE header → {"arch":64|32, "imports":[…]} per file (Python; arch only without it)
+pe_info() {
+    if have python3; then
+        python3 - "$@" <<'PY'
+import json, mmap, struct, sys
+def info(p):
+    # mmap: only the pages of the headers and the import table get read
+    with open(p, 'rb') as f:
+        d = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    if d[:2] != b'MZ': return None
+    pe = struct.unpack_from('<I', d, 0x3C)[0]
+    if d[pe:pe + 4] != b'PE\0\0': return None
+    machine, nsec = struct.unpack_from('<HH', d, pe + 4)
+    optsz = struct.unpack_from('<H', d, pe + 20)[0]
+    opt = pe + 24
+    ddir = opt + (112 if struct.unpack_from('<H', d, opt)[0] == 0x20b else 96)
+    imp = struct.unpack_from('<I', d, ddir + 8)[0]
+    secs = [struct.unpack_from('<IIII', d, pe + 24 + optsz + i * 40 + 8) for i in range(nsec)]
+    def off(rva):
+        for vsz, va, rsz, rp in secs:
+            if va <= rva < va + max(vsz, rsz): return rva - va + rp
+    names, o = [], (off(imp) if imp else None)
+    while o is not None and o + 20 <= len(d):
+        n = struct.unpack_from('<I', d, o + 12)[0]
+        no = off(n) if n else None
+        if no is None: break
+        names.append(d[no:d.find(b'\0', no)].decode('ascii', 'replace').lower()); o += 20
+    return {'arch': {0x8664: 64, 0x14c: 32}.get(machine, 0), 'imports': names}
+out = {}
+for p in sys.argv[1:]:
+    try: out[p] = info(p)
+    except Exception: out[p] = None
+print(json.dumps(out))
+PY
+    else
+        local f m o
+        for f in "$@"; do
+            o="$(od -An -tu4 -j60 -N4 "$f" | tr -d ' ')"
+            m="$(od -An -tx2 -j$((o + 4)) -N2 "$f" | tr -d ' ')"
+            jq -nc --arg f "$f" --arg m "$m" '{($f): {arch:(if $m == "8664" then 64 elif $m == "014c" then 32 else 0 end), imports:[]}}'
+        done | jq -sc 'add // {}'
+    fi
+}
+
+steam_game_dir() {   # appid → install folder
+    steam_games | awk -v i="$1" 'NR % 5 == 1 { id = $0 } NR % 5 == 3 { d = $0 } NR % 5 == 0 && id == i { print $0 "/steamapps/common/" d; exit }'
+}
+
+# fx exes <key> → the game's .exe candidates, best first, with arch and the API
+# ReShade should hook (from the imports of the .exe and of the DLLs beside it)
+cmd_fx_exes() {
+    local key="$1" dir
+    [[ "$key" == steam:* ]] || { err "only Steam games"; return 2; }
+    dir="$(steam_game_dir "${key#steam:}")"; [[ -d "$dir" ]] || { err "game folder not found"; return 4; }
+    local exes=() f
+    while IFS= read -r f; do exes+=("$f"); done < <(find "$dir" -maxdepth 5 -type f -iname '*.exe' -size +100k 2>/dev/null \
+        | grep -viE '/(unins[^/]*|[^/]*crash[^/]*|[^/]*redist[^/]*|dxsetup|vc_?redist[^/]*|[^/]*setup[^/]*|[^/]*report[^/]*|[^/]*helper[^/]*|UnityCrashHandler[^/]*)\.exe$|/(_CommonRedist|Redist|redist|DirectX|Support)/')
+    ((${#exes[@]})) || { echo '[]'; return 0; }
+    local dlls=() d
+    while IFS= read -r d; do
+        for f in "$d"/*.dll; do [[ -f "$f" ]] && dlls+=("$f"); done
+    done < <(for f in "${exes[@]}"; do dirname "$f"; done | sort -u)
+    pe_info "${exes[@]}" "${dlls[@]}" | jq -c --arg root "$dir" --arg game "$(steam_games | awk -v i="${key#steam:}" 'NR % 5 == 1 { id = $0 } NR % 5 == 2 && id == i { print; exit }')" --argjson exes "$(printf '%s\n' "${exes[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))')" \
+        --argjson sizes "$(for f in "${exes[@]}"; do stat -c %s "$f"; done | jq -sc .)" '
+        . as $pe
+        | def dirof: sub("/[^/]*$"; "");
+          def norm: ascii_downcase | gsub("[^a-z0-9]"; "");
+          (($root | sub(".*/"; "")) | norm) as $idir | ($game | norm) as $gname |
+          [range(0; $exes | length) as $i | $exes[$i] as $e
+           | ([$pe | to_entries[] | select((.key | dirof) == ($e | dirof)) | .value.imports[]?] | unique) as $imp
+           | {path:$e, rel:($e | ltrimstr($root + "/")), size:$sizes[$i], arch:($pe[$e].arch // 0),
+              api:(if ($imp | map(select(test("^(d3d1[0-2]|d3d10_1|d3d10core|dxgi)\\.dll$"))) | length) > 0 then "dxgi"
+                   elif ($imp | index("d3d9.dll")) then "d3d9"
+                   elif ($imp | index("opengl32.dll")) then "opengl32"
+                   elif ($imp | index("vulkan-1.dll")) then "vulkan"
+                   else "unknown" end)}
+           | .score = (.size / 1048576
+                       + (if (.rel | test("-Shipping\\.exe$"; "i")) then 1000 else 0 end)
+                       + (if .api != "unknown" then 200 else 0 end)
+                       - (if (.rel | test("launcher"; "i")) then 500 else 0 end)
+                       - (if (.rel | test("console|editor|server|bench|config|settings|tool"; "i")) then 400 else 0 end)
+                       + ((.rel | sub(".*/"; "") | sub("(-win64)?(-shipping)?\\.exe$"; ""; "i") | norm) as $stem
+                          | if $stem != "" and (($idir | contains($stem)) or ($gname | contains($stem)) or ($stem | contains($idir))) then 300 else 0 end))]
+        | sort_by(-.score)'
+}
+
+winpath() { local p="$1"; printf 'Z:%s' "${p//\//\\}"; }
+
+# set/replace one key of an ini section in place (ReShade.ini)
+ini_set() {   # file section key value
+    local tmp; tmp="$(mktemp)"
+    # the value goes through the environment: awk -v would eat its backslashes
+    INI_S="[$2]" INI_K="$3" INI_V="$4" awk '
+        BEGIN { S = ENVIRON["INI_S"]; K = ENVIRON["INI_K"]; V = ENVIRON["INI_V"]; done = 0 }
+        { sub(/\r$/, "") }
+        $0 == S { insec = 1; print; next }
+        /^\[/ { if (insec && !done) { print K "=" V; done = 1 } insec = 0 }
+        insec && index($0, K "=") == 1 { if (!done) print K "=" V; done = 1; next }
+        { print }
+        END { if (!done) { if (!insec) print S; print K "=" V } }' "$1" > "$tmp" && cat "$tmp" > "$1"; rm -f "$tmp"
+}
+
+# does the game launch through the wrapper? (Steam launch options)
+game_wrapped() {
+    local lc; lc="$(steam_localconfig)"
+    [[ -f "$lc" ]] && [[ "$(vdf_get "$lc" "$LOCALCONFIG_APPS/$1" LaunchOptions)" == *"control-deck run"* ]]
+}
+# FX only works through the wrapper: wrap the game now if Steam allows it
+fx_ensure_wrapped() {
+    local id="${1#steam:}"
+    game_wrapped "$id" && return 0
+    if steam_running; then
+        log "⚠ The game doesn't launch through Control Deck yet: close Steam and press USE IN STEAM (LIBRARY)."
+    else
+        cmd_steamwrap "$id" on >/dev/null && log "→ USE IN STEAM turned on (the game now launches through Control Deck)"
+    fi
+}
+
+reshade_state() { local f; f="$(fx_key_dir "$1")/reshade.json"; [[ -s "$f" ]] && cat "$f"; }
+
+# fx reshade on <key> [exe path] [dxgi|d3d9|opengl32]
+cmd_reshade_on() {
+    local key="$1" exe="${2:-}" api="${3:-}" cand dir arch d target ini ours="$RESHADE_BIN"
+    [[ "$key" == steam:* ]] || { err "only Steam games"; return 2; }
+    [[ -n "$(reshade_version)" && -f "$RESHADE_BIN/d3dcompiler_47.dll.64" ]] || { cmd_reshade_install || return 4; }
+    cand="$(cmd_fx_exes "$key")" || return 4
+    [[ -n "$exe" ]] || exe="$(jq -r '.[0].path // empty' <<<"$cand")"
+    [[ -n "$exe" ]] || { err "no game .exe found"; return 4; }
+    jq -e --arg e "$exe" 'any(.[]; .path == $e)' <<<"$cand" >/dev/null || { err "not one of this game's executables: $exe"; return 2; }
+    arch="$(jq -r --arg e "$exe" '.[] | select(.path == $e) | .arch' <<<"$cand")"
+    [[ -n "$api" ]] || api="$(jq -r --arg e "$exe" '.[] | select(.path == $e) | .api' <<<"$cand")"
+    case "$api" in
+        dxgi|d3d9|opengl32) ;;
+        vulkan) err "this game renders with Vulkan: ReShade's DLL can't hook it — use vkBasalt"; return 3 ;;
+        *) err "couldn't tell which graphics API the game uses: pick DXGI (DirectX 10–12), D3D9 or OPENGL"; return 3 ;;
+    esac
+    [[ "$arch" == 32 || "$arch" == 64 ]] || { err "unknown .exe architecture"; return 4; }
+    dir="$(dirname "$exe")"
+    # an earlier ReShade in another folder/API of this game goes first
+    [[ -n "$(reshade_state "$key")" ]] && cmd_reshade_off "$key" --keep-profile >/dev/null
+    target="$dir/$api.dll"
+    if [[ -e "$target" || -L "$target" ]] && [[ "$(readlink "$target" 2>/dev/null)" != "$ours"/* ]]; then
+        err "the game already has its own $api.dll: not replacing it"; return 3
+    fi
+    ln -sfn "$ours/current/ReShade$arch.dll" "$target"
+    local d3dc=false
+    if [[ ! -e "$dir/d3dcompiler_47.dll" || "$(readlink "$dir/d3dcompiler_47.dll" 2>/dev/null)" == "$ours"/* ]]; then
+        ln -sfn "$ours/d3dcompiler_47.dll.$arch" "$dir/d3dcompiler_47.dll"; d3dc=true
+    fi
+    d="$(fx_key_dir "$key")"; mkdir -p "$d"
+    [[ -f "$d/ReShadePreset.ini" ]] || printf 'Techniques=\nTechniqueSorting=\n' > "$d/ReShadePreset.ini"
+    ini="$dir/ReShade.ini"; local created=false
+    if [[ ! -f "$ini" ]]; then
+        created=true
+        printf '[GENERAL]\n[INPUT]\nKeyOverlay=36,0,0,0\n[OVERLAY]\nTutorialProgress=4\n' > "$ini"
+    fi
+    ini_set "$ini" GENERAL EffectSearchPaths "$(winpath "$FX_DIR/Shaders")\\**"
+    ini_set "$ini" GENERAL TextureSearchPaths "$(winpath "$FX_DIR/Textures")\\**"
+    ini_set "$ini" GENERAL PresetPath "$(winpath "$d/ReShadePreset.ini")"
+    ini_set "$ini" GENERAL IntermediateCachePath 'C:\users\steamuser\Temp'
+    jq -nc --arg exe "$exe" --arg dir "$dir" --arg api "$api" --argjson arch "$arch" --argjson d3dc "$d3dc" \
+        --argjson created "$created" --arg v "$(reshade_version)" \
+        '{exe:$exe, dir:$dir, api:$api, arch:$arch, d3dcompiler:$d3dc, iniCreated:$created, version:$v}' > "$d/reshade.json"
+    profile_write "$key" '{"fx":true,"fxMode":"reshade"}'
+    history_add "reshade on" gaming "$key $api" 0
+    log "✔ ReShade on: ${exe#"$(dirname "$dir")"/} ($arch-bit, $api.dll). In game, HOME opens its menu."
+}
+
+# fx reshade off <key> — remove only what we put there
+cmd_reshade_off() {
+    local key="$1" st dir api d f
+    st="$(reshade_state "$key")"; d="$(fx_key_dir "$key")"
+    if [[ -n "$st" ]]; then
+        dir="$(jq -r .dir <<<"$st")"; api="$(jq -r .api <<<"$st")"
+        for f in "$dir/$api.dll" "$dir/d3dcompiler_47.dll"; do
+            [[ -L "$f" && "$(readlink "$f")" == "$RESHADE_BIN"/* ]] && rm -f "$f"
+        done
+        if [[ "$(jq -r .iniCreated <<<"$st")" == true ]]; then rm -f "$dir/ReShade.ini" "$dir/ReShade.log" "$dir"/ReShade.log.*; fi
+        rm -f "$d/reshade.json"
+    fi
+    [[ "${2:-}" == --keep-profile ]] || profile_write "$key" '{"fx":false,"fxMode":"vkbasalt"}'
+    log "✔ ReShade removed from the game folder."
+}
+
+# a preset's effect files, fetching the official package of each missing one
+reshade_need_files() {   # preset.ini → report JSON {applied, effects, skipped}
+    local techs name file pk pkgs used=() skipped="[]"
+    techs="$(tr -d '\r' < "$1" | grep -m1 -E '^Techniques=' | cut -d= -f2-)"
+    pkgs="$(fx_packages)"
+    local -a t=(); IFS=',' read -ra t <<<"$techs"
+    for name in "${t[@]}"; do
+        [[ "$name" == *@* ]] || continue
+        file="${name#*@}"; name="${name%@*}"
+        if [[ -z "$(fx_find "$file")" ]]; then
+            pk="$(jq -r --arg f "$file" '[.[] | select(.files | index($f)) | .idx] | first // empty' <<<"$pkgs")"
+            [[ -n "$pk" ]] && fx_install_pkg "$pk" >&2 && pkgs="$(fx_packages)"
+        fi
+        if [[ -n "$(fx_find "$file")" ]]; then used+=("$file")
+        else skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any official package"}]' <<<"$skipped")"; fi
+    done
+    jq -nc --argjson s "$skipped" --args '{applied:($ARGS.positional | unique | length), effects:($ARGS.positional | unique), skipped:$s, partial:[]}' "${used[@]}"
+}
+
+# built-in looks as ReShade presets (SweetFX effects from the standard packages)
+reshade_builtin() {   # name out.ini
+    local t
+    case "$1" in
+        sharpen)    t="ContrastAdaptiveSharpen@CAS.fx" ;;
+        sharpen-aa) t="SMAA@SMAA.fx,ContrastAdaptiveSharpen@CAS.fx" ;;
+        fxaa)       t="FXAA@FXAA.fx" ;;
+        clarity)    t="LumaSharpen@LumaSharpen.fx,Vibrance@Vibrance.fx" ;;
+        *) return 2 ;;
+    esac
+    printf 'Techniques=%s\nTechniqueSorting=%s\n' "$t" "$t" > "$2"
 }
 
 cmd_fx() {
@@ -4468,7 +4823,14 @@ cmd_fx() {
         search)   cmd_fx_search "$*" ;;
         presets)  cmd_fx_presets "${1:-}" ;;
         set)      cmd_fx_set "${1:-}" "${2:-}" ;;
-        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look>"; return 2 ;;
+        mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+        exes)     cmd_fx_exes "${1:-}" ;;
+        reshade)  case "${1:-}" in
+                      install) cmd_reshade_install ;;
+                      off)     cmd_reshade_off "${2:-}" ;;
+                      *) err "use: fx reshade install | off <key>"; return 2 ;;
+                  esac ;;
+        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | reshade install|off"; return 2 ;;
     esac
 }
 
