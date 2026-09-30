@@ -453,6 +453,7 @@ ShellRoot {
             else if (x.token === "mangohud") { gpSet("mangohud", true); }
             else { gPrefix.text = (gPrefix.text.trim() + " " + (x.token === "gamescope" ? "gamescope -f --" : x.token)).trim(); }
         }
+        property var stHist: ({ gpuLoad: [], gpuTemp: [], cpuTemp: [], ram: [], vram: [] })
         function durationText(sec) {
             var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
             return h > 0 ? h + " h " + m + " min" : (m > 0 ? m + " min" : sec + " s");
@@ -933,7 +934,19 @@ ShellRoot {
         Process {
             id: gstatProc
             command: [win.scriptPath, "gstatus"]
-            stdout: StdioCollector { onStreamFinished: { try { win.gstat = JSON.parse(text); } catch (e) {} } }
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.gstat = JSON.parse(text); } catch (e) { return; }
+                    // live history for the STATUS graphs (100 samples ≈ 5 min at 3 s)
+                    var h = win.stHist, g = win.gstat.gpu || {}, y = win.gstat.system || {};
+                    function push(a, v) { var b = a.concat([v == null ? 0 : v]); return b.length > 100 ? b.slice(b.length - 100) : b; }
+                    win.stHist = {
+                        gpuLoad: push(h.gpuLoad, g.load), gpuTemp: push(h.gpuTemp, g.temp), cpuTemp: push(h.cpuTemp, y.temp),
+                        ram: push(h.ram, y.memTotal ? 100 * y.memUsed / y.memTotal : 0),
+                        vram: push(h.vram, g.vramTotal ? 100 * g.vramUsed / g.vramTotal : 0)
+                    };
+                }
+            }
         }
         Process {
             id: toolsProc
@@ -4282,7 +4295,7 @@ ShellRoot {
                         property string title
                         property string sub: ""
                         default property alias content: cardCol.data
-                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                        Layout.fillWidth: true
                         implicitHeight: cardCol.implicitHeight + 20
                         radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                         ColumnLayout {
@@ -4295,55 +4308,123 @@ ShellRoot {
                             }
                         }
                     }
+                    // one live series (last 5 minutes while STATUS is open)
+                    component Spark: ColumnLayout {
+                        id: spark
+                        property string label
+                        property var values: []
+                        property real max: 100
+                        property string current: ""
+                        property color tint: pal.accent
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 2
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { text: spark.label; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            Item { Layout.fillWidth: true }
+                            Text { text: spark.current; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true }
+                        }
+                        Canvas {
+                            id: cv
+                            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 40
+                            onWidthChanged: requestPaint(); onHeightChanged: requestPaint()
+                            Connections { target: spark; function onValuesChanged() { cv.requestPaint(); } }
+                            onPaint: {
+                                var c = getContext("2d"); c.reset();
+                                c.fillStyle = pal.logBg; c.fillRect(0, 0, width, height);
+                                c.strokeStyle = pal.border; c.lineWidth = 1;
+                                for (var g = 1; g < 4; g++) { var gy = Math.round(height * g / 4) + 0.5; c.beginPath(); c.moveTo(0, gy); c.lineTo(width, gy); c.stroke(); }
+                                var v = spark.values, n = 100;
+                                if (!v || v.length < 2) return;
+                                var step = width / (n - 1), x0 = width - (v.length - 1) * step;
+                                function yOf(val) { return height - 2 - (height - 4) * Math.max(0, Math.min(1, val / spark.max)); }
+                                c.beginPath(); c.moveTo(x0, height);
+                                for (var i = 0; i < v.length; i++) c.lineTo(x0 + i * step, yOf(v[i]));
+                                c.lineTo(width, height); c.closePath();
+                                c.fillStyle = Qt.rgba(spark.tint.r, spark.tint.g, spark.tint.b, 0.18); c.fill();
+                                c.beginPath();
+                                for (var j = 0; j < v.length; j++) { if (j === 0) c.moveTo(x0, yOf(v[0])); else c.lineTo(x0 + j * step, yOf(v[j])); }
+                                c.strokeStyle = spark.tint; c.lineWidth = 1.5; c.stroke();
+                            }
+                        }
+                    }
 
                     ColumnLayout {
                         width: stScroll.availableWidth
+                        height: Math.max(implicitHeight, stScroll.availableHeight)
                         spacing: 8
 
-                        // running now
+                        // running game (left) · displays (right)
                         Rectangle {
                             Layout.fillWidth: true
-                            implicitHeight: runCol.implicitHeight + 20
+                            implicitHeight: runRow.implicitHeight + 16
                             radius: 8; color: pal.card; border.width: 1
                             border.color: (win.gstat.running || []).length ? pal.ok : pal.border
-                            ColumnLayout {
-                                id: runCol
-                                anchors.fill: parent; anchors.margins: 10; spacing: 6
-                                RowLayout {
-                                    spacing: 8
-                                    Text { text: "RUNNING NOW"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
-                                    Text {
-                                        text: (win.gstat.running || []).length ? "" : "no game  ·  Steam " + ((win.gstat.tools || {}).steam ? "open" : "closed")
-                                        color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                            RowLayout {
+                                id: runRow
+                                anchors.fill: parent; anchors.margins: 8; spacing: 12
+                                ColumnLayout {
+                                    Layout.fillWidth: true; spacing: 4
+                                    RowLayout {
+                                        spacing: 8
+                                        Text { text: "RUNNING NOW"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                        Text {
+                                            visible: !(win.gstat.running || []).length
+                                            text: "no game  ·  Steam " + ((win.gstat.tools || {}).steam ? "open" : "closed")
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                        }
+                                    }
+                                    Repeater {
+                                        model: win.gstat.running || []
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            Layout.fillWidth: true; spacing: 10
+                                            Text { text: "●"; color: pal.ok; font.pixelSize: 10 }
+                                            Text { text: win.gameName(modelData.id); color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
+                                            Text {
+                                                Layout.fillWidth: true; elide: Text.ElideRight
+                                                color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                                text: [modelData.uptime != null ? win.durationText(modelData.uptime) : "",
+                                                       modelData.proton ? modelData.proton : "",
+                                                       modelData.fx ? modelData.fx + " on" : "",
+                                                       win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode active" : "",
+                                                       "pid " + modelData.pid].filter(function (x) { return x; }).join("  ·  ")
+                                            }
+                                        }
                                     }
                                 }
-                                Repeater {
-                                    model: win.gstat.running || []
-                                    delegate: RowLayout {
-                                        required property var modelData
-                                        Layout.fillWidth: true; spacing: 10
-                                        Text { text: "●"; color: pal.ok; font.pixelSize: 10 }
-                                        Text { text: win.gameName(modelData.id); color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
-                                        Text {
-                                            Layout.fillWidth: true; elide: Text.ElideRight
-                                            color: pal.dim; font.family: win.mono; font.pixelSize: 10
-                                            text: [modelData.uptime != null ? win.durationText(modelData.uptime) : "",
-                                                   modelData.proton ? modelData.proton : "",
-                                                   modelData.fx ? modelData.fx + " on" : "",
-                                                   win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode active" : "",
-                                                   "pid " + modelData.pid].filter(function (x) { return x; }).join("  ·  ")
+                                Rectangle { width: 1; Layout.fillHeight: true; color: pal.border; visible: (win.gstat.displays || []).length > 0 }
+                                ColumnLayout {
+                                    spacing: 2
+                                    Repeater {
+                                        model: win.gstat.displays || []
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            spacing: 8
+                                            Text { text: modelData.name + (modelData.focused ? " ●" : ""); color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                            Text { text: modelData.width + "×" + modelData.height + " @ " + Math.round(modelData.hz) + " Hz"; color: pal.text; font.family: win.mono; font.pixelSize: 11 }
+                                            Text {
+                                                text: modelData.vrr ? "VRR on" : "VRR off"; color: modelData.vrr ? pal.ok : pal.dim
+                                                font.family: win.mono; font.pixelSize: 10
+                                                MouseArea { id: vrrMa; anchors.fill: parent; hoverEnabled: true }
+                                                Tip { visible: vrrMa.containsMouse; text: modelData.vrr ? "Variable refresh rate (FreeSync / G-Sync) is on." : "Variable refresh rate is off. In Hyprland, misc:vrr turns it on (2 = fullscreen apps only, good for games)." }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
 
+                        // row 1: GPU | CPU · memory (same height)
                         GridLayout {
+                            id: stRow1
                             Layout.fillWidth: true
                             columns: stScroll.availableWidth > 780 ? 2 : 1
                             columnSpacing: 8; rowSpacing: 8
+                            property real cardH: columns === 2 ? Math.max(gpuCard.implicitHeight, cpuCard.implicitHeight) : -1
 
                             Card {
+                                id: gpuCard
+                                Layout.preferredHeight: stRow1.cardH > 0 ? stRow1.cardH : implicitHeight
                                 title: "GPU"; sub: (win.gstat.gpu || {}).name || ""
                                 StatRow { label: "DRIVER"; value: (win.gstat.gpu || {}).driver || "?" }
                                 Meter {
@@ -4373,12 +4454,16 @@ ShellRoot {
                                     visible: ((win.gstat.gpu || {}).limits || []).length > 0
                                     label: "HELD BACK BY"
                                     value: ((win.gstat.gpu || {}).limits || []).join(", ")
-                                    tone: ((win.gstat.gpu || {}).limits || []).some(function (x) { return /thermal|power|slowdown/.test(x); }) ? pal.amber : pal.text
-                                    note: ((win.gstat.gpu || {}).limits || []).length === 1 && win.gstat.gpu.limits[0] === "idle" ? "nothing heavy to render right now" : ""
+                                    tone: ((win.gstat.gpu || {}).limits || []).some(function (x) { return /thermal|slowdown|brake/.test(x); }) ? pal.amber : pal.text
+                                    note: ((win.gstat.gpu || {}).limits || []).indexOf("idle") >= 0 ? "nothing heavy to render right now"
+                                          : (((win.gstat.gpu || {}).limits || []).indexOf("power cap") >= 0 ? "at its power limit: normal under load, odd at idle" : "")
                                 }
+                                Item { Layout.fillHeight: true }
                             }
 
                             Card {
+                                id: cpuCard
+                                Layout.preferredHeight: stRow1.cardH > 0 ? stRow1.cardH : implicitHeight
                                 title: "CPU · MEMORY"; sub: (win.gstat.system || {}).cpu || ""
                                 StatRow {
                                     label: "CPU"
@@ -4413,26 +4498,18 @@ ShellRoot {
                                     tone: win.gstat.max_map_count_ok ? pal.text : pal.amber
                                     note: win.gstat.max_map_count_ok ? "≥ 1048576: enough for any game" : "below 1048576: some games crash (see HEALTH)"
                                 }
+                                Item { Layout.fillHeight: true }
                             }
+                        }
+
+                        // row 2: tools | live history (fills the rest of the tab)
+                        GridLayout {
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            columns: stScroll.availableWidth > 780 ? 2 : 1
+                            columnSpacing: 8; rowSpacing: 8
 
                             Card {
-                                title: "DISPLAY"
-                                Repeater {
-                                    model: win.gstat.displays || []
-                                    delegate: StatRow {
-                                        required property var modelData
-                                        label: modelData.name + (modelData.focused ? " ●" : "")
-                                        value: modelData.width + "×" + modelData.height + " @ " + modelData.hz + " Hz"
-                                        note: modelData.vrr ? "VRR on (FreeSync / G-Sync)" : "VRR off — Hyprland's misc:vrr turns it on for fullscreen games"
-                                    }
-                                }
-                                Text {
-                                    visible: (win.gstat.displays || []).length === 0
-                                    text: "Monitor details need Hyprland (hyprctl)."; color: pal.dim; font.family: win.mono; font.pixelSize: 10
-                                }
-                            }
-
-                            Card {
+                                Layout.fillHeight: true; Layout.alignment: Qt.AlignTop
                                 title: "GAMING TOOLS"
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 8
@@ -4466,9 +4543,33 @@ ShellRoot {
                                            .filter(function (x) { return x; }).join(" · ") || "none installed"
                                     note: "GAMING → FX"
                                 }
-                                RowLayout {
-                                    spacing: 6
-                                    Chip { label: "HEALTH CHECKS →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                                Item { Layout.fillHeight: true }
+                                Chip { label: "HEALTH CHECKS →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                            }
+
+                            Card {
+                                Layout.fillHeight: true; Layout.minimumHeight: 230
+                                title: "LIVE"; sub: "last 5 minutes while STATUS is open"
+                                GridLayout {
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    columns: 2; columnSpacing: 10; rowSpacing: 8
+                                    Spark {
+                                        label: "GPU LOAD"; values: win.stHist.gpuLoad; max: 100
+                                        current: (win.gstat.gpu || {}).load != null ? win.gstat.gpu.load + " %" : "—"
+                                    }
+                                    Spark {
+                                        label: "GPU °C"; values: win.stHist.gpuTemp; max: 100; tint: pal.amber
+                                        current: (win.gstat.gpu || {}).temp != null ? win.gstat.gpu.temp + " °C" : "—"
+                                    }
+                                    Spark {
+                                        label: "CPU °C"; values: win.stHist.cpuTemp; max: 100; tint: pal.pink
+                                        current: (win.gstat.system || {}).temp != null ? win.gstat.system.temp + " °C" : "—"
+                                    }
+                                    Spark {
+                                        label: "RAM · VRAM %"; values: win.stHist.ram; max: 100; tint: pal.sky
+                                        current: Math.round(win.stHist.ram.length ? win.stHist.ram[win.stHist.ram.length - 1] : 0) + " % · "
+                                                 + Math.round(win.stHist.vram.length ? win.stHist.vram[win.stHist.vram.length - 1] : 0) + " %"
+                                    }
                                 }
                             }
                         }
