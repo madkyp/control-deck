@@ -273,10 +273,13 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - **2.8 Unified launcher** (Lutris, Heroic, emulators, AppImages, search).
   Skipped: LIBRARY already lists and launches the Steam and Umbral games, and
   no games are installed through the other launchers.
+- **2.10 Update guardian.** Skipped: the UPDATES tab already shows Arch news
+  before an upgrade, pacman changes get snapshots (snap-pac or the deck's own),
+  and SNAPSHOTS lists what changed since each one; HEALTH catches a driver
+  updated without a reboot.
 
 ## Not implemented yet
 
-2.10 update guardian (the
-UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
+2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
 ReShade.
