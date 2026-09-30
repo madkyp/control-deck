@@ -1,0 +1,112 @@
+# GAMING tab — design notes and module status
+
+This document tracks the gaming extension of Control Deck: what was found on
+the reference system, how the modules fit the existing architecture, and what
+each implemented module does, needs and depends on.
+
+## Reference system (phase 0)
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 2070 (TU106), proprietary driver 615.71.09, Vulkan ICD `nvidia_icd.json` |
+| CPU | Intel i7-4790K, `intel_cpufreq` driver, governor `schedutil` (performance available) |
+| Session | Hyprland 0.56 on Wayland |
+| Filesystem | Btrfs (`@`, `@home`), snapper + snap-pac + grub-btrfs |
+| Launchers | Steam (3 games, 1 library), Lutris and Heroic installed with no games, Faugus (Flatpak) |
+| Present | gamemode (+lib32), MangoHud (+lib32), gamescope, umu-run, protontricks, winetricks, cpupower, lm_sensors, `multilib` enabled |
+| Absent | vkBasalt, ReShade, LACT/CoreCtrl, Timeshift, Syncthing, rclone |
+| Available | `lact` and `corectrl` in `extra`; `vkbasalt`/`lib32-vkbasalt`/`reshade-shaders-git` in chaotic-aur and the AUR |
+| `vm.max_map_count` | 1048576 (Arch default since the 2024 `filesystem` package) |
+
+Privileges found: gamemode ships a polkit rule letting members of the
+`gamemode` group run its governor/GPU/CPU/procsys helpers without a password,
+plus `limits.d` allowing that group `nice` down to −10. The user is not in the
+group yet. Everything else in Control Deck already goes through `pkexec`.
+
+## Architecture (phase 1)
+
+- **Same pattern as the rest of the app**: all logic in `bin/control-deck`
+  subcommands (JSON / `KEY=VALUE` out), the QML only renders and calls them.
+- **Data**: `~/.local/share/control-deck/gaming/profiles.json`
+  (`{"default": {...}, "steam:<appid>": {...}}`); ProtonDB cache in
+  `~/.cache/control-deck/protondb/<appid>.json` (24 h).
+- **Applying a profile**: Steam's launch options become
+  `~/.local/bin/control-deck run %command%`. The wrapper sets env vars, `nice`
+  / `ionice` on itself, and `exec`s `gamemoderun [mangohud] [prefix] <game> [args]`.
+- **Reverting safely**: nothing the wrapper does outlives the game. env, nice
+  and ionice die with the process; the CPU governor is changed by the gamemode
+  *daemon*, which restores it when the registered process exits, including a
+  crash or `SIGKILL` (it polls registered PIDs). No restore step lives inside
+  Control Deck, so closing or crashing the deck can't leave the system tuned.
+  Future modules that change state gamemode doesn't know about (GPU power
+  limits) will use a watchdog of the same kind: a separate process tied to the
+  game's PID, never a `finally` in the GUI.
+- **Privileges**: one path per kind of change. Reversible per-game tweaks go
+  through gamemode (polkit rule + `gamemode` group, joined once from the STATUS
+  view). One-off admin actions keep using `pkexec`, like the rest of the app.
+  There is no `sudo`, and no new privileged service.
+- **Steam files**: `localconfig.vdf` / `config.vdf` are edited with a small
+  KeyValues editor (case-insensitive keys, creates missing blocks, keeps the
+  rest byte-for-byte). Writes refuse to run while Steam is open (it rewrites
+  both files on exit) and leave a `*.control-deck.bak` copy.
+
+## Implemented
+
+### 2.1 Game profiler — `GAMING → LIBRARY / STATUS`
+- Library of installed Steam games (tools, runtimes and redistributables
+  filtered out) with size, Proton version, ProtonDB tier and whether the deck
+  wraps them.
+- Per-game profile: gamemode, MangoHud, IO priority (`ionice -c2 -n0`),
+  nice (0 / −5 / −10), environment variables, a prefix (e.g. `gamescope -f --`)
+  and extra arguments. The user `default` profile applies to unlisted games.
+- **USE IN STEAM** adopts the game's current launch options into its profile
+  (`VAR=x mangohud gamemoderun %command% -args` → env / toggles / args), saves
+  the original, and points Steam at the wrapper. **RESTORE STEAM** puts the
+  original back.
+- STATUS: gamemode installed / active / group membership (with **JOIN GROUP**),
+  CPU governor, `vm.max_map_count` check, MangoHud / gamescope, and games
+  running now (processes whose environment has `SteamAppId`).
+- Permissions: none to edit profiles; Steam must be closed to wrap/unwrap;
+  `gamejoin` uses `pkexec usermod -aG gamemode` once (re-login needed).
+- Tools: gamemode (recommended), mangohud (optional), gamescope (optional).
+- CLI: `games`, `gstatus`, `gprofile get|set|reset`, `run`, `steamwrap`, `gamejoin`.
+
+### 2.5 Compatibility manager (Steam + ProtonDB)
+- ProtonDB **summary** per game: tier, score, report count, trending tier,
+  confidence. Only the public summary endpoint is used
+  (`/api/v1/reports/summaries/<appid>.json`), one request per game, on demand,
+  cached for 24 h, with the app's own User-Agent. It is not an official,
+  documented API: if it disappears the deck shows "no data".
+- **No launch-option advice is generated.** The summary doesn't contain any and
+  individual reports have no stable API, so instead of inventing variables the
+  deck links to the game's ProtonDB page (**PROTONDB ↗**).
+- **Proton version per game**: writes Steam's `CompatToolMapping`
+  (`config.vdf`). Offered tools are the ones actually installed:
+  `proton_experimental` when "Proton - Experimental" is present, plus every
+  `compatibilitytools.d/*/compatibilitytool.vdf` (internal name parsed from the
+  file). Official numbered Protons aren't offered because their internal names
+  aren't in any local file and won't be guessed.
+- Note: ProtonDB's `robots.txt` disallows AI crawlers (including
+  `anthropic-ai`). The deck's requests are made by the user's app on demand;
+  the test-suite uses local fixtures instead of querying ProtonDB.
+- CLI: `protondb <appid…>`, `compattools`, `steamcompat <appid> <tool|default>`.
+
+## Compatibility report
+
+| Area | Verified on the reference system | Pending |
+|---|---|---|
+| Library / launch options / Proton list | read from the real Steam install | writing with Steam closed (covered by tests on a fake Steam tree) |
+| Wrapper (`run`) | tests with stubbed gamemoderun/mangohud | a real Steam launch through the wrapper |
+| gamemode governor switch | polkit rule and group checked | needs the user in the `gamemode` group |
+| Running-game detection | `SteamAppId` read from `/proc/*/environ` (tests) | confirmation while a real game runs |
+| ProtonDB | 3 real summaries fetched and cached | endpoint stability (unofficial) |
+| AMD / Intel GPUs | — | 2.1 / 2.5 don't touch the GPU; untested on other vendors |
+
+## Not implemented yet
+
+2.2 shader-cache assistant · 2.3 A/B benchmark · 2.4 GPU tuner (plan: LACT
+backend, which supports NVIDIA and AMD) · 2.6 prefixes · 2.7 save backups ·
+2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
+UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
+cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
+ReShade.

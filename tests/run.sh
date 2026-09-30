@@ -452,6 +452,137 @@ hasnt "unchanged package (dashes in the name) not listed" "$D" "lib32-foo-bar"
 has "summary" "$D" "Total: 1 added, 1 removed, 1 changed."
 "$CD" snapdiff nope >/dev/null 2>&1; eq "bad snapshot number → exit 2" "$?" 2
 unset CONTROL_DECK_PACMAN_DB CONTROL_DECK_SNAPSHOTS_DIR
+
+# ==========================================================================
+section "Gaming: Steam library"
+ST="$T/steam"; export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
+mkdir -p "$ST/steamapps/compatdata/100" "$ST/steamapps/common/Proton - Experimental" \
+         "$ST/userdata/42/config" "$ST/config" "$ST/compatibilitytools.d/GE-Proton9-1"
+printf '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' "$ST" > "$ST/steamapps/libraryfolders.vdf"
+man() { printf '"AppState"\n{\n\t"appid"\t\t"%s"\n\t"name"\t\t"%s"\n\t"installdir"\t\t"%s"\n\t"SizeOnDisk"\t\t"%s"\n}\n' "$1" "$2" "$3" "$4" > "$ST/steamapps/appmanifest_$1.acf"; }
+man 100 "Game \"Quoted\" One" GameOne 1000
+man 200 "Second Game" SecondGame 2000
+man 1493710 "Proton Experimental" "Proton - Experimental" 5
+cat > "$ST/userdata/42/config/localconfig.vdf" <<'EOF'
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"100"
+					{
+						"LastPlayed"		"1790758987"
+						"LaunchOptions"		"PROTON_ENABLE_WAYLAND=0 mangohud gamemoderun %command% -novid +fps_max 120"
+						"BadgeData"		"0200"
+					}
+					"200"
+					{
+						"Playtime"		"5"
+					}
+				}
+			}
+		}
+	}
+}
+EOF
+cat > "$ST/config/config.vdf" <<'EOF'
+"InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"AutoUpdateWindowEnabled"		"0"
+			}
+		}
+	}
+}
+EOF
+cat > "$ST/compatibilitytools.d/GE-Proton9-1/compatibilitytool.vdf" <<'EOF'
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "GE-Proton9-1" // Internal name of this tool
+    {
+      "install_path" "."
+      "display_name" "GE-Proton9-1"
+    }
+  }
+}
+EOF
+LC="$ST/userdata/42/config/localconfig.vdf"; CFG="$ST/config/config.vdf"
+G="$("$CD" games)"
+eq "tools (Proton) are not listed as games" "$(jq length <<<"$G")" 2
+eq "escaped quotes in names are decoded" "$(jq -r '.[] | select(.id == "100") | .name' <<<"$G")" 'Game "Quoted" One'
+eq "launch options read" "$(jq -r '.[] | select(.id == "100") | .launch' <<<"$G")" "PROTON_ENABLE_WAYLAND=0 mangohud gamemoderun %command% -novid +fps_max 120"
+eq "prefix detected" "$(jq -r '.[] | select(.id == "100") | .prefix' <<<"$G")" true
+TOOLS="$("$CD" compattools)"
+eq "Proton tools: Experimental + GE (comment after the name ignored)" "$(jq -r 'map(.name) | join(",")' <<<"$TOOLS")" "proton_experimental,GE-Proton9-1"
+
+section "Gaming: Steam launch options through the wrapper"
+CONTROL_DECK_STEAM_RUNNING=1 "$CD" steamwrap 100 on >/dev/null 2>&1; eq "refuses while Steam is running" "$?" 3
+"$CD" steamwrap 100 on >/dev/null
+has "Steam launches it through the deck" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/100 LaunchOptions' _ "$CD" "$LC")" "control-deck run %command%"
+eq "other keys untouched" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/100 BadgeData' _ "$CD" "$LC")" "0200"
+yes "backup written" "[[ -f '$LC.control-deck.bak' ]]"
+PR="$("$CD" gprofile get steam:100)"
+eq "old options adopted: env"      "$(jq -r '.env.PROTON_ENABLE_WAYLAND' <<<"$PR")" 0
+eq "old options adopted: mangohud" "$(jq -r '.mangohud' <<<"$PR")" true
+eq "old options adopted: args"     "$(jq -r '.args' <<<"$PR")" "-novid +fps_max 120"
+"$CD" steamwrap 200 on >/dev/null
+has "missing LaunchOptions key is created" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/200 LaunchOptions' _ "$CD" "$LC")" "control-deck run"
+eq "…next to the existing keys" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/200 Playtime' _ "$CD" "$LC")" 5
+"$CD" steamwrap 100 off >/dev/null
+eq "off restores the original options" "$(bash -c 'source "$1"; vdf_get "$2" UserLocalConfigStore/Software/Valve/Steam/apps/100 LaunchOptions' _ "$CD" "$LC")" "PROTON_ENABLE_WAYLAND=0 mangohud gamemoderun %command% -novid +fps_max 120"
+"$CD" steamwrap 200 off >/dev/null
+hasnt "off removes options that weren't there" "$(cat "$LC")" "control-deck run"
+eq "file still has balanced braces" "$(grep -c '{' "$LC")" "$(grep -c '}' "$LC")"
+
+section "Gaming: Proton version per game"
+"$CD" steamcompat 200 GE-Proton9-1 >/dev/null
+eq "mapping block created" "$(bash -c 'source "$1"; vdf_get "$2" InstallConfigStore/Software/Valve/Steam/CompatToolMapping/200 name' _ "$CD" "$CFG")" GE-Proton9-1
+eq "games shows it" "$("$CD" games | jq -r '.[] | select(.id == "200") | .compat')" GE-Proton9-1
+"$CD" steamcompat 200 NotAProton >/dev/null 2>&1; eq "unknown tool refused" "$?" 2
+"$CD" steamcompat 200 default >/dev/null
+hasnt "default removes the mapping" "$(cat "$CFG")" '"200"'
+eq "config braces balanced" "$(grep -c '{' "$CFG")" "$(grep -c '}' "$CFG")"
+
+section "Gaming: profiles + run wrapper"
+"$CD" gprofile set steam:200 nice=5 >/dev/null 2>&1;            eq "nice out of range refused" "$?" 2
+"$CD" gprofile set steam:200 'env=BAD-NAME=1' >/dev/null 2>&1;  eq "bad env name refused" "$?" 2
+"$CD" gprofile set steam:200 'prefix=gamescope; rm' >/dev/null 2>&1; eq "shell syntax in prefix refused" "$?" 2
+"$CD" gprofile set steam:200 gamemode=true mangohud=false 'env=FOO=bar DXVK_HUD=fps' 'args=-windowed' >/dev/null
+stub gamemoderun 'echo "gamemoderun" >> "'"$T"'/wrap.log"; exec "$@"'
+printf '#!/bin/sh\necho "FOO=$FOO HUD=$DXVK_HUD args=$*"\n' > "$T/fake/game"; chmod +x "$T/fake/game"
+O="$(SteamAppId=200 "$CD" run "$T/fake/game" -launcher)"
+eq "wrapper applies env and appends args" "$O" "FOO=bar HUD=fps args=-launcher -windowed"
+has "wrapper goes through gamemoderun" "$(cat "$T/wrap.log")" gamemoderun
+O="$("$CD" run --profile default -- "$T/fake/game")"
+eq "no Steam id → default profile" "$O" "FOO= HUD= args="
+"$CD" gprofile reset steam:200 >/dev/null
+eq "reset drops the custom profile" "$("$CD" gprofile get steam:200 | jq -r .custom)" false
+
+section "Gaming: status + ProtonDB"
+mkdir -p "$T/proc/4242" "$T/proc/4243" "$T/proc/99"
+printf 'HOME=/x\0SteamAppId=100\0' > "$T/proc/4243/environ"; printf 'SteamAppId=100\0' > "$T/proc/4242/environ"
+printf 'SteamAppId=0\0' > "$T/proc/99/environ"
+eq "running game found once (lowest pid), id 0 ignored" "$(PROC_ROOT="$T/proc" bash -c 'source "$1"; running_games' _ "$CD")" "$(printf '100\t4242')"
+yes "gstatus is valid JSON" "\"$CD\" gstatus | jq -e '.gamemode | has(\"ingroup\")' >/dev/null"
+mkdir -p "$T/pdb"; printf '{"tier":"platinum","score":0.9,"total":10,"trendingTier":"gold","confidence":"strong"}' > "$T/pdb/100.json"
+export CONTROL_DECK_PROTONDB_API="file://$T/pdb"
+eq "ProtonDB tier" "$("$CD" protondb 100 200 | jq -r '."100".tier')" platinum
+eq "missing summary → unknown" "$("$CD" protondb 200 | jq -r '."200".tier')" unknown
+rm "$T/pdb/100.json"
+eq "cached for a day" "$("$CD" protondb 100 | jq -r '."100".tier')" platinum
+unset CONTROL_DECK_PROTONDB_API CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

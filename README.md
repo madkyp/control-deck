@@ -20,7 +20,7 @@ Drop a package and it installs itself; manage, edit and uninstall the apps in yo
 
 ## ✨ Features
 
-The window has five tabs:
+The window has six tabs:
 
 ### 📥 INSTALL — from a file or a URL
 - **Drag and drop** one or more packages (multi-file queue) and hit **INSTALL ALL**.
@@ -85,6 +85,13 @@ The window has five tabs:
   - If your snapper config only lets root list snapshots, load them with your password or — opt-in — allow your user to list them (`ALLOW_USERS`).
   - With **snap-pac** installed every pacman operation already gets pre/post snapshots, so the deck doesn't add more. Without snap-pac, the deck takes a snapshot itself before any pacman change it makes (same password prompt).
 
+### 🎮 GAMING — per-game profiles and compatibility
+- **LIBRARY**: your installed Steam games with size, **ProtonDB** rating (public summary, cached 24 h) and the Proton version each one uses.
+- **Per-game profile**: gamemode, MangoHud, IO priority, nice, environment variables, a prefix (e.g. `gamescope -f --`) and extra arguments. **USE IN STEAM** turns the game's current launch options into its profile and makes Steam launch it through `control-deck run %command%` (**RESTORE STEAM** undoes it). Nothing it changes outlives the game: the CPU governor is handled by gamemode's daemon, which restores it even if the game crashes.
+- **Proton version per game**, from the ones you have installed (Steam must be closed; a backup of its config is kept).
+- **STATUS**: gamemode (with a one-click **JOIN GROUP** so it can switch the governor without a password), CPU governor, `vm.max_map_count`, MangoHud/gamescope and the game running now.
+- Design notes, permissions and what's verified: [`docs/gaming.md`](docs/gaming.md).
+
 > 🔔 Desktop notifications (`notify-send`) when each operation finishes.
 
 ---
@@ -125,6 +132,7 @@ The window has five tabs:
 - `debtap` (AUR) — install `.deb` files (then run `sudo debtap -u` once)
 - `snapper` (+ `snap-pac`, `grub-btrfs`, `btrfs-assistant`) — SNAPSHOTS tab and snapshots before pacman changes
 - `git` — the deck updating itself from your clone
+- `gamemode` (+ `lib32-gamemode`), `mangohud` (+ `lib32-mangohud`), `gamescope` — GAMING profiles
 
 ---
 

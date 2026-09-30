@@ -42,6 +42,7 @@ ShellRoot {
             if (view === "manage") refreshApps();
             if (view === "updates") checkUpdates();
             if (view === "system") openSystem(sysView);
+            if (view === "gaming") openGaming();
         }
 
         function srcColor(s) {
@@ -270,6 +271,61 @@ ShellRoot {
                 return;
             }
             runUpdate(args, label);
+        }
+
+        // ---- gaming state -----------------------------------------------
+        property string gameView: "library"
+        property var    games: []
+        property var    gstat: ({})
+        property var    pdb: ({})           // ProtonDB summaries by appid
+        property var    tools: []           // Proton versions Steam can use
+        property var    gp: ({})            // profile being edited
+        property var    gameArgs: []
+        property string gameLog: ""
+        property string gameStatus: ""
+        property string selGame: ""
+        property string selGameId: ""
+        property string selGameName: ""
+        property string selGameSource: ""
+        property string selGameLaunch: ""
+        property string selGameCompat: ""
+        property bool   selGameWrapped: false
+        property bool   confirmJoin: false
+        property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
+
+        function tierColor(t) {
+            switch (t) {
+                case "platinum": return "#b4c7dc";
+                case "gold":     return pal.amber;
+                case "silver":   return "#a6a6a6";
+                case "bronze":   return "#cd7f32";
+                case "borked":   return pal.bad;
+                default:         return pal.dim;
+            }
+        }
+        function gameName(id) {
+            var g = games.filter(function (x) { return x.id === String(id); })[0];
+            return g ? g.name : "app " + id;
+        }
+        function openGaming() {
+            gamesProc.running = true; gstatProc.running = true; toolsProc.running = true;
+        }
+        function selectGame(g) {
+            selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
+            selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped;
+            gameLog = ""; gprofProc.running = true;
+        }
+        function gpSet(k, v) { var o = Object.assign({}, gp); o[k] = v; gp = o; }
+        function envString(e) {
+            return Object.keys(e || {}).map(function (k) { return k + "=" + e[k]; }).join(" ");
+        }
+        function runGame(args, label) { gameArgs = args; gameLog = ""; gameStatus = label; gameProc.running = true; }
+        function saveGameProfile() {
+            runGame(["gprofile", "set", selGame,
+                     "gamemode=" + (gp.gamemode === true), "mangohud=" + (gp.mangohud === true),
+                     "ionice=" + (gp.ionice === true), "nice=" + (gp.nice || 0),
+                     "env=" + gEnv.text.trim(), "prefix=" + gPrefix.text.trim(), "args=" + gArgs.text.trim()],
+                    "SAVING…");
         }
 
         // ---- system state (clean · backup · history) --------------------
@@ -670,6 +726,60 @@ ShellRoot {
             command: ["setsid", "-f", "btrfs-assistant-launcher"]
         }
         Process {
+            id: gamesProc
+            command: [win.scriptPath, "games"]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.games = JSON.parse(text); } catch (e) { win.games = []; }
+                    win.gameStatus = win.games.length + " GAMES";
+                    // keep the selection in sync (launch options / Proton may have changed)
+                    var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
+                    if (cur) { win.selGameLaunch = cur.launch; win.selGameCompat = cur.compat; win.selGameWrapped = cur.wrapped; }
+                    var ids = win.games.filter(function (g) { return g.source === "steam"; }).map(function (g) { return g.id; });
+                    if (ids.length > 0) { pdbProc.command = [win.scriptPath, "protondb"].concat(ids); pdbProc.running = true; }
+                }
+            }
+        }
+        Process {
+            id: pdbProc
+            stdout: StdioCollector { onStreamFinished: { try { win.pdb = JSON.parse(text); } catch (e) {} } }
+        }
+        Process {
+            id: gstatProc
+            command: [win.scriptPath, "gstatus"]
+            stdout: StdioCollector { onStreamFinished: { try { win.gstat = JSON.parse(text); } catch (e) {} } }
+        }
+        Process {
+            id: toolsProc
+            command: [win.scriptPath, "compattools"]
+            stdout: StdioCollector { onStreamFinished: { try { win.tools = JSON.parse(text); } catch (e) { win.tools = []; } } }
+        }
+        Process {
+            id: gprofProc
+            command: [win.scriptPath, "gprofile", "get", win.selGame]
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.gp = JSON.parse(text); } catch (e) { win.gp = {}; }
+                    gEnv.text = win.envString(win.gp.env); gPrefix.text = win.gp.prefix || ""; gArgs.text = win.gp.args || "";
+                }
+            }
+        }
+        Process {
+            id: gameProc
+            command: [win.scriptPath].concat(win.gameArgs)
+            stdout: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
+            stderr: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
+            onExited: (c, s) => {
+                win.gameStatus = c === 0 ? "DONE ✓" : (c === 3 ? "CLOSE STEAM FIRST" : "FAILED · " + c);
+                gamesProc.running = true; gstatProc.running = true;
+                if (win.selGame) gprofProc.running = true;
+            }
+        }
+        Process {
+            id: steamOpenProc
+            command: ["setsid", "-f", "steam"]
+        }
+        Process {
             id: pickRestoreProc
             command: [win.scriptPath, "pickfile", "Choose a Control Deck backup (.json)"]
             stdout: StdioCollector { onStreamFinished: { var p = text.trim(); if (p) restoreField.text = p; } }
@@ -764,6 +874,7 @@ ShellRoot {
                     if (key === "manage" && win.apps.length === 0) win.refreshApps();
                     if (key === "updates" && !win.updChecked && !win.updBusy) win.checkUpdates();
                     if (key === "system") win.openSystem(win.sysView);
+                    if (key === "gaming" && win.games.length === 0) win.openGaming();
                 }
             }
         }
@@ -946,12 +1057,13 @@ ShellRoot {
 
             // nav
             RowLayout {
-                spacing: 22
+                spacing: 18
                 NavTab { label: "INSTALL"; key: "install" }
                 NavTab { label: "MANAGE";  key: "manage" }
                 NavTab { label: "STORE";   key: "store" }
                 NavTab { label: "UPDATES"; key: "updates" }
                 NavTab { label: "SYSTEM";  key: "system" }
+                NavTab { label: "GAMING";  key: "gaming" }
             }
 
             // ================= INSTALL VIEW =================
@@ -2266,6 +2378,281 @@ ShellRoot {
                     }
                 }
             } // ================= end SYSTEM VIEW =================
+            // ================= GAMING VIEW =================
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: win.view === "gaming"
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
+                    Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
+                    Text {
+                        Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
+                        text: win.gameStatus; color: pal.dim; font.family: win.mono
+                        font.pixelSize: 12; font.letterSpacing: 2; elide: Text.ElideLeft
+                    }
+                }
+
+                // ---- LIBRARY ----
+                Rectangle {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    Layout.minimumHeight: 110
+                    visible: win.gameView === "library"
+                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+
+                    EmptyHint {
+                        visible: win.games.length === 0
+                        title: gamesProc.running ? "READING YOUR LIBRARY…" : "NO GAMES FOUND"
+                        sub: gamesProc.running ? "" : "installed Steam games show up here"
+                    }
+
+                    ListView {
+                        id: gameList
+                        anchors.fill: parent; anchors.margins: 4
+                        clip: true; spacing: 2
+                        model: win.games
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: gameList.width - 8; height: 34; radius: 6
+                            color: win.selGame === modelData.key ? pal.cardHi : "transparent"
+                            RowLayout {
+                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
+                                Badge { label: modelData.source; tint: pal.sky; width: 52 }
+                                Text {
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12
+                                }
+                                Text {
+                                    visible: modelData.wrapped
+                                    text: "◆ DECK"; color: pal.accent
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                }
+                                Text {
+                                    Layout.preferredWidth: 70; horizontalAlignment: Text.AlignRight
+                                    text: (win.pdb[modelData.id] || {}).tier ? String(win.pdb[modelData.id].tier).toUpperCase() : ""
+                                    color: win.tierColor((win.pdb[modelData.id] || {}).tier)
+                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                }
+                                Text {
+                                    Layout.preferredWidth: 56; horizontalAlignment: Text.AlignRight
+                                    text: win.human(modelData.size); color: pal.dim
+                                    font.family: win.mono; font.pixelSize: 9
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: win.selectGame(modelData)
+                            }
+                        }
+                    }
+                }
+
+                // profile editor of the selected game
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    visible: win.gameView === "library" && win.selGame !== ""
+
+                    Section { Layout.fillWidth: true; label: "PROFILE"; info: win.selGameName + (win.gp.custom ? "" : " · default") }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 6
+                        Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
+                        Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
+                        Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice) }
+                        Text { text: "NICE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.leftMargin: 6 }
+                        Repeater {
+                            model: [0, -5, -10]
+                            delegate: Chip {
+                                required property var modelData
+                                label: String(modelData); active: win.gp.nice === modelData
+                                onClicked: win.gpSet("nice", modelData)
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: "ENV"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                        Field { id: gEnv; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "VAR=value VAR2=value" }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: "PREFIX"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                        Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "before the game, e.g. gamescope -f --" }
+                        Text { text: "ARGS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                        Field { id: gArgs; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "after the game, e.g. -novid" }
+                    }
+
+                    // Proton version (Steam's CompatToolMapping)
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.selGameSource === "steam"
+                        Text { text: "PROTON"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
+                        Flow {
+                            Layout.fillWidth: true; spacing: 6
+                            Chip {
+                                label: "STEAM DEFAULT"; active: win.selGameCompat === ""
+                                on: !win.gameBusy
+                                onClicked: win.runGame(["steamcompat", win.selGameId, "default"], "SETTING PROTON…")
+                            }
+                            Repeater {
+                                model: win.tools
+                                delegate: Chip {
+                                    required property var modelData
+                                    label: modelData.display; active: win.selGameCompat === modelData.name
+                                    on: !win.gameBusy
+                                    onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
+                                }
+                            }
+                        }
+                    }
+
+                    // ProtonDB summary — no invented launch tips, just the verdict and a link
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        visible: win.selGameSource === "steam"
+                        Text {
+                            Layout.fillWidth: true; elide: Text.ElideRight
+                            text: {
+                                var d = win.pdb[win.selGameId];
+                                if (!d || !d.tier || d.tier === "unknown") return "ProtonDB: no data for this game (or ProtonDB unreachable).";
+                                return "ProtonDB: " + String(d.tier).toUpperCase() + "  ·  score " + d.score + "  ·  " + d.total
+                                       + " reports  ·  trending " + d.trendingTier + "  ·  confidence " + d.confidence;
+                            }
+                            color: win.tierColor((win.pdb[win.selGameId] || {}).tier)
+                            font.family: win.mono; font.pixelSize: 10
+                        }
+                        Chip { label: "PROTONDB ↗"; onClicked: Qt.openUrlExternally("https://www.protondb.com/app/" + win.selGameId) }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Hint {
+                            text: win.selGameSource !== "steam" ? ""
+                                  : (win.selGameWrapped
+                                     ? "Steam launches this game through Control Deck, so the profile applies on every launch."
+                                     : "Current Steam options: " + (win.selGameLaunch || "(none)") + ". Use it in Steam to apply the profile (Steam must be closed).")
+                        }
+                        MiniBtn {
+                            width: 90; height: 32; label: "SAVE"
+                            on: !win.gameBusy
+                            onClicked: win.saveGameProfile()
+                        }
+                        MiniBtn {
+                            width: 132; height: 32; primary: !win.selGameWrapped
+                            visible: win.selGameSource === "steam"
+                            label: win.selGameWrapped ? "RESTORE STEAM" : "USE IN STEAM"
+                            on: !win.gameBusy
+                            onClicked: win.runGame(["steamwrap", win.selGameId, win.selGameWrapped ? "off" : "on"],
+                                                   win.selGameWrapped ? "RESTORING…" : "WRAPPING…")
+                        }
+                        MiniBtn {
+                            width: 70; height: 32; primary: false; label: "RESET"
+                            on: win.gp.custom === true && !win.gameBusy
+                            onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
+                        }
+                    }
+                }
+
+                // ---- STATUS ----
+                Rectangle {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "status"
+                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 14; spacing: 12
+                        visible: win.gstat.gamemode !== undefined
+
+                        component StatLine: RowLayout {
+                            property string label
+                            property string value
+                            property bool good: true
+                            property string note: ""
+                            Layout.fillWidth: true; spacing: 10
+                            Text { text: good ? "✓" : "!"; color: good ? pal.ok : pal.amber; font.family: win.mono; font.pixelSize: 12; font.bold: true }
+                            Text { text: label; Layout.preferredWidth: 150; color: pal.text; font.family: win.mono; font.pixelSize: 11; font.bold: true }
+                            Text { text: value; color: good ? pal.dim : pal.amber; font.family: win.mono; font.pixelSize: 11 }
+                            Text { Layout.fillWidth: true; text: note; color: pal.dim; font.family: win.mono; font.pixelSize: 9; wrapMode: Text.WordWrap }
+                        }
+
+                        StatLine {
+                            label: "GameMode"
+                            good: !!win.gstat.gamemode && win.gstat.gamemode.installed
+                            value: !win.gstat.gamemode ? "" : (!win.gstat.gamemode.installed ? "not installed"
+                                   : (win.gstat.gamemode.active ? "active now" : "installed, idle"))
+                            note: "raises the CPU governor while a game runs and puts it back when the game exits"
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 10
+                            StatLine {
+                                label: "gamemode group"
+                                good: !!win.gstat.gamemode && win.gstat.gamemode.ingroup
+                                value: win.gstat.gamemode && win.gstat.gamemode.ingroup ? "member" : "not a member"
+                                note: win.gstat.gamemode && win.gstat.gamemode.ingroup ? "" : "without it gamemode can't switch the governor (no password prompt during games) and nice < 0 is refused"
+                            }
+                            MiniBtn {
+                                visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup
+                                width: 96; label: win.confirmJoin ? "CONFIRM?" : "JOIN GROUP"
+                                on: !win.gameBusy
+                                onClicked: {
+                                    if (!win.confirmJoin) { win.confirmJoin = true; return; }
+                                    win.confirmJoin = false;
+                                    win.runGame(["gamejoin"], "JOINING…");
+                                }
+                            }
+                        }
+                        StatLine {
+                            label: "CPU governor"
+                            good: true
+                            value: (win.gstat.governor || "?") + "  (" + (win.gstat.cpufreq_driver || "?") + ")"
+                            note: "switched to performance by gamemode during a game"
+                        }
+                        StatLine {
+                            label: "vm.max_map_count"
+                            good: win.gstat.max_map_count_ok === true
+                            value: String(win.gstat.max_map_count || "?")
+                            note: win.gstat.max_map_count_ok ? "already ≥ 1048576 (Arch default), enough for games like Star Citizen or DayZ"
+                                                             : "below 1048576: some games crash; Arch's filesystem package sets 1048576"
+                        }
+                        StatLine { label: "MangoHud"; good: win.gstat.mangohud === true; value: win.gstat.mangohud ? "installed" : "missing (pacman -S mangohud lib32-mangohud)" }
+                        StatLine { label: "gamescope"; good: win.gstat.gamescope === true; value: win.gstat.gamescope ? "installed" : "missing (optional)" }
+                        StatLine {
+                            label: "Running now"
+                            good: true
+                            value: !win.gstat.running || win.gstat.running.length === 0 ? "no game"
+                                   : win.gstat.running.map(function (r) { return win.gameName(r.id) + " (pid " + r.pid + ")"; }).join(", ")
+                        }
+                        Item { Layout.fillHeight: true }
+                    }
+                }
+
+                LogBox {
+                    Layout.fillWidth: true; base: 150
+                    visible: win.gameLog !== ""
+                    content: win.gameLog
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: pal.border }
+
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 0
+                    ActBtn {
+                        glyph: ""; label: "REFRESH"
+                        on: !win.gameBusy
+                        onClicked: { win.gameLog = ""; win.openGaming(); }
+                    }
+                    BarSep {}
+                    ActBtn {
+                        glyph: ""; label: "STEAM"
+                        onClicked: steamOpenProc.running = true
+                    }
+                }
+            } // ================= end GAMING VIEW =================
+
         }
     }
 }
