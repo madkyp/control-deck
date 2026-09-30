@@ -330,6 +330,20 @@ ShellRoot {
             if (x.token === "mangohud") return gp.mangohud === true;
             return (" " + gPrefix.text + " ").indexOf(" " + x.token + " ") >= 0;
         }
+        // value this profile already gives to a suggested env var ("" if unset)
+        function envValue(name) {
+            var hit = gEnv.text.split(/\s+/).filter(function (e) { return e.split("=")[0] === name; })[0];
+            return hit === undefined ? null : hit.substring(name.length + 1);
+        }
+        function sugLabel(x, applied, mark) {
+            var l = (applied ? "✓ " : mark) + x.token + "  " + x.pct + "%";
+            if (x.kind === "env" && !applied) {
+                var mine = envValue(x.var);
+                if (mine !== null) l += "  · you: =" + mine;
+                if (x.unset !== undefined) l += "  · " + x.unset + "% keep default";
+            }
+            return l;
+        }
         // add a suggestion to the editor (saved with SAVE, never automatically)
         function applySug(x) {
             if (sugApplied(x)) return;
@@ -2588,7 +2602,7 @@ ShellRoot {
                                     delegate: Chip {
                                         required property var modelData
                                         property bool applied: win.sugApplied(modelData)
-                                        label: (applied ? "✓ " : "★ ") + modelData.token + "  " + modelData.pct + "%"
+                                        label: win.sugLabel(modelData, applied, "★ ")
                                         tint: pal.amber; active: true
                                         opacity: applied ? 0.6 : 1.0
                                         onClicked: win.applySug(modelData)
@@ -2607,7 +2621,7 @@ ShellRoot {
                                     delegate: Chip {
                                         required property var modelData
                                         property bool applied: win.sugApplied(modelData)
-                                        label: (applied ? "✓ " : "+ ") + modelData.token + "  " + modelData.pct + "%"
+                                        label: win.sugLabel(modelData, applied, "+ ")
                                         tint: pal.ok; active: applied
                                         onClicked: win.applySug(modelData)
                                     }
@@ -2625,7 +2639,7 @@ ShellRoot {
                                                  : (win.sug.vendorReports > 0 ? ": " + win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + " reports" : ""))
                                               + (win.sug.cores > 0 ? ", " + win.sug.cores + " threads" : "") + (win.sug.screen ? ", " + win.sug.screen : "")
                                               + ") among " + win.sug.reports + " who say it works" + (win.sug.window === "3y" ? " (last 3 years)" : "")
-                                              + ". ★ = used by ≥ 20% of them. Values like -threads are adapted to this PC. Click to add, then SAVE.")))
+                                              + ". ★ = used by ≥ 20% of them (env vars: by more than keep the default). Values like -threads or +fps_max are adapted to this PC. Click to add, then SAVE.")))
                                       + (win.pdbStat.present === true ? "  Data: ProtonDB (ODbL), " + win.pdbStat.date + "." : "")
                             }
                         }

@@ -668,6 +668,25 @@ hasnt "RX 9070 XT: NVIDIA players' -vulkan not recommended" "$R" "-vulkan"
 eq    "…and hidden on NVIDIA" "$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080 | jq '[.suggestions[] | select(.token == "RADV_PERFTEST=gpl")] | length')" 0
 eq    "similar-hardware label" "$(hw 'NVIDIA GeForce RTX 2070' nvidia 1920x1080 | jq -r .similarLabel)" "GTX 10, RTX 20 / GTX 16, RTX 30"
 eq    "library badge counts recommended options" "$(CONTROL_DECK_GPU_NAME='NVIDIA GeForce RTX 2070' CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_SCREEN=1920x1080 "$CD" gtips 400 | jq -r '."400"')" 2
+# env vars vs their default, numeric options grouped, fps cap → refresh rate
+{
+    echo '['
+    for i in 1 2 3 4; do rep 500 "$NOW" yes '"PROTON_ENABLE_WAYLAND=1 %command%"' "NVIDIA GeForce RTX 2070"; echo ,; done
+    for f in 144 60 240 144 144; do rep 500 "$NOW" yes "\"%command% +fps_max $f\"" "NVIDIA GeForce RTX 2080"; echo ,; done
+    rep 500 "$NOW" yes '"%command% -foo"' "NVIDIA GeForce RTX 3070"; echo ,
+    rep 500 "$NOW" yes '"%command% -foo"' "NVIDIA GeForce RTX 3070"; echo ,
+    for i in 1 2 3 4 5 6; do rep 600 "$NOW" yes '"DXVK_ASYNC=1 %command%"' "NVIDIA GeForce RTX 2070"; echo ,; done
+    for i in 1 2 3 4; do rep 600 "$NOW" yes '"%command% -bar"' "NVIDIA GeForce RTX 2070"; echo ,; done
+    rep 600 "$NOW" yes '"%command% -bar"' "NVIDIA GeForce RTX 2070"
+    echo ']'
+} > "$T/reports_piiremoved.json"
+(cd "$T" && tar czf "$T/pdbdump/reports_nov1_2026.tar.gz" reports_piiremoved.json)
+CONTROL_DECK_PDB_RAW="file://$T/pdbdump" CONTROL_DECK_PDB_DUMP=reports_nov1_2026.tar.gz "$CD" pdbindex update >/dev/null 2>&1
+g5() { CONTROL_DECK_GPU_NAME='NVIDIA GeForce RTX 2070' CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_SCREEN=1920x1080 CONTROL_DECK_SCREEN_HZ="$2" "$CD" gsuggest "$1"; }
+eq "env var set by a minority: not recommended (most keep the default)" "$(g5 500 120 | jq -r '.suggestions[] | select(.var == "PROTON_ENABLE_WAYLAND") | "\(.pct)/\(.unset)/\(.recommended)"')" "36/63/false"
+eq "env var set by most players: recommended" "$(g5 600 120 | jq -r '.suggestions[] | select(.var == "DXVK_ASYNC") | "\(.pct)/\(.recommended)"')" "54/true"
+eq "+fps_max values grouped and set to this monitor's refresh rate" "$(g5 500 120 | jq -r '.suggestions[] | select(.key == "+fps_max #") | "\(.token) \(.pct)% \(.recommended)"')" "+fps_max 120 45% true"
+eq "refresh rate unknown → the most common value" "$(g5 500 '' | jq -r '.suggestions[] | select(.key == "+fps_max #") | .token')" "+fps_max 144"
 
 section "Gaming: new games are recognised"
 export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0

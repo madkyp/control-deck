@@ -97,13 +97,20 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   **same vendor and ±1 generation** as this PC (falling back to same vendor,
   then everyone, when there are fewer than 5 such reports). An option is
   marked **★ RECOMMENDED FOR THIS PC** when ≥ 20 % of those players use it
-  (and at least 5 reports). The hardware is read every time (GPU name from
+  (and at least 5 reports). An **environment variable** additionally needs to be
+  set by more of them than leave it unset: not setting it means keeping the
+  default, which is a choice too (e.g. Deadlock on RTX 20-class GPUs: 32 % set
+  `PROTON_ENABLE_WAYLAND=1`, 62 % keep the default, so it is not recommended).
+  When the profile already gives that variable another value, the chip says
+  so (`you: =0 · 62 % keep default`). The hardware is read every time (GPU name from
   `nvidia-smi`/`lspci`, CPU threads, focused monitor), so the same install on
   another PC — e.g. an RTX 2070 laptop and an RX 9070 XT desktop — gets
   different recommendations. Hardware-dependent values are grouped and
   rewritten for this PC: `-threads N` → this CPU's thread count, `-w`/`-h`
   (and `-width`/`-height`) → the focused monitor's resolution (dropped when
-  unknown).
+  unknown), `+fps_max N` → the monitor's refresh rate. Any other option with a
+  numeric value (`+cvar 2`, `-flag 16`) is grouped across values and shown with
+  the most common one.
   Suggestions are only shown; clicking one adds it to the editor and nothing is
   saved until **SAVE**. These are statistics of what players use, not a
   guarantee that an option helps.

@@ -3045,6 +3045,12 @@ screen_res() {
     have hyprctl && hyprctl monitors -j 2>/dev/null | jq -r 'map(select(.focused)) | first // empty | "\(.width)x\(.height)"'
 }
 
+# focused monitor refresh rate (rounded Hz), empty if unknown
+screen_hz() {
+    [[ -n "${CONTROL_DECK_SCREEN_HZ+set}" ]] && { echo "$CONTROL_DECK_SCREEN_HZ"; return; }
+    have hyprctl && hyprctl monitors -j 2>/dev/null | jq -r 'map(select(.focused)) | first // empty | .refreshRate | round'
+}
+
 cmd_pdbindex() {
     case "${1:-status}" in
         update)
@@ -3096,9 +3102,9 @@ cmd_gsuggest() {
     vendor="$(gpu_vendor)"; since=$(( $(date +%s) - 3 * 365 * 86400 ))
     local gname; gname="$(gpu_name)"
     gen="$(jq -Rr "$JQ_GPU_GEN"' gpu_gen' <<<"$gname")"
-    cores="$(nproc 2>/dev/null || echo 0)"; res="$(screen_res)"
+    cores="$(nproc 2>/dev/null || echo 0)"; res="$(screen_res)"; local hz; hz="$(screen_hz)"
     grep -F "[\"$id\"," "$PDB_INDEX" | jq -sc --arg v "$vendor" --argjson since "$since" \
-        --arg gen "$gen" --arg gname "$gname" --argjson cores "${cores:-0}" --arg res "$res" '
+        --arg gen "$gen" --arg gname "$gname" --argjson cores "${cores:-0}" --arg res "$res" --arg hz "$hz" '
         # hardware-dependent values are grouped and rewritten for this PC
         def adapt:
             ($res | split("x")) as $wh |
@@ -3108,6 +3114,12 @@ cmd_gsuggest() {
                 (if ($wh | length) == 2 then {key:"-w #", token:((split(" ")[0]) + " " + $wh[0]), adapted:true} else null end)
             elif test("^-(h|height|screen-height) [0-9]+$") then
                 (if ($wh | length) == 2 then {key:"-h #", token:((split(" ")[0]) + " " + $wh[1]), adapted:true} else null end)
+            elif test("^[-+](fps_max|fpsmax|maxfps|fps-max) [0-9]+$") then
+                (if $hz != "" then {key:((split(" ")[0]) + " #"), token:((split(" ")[0]) + " " + $hz), adapted:true}
+                 else {key:((split(" ")[0]) + " #"), token:., adapted:false} end)
+            elif test("^[-+][A-Za-z0-9_]+ [0-9.]+$") then
+                # same option, different numbers: grouped, the most common value is shown
+                {key:((split(" ")[0]) + " #"), token:., adapted:false}
             else {key:., token:., adapted:false} end;
         # "RTX 20 / GTX 16 ±1" style label of the generations counted as similar
         def gen_label:
@@ -3152,7 +3164,8 @@ cmd_gsuggest() {
         | ($w.r | map(select(similar(.[5]))) | length) as $ns
         | [$w.r[] | .[3] as $gpu | .[5] as $g | (.[4] | tokens[]) | . + {gpu:$gpu, sim:similar($g)}]
         | group_by(.key)
-        | map({token:.[0].token, key:.[0].key, adapted:.[0].adapted, kind:.[0].kind, vendor:.[0].vendor, count:length,
+        | map({token:(group_by(.token) | max_by(length) | .[0].token), key:.[0].key, adapted:.[0].adapted,
+               kind:.[0].kind, vendor:.[0].vendor, count:length,
                share:((length * 100 / ([$n,1]|max)) | floor),
                vcount:(map(select(.gpu == $v)) | length), scount:(map(select(.sim)) | length)}
               | .vshare = (if $nv > 0 then (.vcount * 100 / $nv | floor) else null end)
@@ -3164,8 +3177,17 @@ cmd_gsuggest() {
                    else {basis:"all", pct:.share, n:.count} end))
         | map(select(.count >= 2 and .pct >= 5))
         | map(. + {foryou:(.vendor == null or .vendor == $v)})
-        # RECOMMENDED: used by ≥ 20 % of those players, at least 5 reports
-        | map(. + {recommended:(.foryou and .pct >= 20 and .n >= 5)})
+        # env vars: share of those players who do not set the variable at all
+        # (i.e. keep the default) — "not setting it" is a choice too
+        | map(if .kind == "env" then
+                (.token | split("=")[0]) as $var
+                | ((if .basis == "similar" then [$w.r[] | select(similar(.[5]))]
+                    elif .basis == "vendor" then [$w.r[] | select(.[3] == $v)] else $w.r end)) as $c
+                | . + {var:$var, unset:(([$c[] | select(.[4] | test("(^|\\s)" + $var + "=") | not)] | length) * 100 / ([$c | length, 1] | max) | floor)}
+              else . end)
+        # RECOMMENDED: ≥ 20 % of those players use it (at least 5 reports); an env var
+        # must also be set by more players than leave it at its default
+        | map(. + {recommended:(.foryou and .pct >= 20 and .n >= 5 and (.kind != "env" or .pct > .unset))})
         | sort_by(-(if .foryou then 1 else 0 end), -(if .recommended then 1 else 0 end), -.pct, -.count)
         | {index:true, vendor:$v, gpuGen:$gen, gpuName:$gname, similarLabel:($gen | gen_label),
            cores:$cores, screen:$res, window:$w.window,
