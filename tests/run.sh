@@ -858,6 +858,58 @@ has "PLAY starts a Steam game through Steam" "$(cat "$T/steam.log")" "steam://ru
 "$CD" gplay umbral:nope >/dev/null 2>&1; eq "unknown Umbral game refused" "$?" 2
 "$CD" gplay 'steam:1;rm' >/dev/null 2>&1; eq "bad key refused" "$?" 2
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_UMBRAL_CONFIG
+# ---------------------------------------------------------- 2.9 health ----
+section "gaming health"
+H="$T/health"; mkdir -p "$H/db" "$H/sys/class/drm/card1/device" "$H/sys/drivers/amdgpu" "$H/proc/sys/vm"
+fakepkg() { mkdir -p "$H/db/$1-$2"; }
+echo 0x1002 > "$H/sys/class/drm/card1/device/vendor"
+ln -s ../../../../drivers/amdgpu "$H/sys/class/drm/card1/device/driver"
+mkdir -p "$H/sys/class/drm/card1-DP-1"; echo 65536 > "$H/proc/sys/vm/max_map_count"
+printf '[options]\n#[multilib]\n#Include = /etc/pacman.d/mirrorlist\n' > "$H/pacman.conf"
+fakepkg mesa 1:26.2.3-1; fakepkg vulkan-radeon 1:26.2.3-1; fakepkg amdvlk 2025.Q2.1-1
+fakepkg vulkan-icd-loader 1.4.357-1; fakepkg lib32-vulkan-icd-loader 1.4.357-1; fakepkg lib32-gnutls 3.8-1
+fakepkg lib32-mesa-git 26.3-1        # a prefix of lib32-mesa must not count as it
+stub vulkaninfo 'printf "Devices:\n=======\nGPU0:\n\tdeviceType = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName = llvmpipe\n\tdriverName = llvmpipe\n"'
+stub modinfo 'exit ${FAKE_NTSYNC_MOD:-1}'
+hrun() { CONTROL_DECK_PACMAN_DB="$H/db" CONTROL_DECK_SYSFS="$H/sys" CONTROL_DECK_PROCFS="$H/proc" \
+         CONTROL_DECK_PACMAN_CONF="$H/pacman.conf" CONTROL_DECK_NTSYNC_DEV="$H/ntsync" "$CD" health; }
+HJ="$(hrun)"
+st() { jq -r --arg id "$1" '.checks[] | select(.id == $id) | .status' <<<"$HJ"; }
+fx() { jq -r --arg id "$1" '.checks[] | select(.id == $id) | .fix' <<<"$HJ"; }
+eq "AMD card found from sysfs (connector entries ignored)" "$(jq -c .vendors <<<"$HJ")" '["amd"]'
+eq "commented [multilib] is disabled" "$(st multilib)" fail
+eq "low vm.max_map_count warned" "$(st max_map_count)" warn
+eq "no ntsync module → info only" "$(st ntsync)" info
+eq "amdgpu driver in use" "$(st amd:module)" ok
+eq "missing 32-bit Mesa/RADV fails" "$(st pkg:mesa)" fail
+eq "fix installs exactly what is missing" "$(fx pkg:mesa)" "sudo pacman -S --needed lib32-mesa lib32-vulkan-radeon"
+eq "AMDVLK flagged for removal" "$(fx amd:amdvlk)" "sudo pacman -Rns amdvlk"
+eq "Vulkan with only a software renderer fails" "$(st vulkan:device)" fail
+eq "no 32-bit audio warned" "$(st lib32:audio)" warn
+eq "one command for everything missing" "$(jq -r .installAll <<<"$HJ")" "sudo pacman -S --needed lib32-mesa lib32-pipewire lib32-vulkan-radeon"
+eq "counts" "$(jq -c '[.fail, .warn]' <<<"$HJ")" "[3,3]"
+HJ="$(FAKE_NTSYNC_MOD=0 hrun)"; eq "ntsync module present but not loaded → load command" "$(st ntsync)" warn
+# NVIDIA, updated without a reboot
+rm -rf "$H/sys" "$H/db"; mkdir -p "$H/sys/class/drm/card0/device" "$H/sys/drivers/nvidia" "$H/sys/module/nvidia" "$H/sys/module/nvidia_drm/parameters"
+echo 0x10de > "$H/sys/class/drm/card0/device/vendor"; ln -s ../../../../drivers/nvidia "$H/sys/class/drm/card0/device/driver"
+echo 610.10 > "$H/sys/module/nvidia/version"; echo Y > "$H/sys/module/nvidia_drm/parameters/modeset"
+echo 1048576 > "$H/proc/sys/vm/max_map_count"; touch "$H/ntsync"; printf '[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' > "$H/pacman.conf"
+fakepkg nvidia-utils 615.71.09-1; fakepkg lib32-nvidia-utils 615.71.09-1
+fakepkg vulkan-icd-loader 1-1; fakepkg lib32-vulkan-icd-loader 1-1; fakepkg lib32-pipewire 1-1; fakepkg lib32-gnutls 1-1
+stub vulkaninfo 'printf "GPU0:\n\tdeviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName = NVIDIA GeForce RTX 2070\n\tdriverName = NVIDIA\n"'
+HJ="$(hrun)"
+eq "multilib, max_map_count, ntsync ok" "$(st multilib)$(st max_map_count)$(st ntsync)" okokok
+eq "driver updated but kernel module old → reboot" "$(fx nvidia:sync)" reboot
+has "…and says which versions" "$(jq -r '.checks[] | select(.id == "nvidia:sync") | .detail' <<<"$HJ")" "615.71.09 but the loaded kernel module is 610.10"
+eq "Vulkan sees the GPU" "$(jq -r '.checks[] | select(.id == "vulkan:device") | .detail' <<<"$HJ")" "NVIDIA GeForce RTX 2070 · NVIDIA"
+echo 615.71.09 > "$H/sys/module/nvidia/version"; rm -rf "$H/db/lib32-nvidia-utils-615.71.09-1"; fakepkg lib32-nvidia-utils 610.10-1
+HJ="$(hrun)"; eq "32-bit driver out of sync → full update" "$(fx nvidia:sync)" "sudo pacman -Syu"
+rm -rf "$H/db/lib32-nvidia-utils-610.10-1"; fakepkg lib32-nvidia-utils 615.71.09-1; echo N > "$H/sys/module/nvidia_drm/parameters/modeset"
+HJ="$(hrun)"
+eq "all in sync" "$(st nvidia:sync)" ok
+has "modeset off → modprobe option" "$(fx nvidia:modeset)" "options nvidia_drm modeset=1"
+eq "nothing to install" "$(jq -r .installAll <<<"$HJ")" ""
+rm -f "$T/bin/vulkaninfo" "$T/bin/modinfo"
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

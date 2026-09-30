@@ -3784,6 +3784,7 @@ Gaming
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
+  health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
 EOF
 }
 
@@ -3797,6 +3798,189 @@ with_notify() {
 }
 
 need() { [[ -n "$1" ]] || { err "$2"; exit 2; }; }
+
+# ------------------------------------------------------------- 2.9 health ----
+# health — read-only checks of what games need from the system: multilib, the
+# GPU driver (userspace/kernel versions in sync, 32-bit libraries), Vulkan and a
+# few kernel settings. Every failed check carries the exact command that fixes
+# it; nothing is ever run from here.
+SYSFS="${CONTROL_DECK_SYSFS:-/sys}"
+PROCFS="${CONTROL_DECK_PROCFS:-/proc}"
+PACMAN_CONF="${CONTROL_DECK_PACMAN_CONF:-/etc/pacman.conf}"
+NTSYNC_DEV="${CONTROL_DECK_NTSYNC_DEV:-/dev/ntsync}"
+
+# installed version of a package ("" when not installed), from the local db
+pkg_ver() {
+    local d
+    for d in "$PACMAN_DB/$1"-*; do
+        [[ -d "$d" ]] || continue
+        d="${d##*/}"; d="${d#"$1"-}"
+        [[ "$d" =~ ^[^-]+-[^-]+$ ]] && { echo "$d"; return; }
+    done
+}
+
+# every GPU vendor present (a laptop can have two) and the kernel driver in use
+gpu_devices() {
+    local c v drv
+    for c in "$SYSFS"/class/drm/card[0-9]*; do
+        [[ -f "$c/device/vendor" && ! "${c##*/}" =~ - ]] || continue
+        v="$(cat "$c/device/vendor")"
+        drv="$(readlink "$c/device/driver" 2>/dev/null)"; drv="${drv##*/}"
+        case "$v" in 0x10de) v=nvidia ;; 0x1002) v=amd ;; 0x8086) v=intel ;; *) continue ;; esac
+        echo "$v $drv"
+    done | sort -u
+}
+
+cmd_health() {
+    local out=() missing=() vendors drv p v kmod u32 icd
+
+    # $1 id · $2 group · $3 status (ok|warn|fail|info) · $4 label · $5 detail · $6 fix
+    chk() { out+=("$(jq -nc --arg id "$1" --arg g "$2" --arg s "$3" --arg l "$4" --arg d "$5" --arg f "${6:-}" \
+                        '{id:$id, group:$g, status:$s, label:$l, detail:$d, fix:$f}')"); }
+    # packages that must be installed ($1 group · $2 status if missing · $3 label);
+    # missing ones also go to the combined fix
+    need_pkgs() {
+        local g="$1" s="$2" l="$3"; shift 3
+        local p miss=()
+        for p in "$@"; do [[ -n "$(pkg_ver "$p")" ]] || miss+=("$p"); done
+        if ((${#miss[@]} == 0)); then
+            chk "pkg:${1}" "$g" ok "$l" "$*"
+        else
+            missing+=("${miss[@]}")
+            chk "pkg:${1}" "$g" "$s" "$l" "missing: ${miss[*]}" "sudo pacman -S --needed ${miss[*]}"
+        fi
+    }
+
+    # --- system
+    local multilib=0
+    [[ -r "$PACMAN_CONF" ]] && grep -qE '^[[:space:]]*\[multilib\][[:space:]]*$' "$PACMAN_CONF" && multilib=1
+    if ((multilib)); then
+        chk multilib system ok "multilib repository" "enabled in $PACMAN_CONF (32-bit libraries for Steam and Wine)"
+    else
+        chk multilib system fail "multilib repository" \
+            "disabled: Steam and Wine need its 32-bit libraries. Uncomment the [multilib] section (both lines) in $PACMAN_CONF, then update" \
+            "sudo pacman -Syu"
+    fi
+    local mmc; mmc="$(cat "$PROCFS/sys/vm/max_map_count" 2>/dev/null)"
+    if [[ "$mmc" =~ ^[0-9]+$ ]] && (( mmc >= 1048576 )); then
+        chk max_map_count system ok "vm.max_map_count" "$mmc"
+    else
+        chk max_map_count system warn "vm.max_map_count" \
+            "${mmc:-unknown}: some games crash below 1048576 (the value Arch ships)" \
+            "echo 'vm.max_map_count = 1048576' | sudo tee /etc/sysctl.d/80-gamecompatibility.conf && sudo sysctl --system"
+    fi
+    if [[ -e "$NTSYNC_DEV" ]]; then
+        chk ntsync system ok "ntsync" "$NTSYNC_DEV present: Proton/Wine can use kernel sync"
+    elif have modinfo && modinfo ntsync >/dev/null 2>&1; then
+        chk ntsync system warn "ntsync" "the kernel has the module but it is not loaded" \
+            "echo ntsync | sudo tee /etc/modules-load.d/ntsync.conf && sudo modprobe ntsync"
+    else
+        chk ntsync system info "ntsync" "not in this kernel (needs 6.14 or newer); Proton falls back to esync/fsync"
+    fi
+
+    # --- GPU drivers
+    vendors="$(gpu_devices)"
+    [[ -z "$vendors" ]] && chk gpu driver warn "GPU" "no NVIDIA, AMD or Intel GPU found in $SYSFS/class/drm"
+    while read -r v drv; do
+        [[ -n "$v" ]] || continue
+        case "$v" in
+        nvidia)
+            if [[ "$drv" == nvidia ]]; then
+                kmod="$(cat "$SYSFS/module/nvidia/version" 2>/dev/null)"
+                chk nvidia:module driver ok "NVIDIA kernel module" "loaded${kmod:+ ($kmod)}"
+            else
+                chk nvidia:module driver fail "NVIDIA kernel module" \
+                    "the card uses «${drv:-no driver}», not the NVIDIA driver. Install the module for your kernel (nvidia-open-dkms is for GTX 16 / RTX 20 and newer; older cards need the legacy driver from the AUR), then reboot" \
+                    "sudo pacman -S --needed nvidia-open-dkms nvidia-utils lib32-nvidia-utils"
+                kmod=""
+            fi
+            need_pkgs driver fail "NVIDIA userspace" nvidia-utils lib32-nvidia-utils
+            u32="$(pkg_ver lib32-nvidia-utils)"; u32="${u32%-*}"
+            p="$(pkg_ver nvidia-utils)"; p="${p%-*}"
+            if [[ -n "$p" && -n "$kmod" && "$p" != "$kmod" ]]; then
+                chk nvidia:sync driver fail "NVIDIA versions" \
+                    "nvidia-utils is $p but the loaded kernel module is $kmod: the driver was updated and the PC not restarted (games fail to start)" \
+                    "reboot"
+            elif [[ -n "$p" && -n "$u32" && "$p" != "$u32" ]]; then
+                chk nvidia:sync driver fail "NVIDIA versions" \
+                    "nvidia-utils is $p but lib32-nvidia-utils is $u32: 32-bit games and Steam break" \
+                    "sudo pacman -Syu"
+            elif [[ -n "$p" && -n "$kmod" ]]; then
+                chk nvidia:sync driver ok "NVIDIA versions" "kernel module, nvidia-utils${u32:+ and lib32-nvidia-utils} at $p"
+            fi
+            if [[ -n "$kmod" ]]; then
+                if [[ "$(cat "$SYSFS/module/nvidia_drm/parameters/modeset" 2>/dev/null)" == Y ]]; then
+                    chk nvidia:modeset driver ok "nvidia_drm modeset" "on (needed by Wayland and gamescope)"
+                else
+                    chk nvidia:modeset driver fail "nvidia_drm modeset" "off: Wayland sessions and gamescope need it; reboot after the fix" \
+                        "echo 'options nvidia_drm modeset=1' | sudo tee /etc/modprobe.d/nvidia-drm.conf"
+                fi
+            fi
+            ;;
+        amd)
+            if [[ "$drv" == amdgpu ]]; then
+                chk amd:module driver ok "amdgpu kernel driver" "in use"
+            else
+                chk amd:module driver warn "amdgpu kernel driver" \
+                    "the card uses «${drv:-no driver}»: RADV Vulkan needs amdgpu (very old GCN 1/2 cards default to radeon)"
+            fi
+            need_pkgs driver fail "Mesa + RADV Vulkan" mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon
+            local avk=()
+            for p in amdvlk lib32-amdvlk; do [[ -n "$(pkg_ver "$p")" ]] && avk+=("$p"); done
+            if ((${#avk[@]})); then
+                chk amd:amdvlk driver warn "AMDVLK" \
+                    "${avk[*]} installed: AMD discontinued it and it can take over from RADV, which Proton is tuned for" \
+                    "sudo pacman -Rns ${avk[*]}"
+            fi
+            p="$(pkg_ver mesa)"; [[ -n "$p" ]] && chk amd:mesa driver info "Mesa" "${p%-*}"
+            ;;
+        intel)
+            need_pkgs driver fail "Mesa + Intel Vulkan" mesa lib32-mesa vulkan-intel lib32-vulkan-intel
+            ;;
+        esac
+    done <<<"$vendors"
+
+    # --- Vulkan
+    need_pkgs vulkan fail "Vulkan loader" vulkan-icd-loader lib32-vulkan-icd-loader
+    icd="$(ls /usr/share/vulkan/icd.d/ 2>/dev/null | tr '\n' ' ')"
+    if have vulkaninfo; then
+        local devs
+        devs="$(timeout 15 vulkaninfo --summary 2>/dev/null | awk -F'= ' '
+            /deviceType/ {t=$2} /deviceName/ {n=$2}
+            /driverName/ {print t "\t" n "\t" $2}')"
+        if grep -qE 'DISCRETE_GPU|INTEGRATED_GPU' <<<"$devs"; then
+            chk vulkan:device vulkan ok "Vulkan devices" \
+                "$(grep -E 'DISCRETE_GPU|INTEGRATED_GPU' <<<"$devs" | cut -f2,3 | sed 's/\t/ · /' | paste -sd ',' | sed 's/,/, /g')"
+        else
+            chk vulkan:device vulkan fail "Vulkan devices" \
+                "Vulkan sees no GPU${devs:+ (only a software renderer)}; drivers found: ${icd:-none}. Check the driver rows above"
+        fi
+    else
+        chk vulkan:device vulkan info "Vulkan devices" "install vulkan-tools to check which GPUs Vulkan sees (drivers: ${icd:-none})" \
+            "sudo pacman -S --needed vulkan-tools"
+    fi
+
+    # --- 32-bit libraries games commonly load
+    if [[ -n "$(pkg_ver lib32-pipewire)" || -n "$(pkg_ver lib32-libpulse)" ]]; then
+        chk lib32:audio libs ok "32-bit audio" "$( [[ -n "$(pkg_ver lib32-pipewire)" ]] && echo lib32-pipewire || echo lib32-libpulse)"
+    else
+        missing+=(lib32-pipewire)
+        chk lib32:audio libs warn "32-bit audio" "no lib32-pipewire / lib32-libpulse: 32-bit games have no sound" \
+            "sudo pacman -S --needed lib32-pipewire"
+    fi
+    need_pkgs libs warn "32-bit TLS (online games)" lib32-gnutls
+
+    local all=""
+    ((${#missing[@]})) && all="sudo pacman -S --needed $(printf '%s\n' "${missing[@]}" | sort -u | paste -sd ' ')"
+    printf '%s\n' "${out[@]}" | jq -sc --arg all "$all" --argjson ml "$multilib" --arg v "$vendors" '{
+        checks: .,
+        vendors: ($v | split("\n") | map(select(. != "") | split(" ")[0]) | unique),
+        fail: ([.[] | select(.status == "fail")] | length),
+        warn: ([.[] | select(.status == "warn")] | length),
+        installAll: $all,
+        multilib: ($ml == 1)
+    }'
+}
 
 main() {
     local sub="$1"; shift 2>/dev/null
@@ -3874,6 +4058,7 @@ main() {
         bench)       cmd_bench "$@" ;;
         prefixes)    cmd_prefixes ;;
         prefix)      cmd_prefix "$@" ;;
+        health)      cmd_health ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

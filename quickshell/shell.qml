@@ -300,6 +300,8 @@ ShellRoot {
         property var    tips: ({})          // suggestion count per appid
         property var    pdbStat: ({})       // local ProtonDB index status
         property var    shaders: ({})       // shader caches (per game + driver)
+        property var    health: ({})        // gaming health checks
+        property string copiedFix: ""       // fix command just copied (for feedback)
         property string confirmShader: ""   // target awaiting a second click
         property var    bench: ({})         // A/B benchmark of the selected game
         property string benchLoadedFor: ""  // game whose variants are in the editors (unsaved edits survive refreshes)
@@ -917,6 +919,13 @@ ShellRoot {
             }
         }
         Process {
+            id: healthProc
+            command: [win.scriptPath, "health"]
+            stdout: StdioCollector { onStreamFinished: { try { win.health = JSON.parse(text); } catch (e) { win.health = {}; } } }
+        }
+        Process { id: fixCopyProc }
+        Timer { id: copiedTimer; interval: 1800; onTriggered: win.copiedFix = "" }
+        Process {
             id: shaderProc
             command: [win.scriptPath, "shadercache"]
             stdout: StdioCollector { onStreamFinished: { try { win.shaders = JSON.parse(text); } catch (e) { win.shaders = {}; } } }
@@ -932,6 +941,33 @@ ShellRoot {
         }
 
         // ---- reusable bits ----------------------------------------------
+        // a fix command, shown and copied, never run
+        component FixLine: RowLayout {
+            property string cmd
+            spacing: 6
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: fixTxt.implicitHeight + 10
+                radius: 4; color: pal.logBg; border.color: pal.border; border.width: 1
+                Text {
+                    id: fixTxt
+                    anchors.fill: parent; anchors.margins: 5
+                    text: cmd === "reboot" ? "Restart the PC" : "$ " + cmd
+                    wrapMode: Text.WrapAnywhere
+                    color: pal.sky; font.family: win.mono; font.pixelSize: 10
+                }
+            }
+            Chip {
+                visible: cmd !== "reboot"
+                label: win.copiedFix === cmd ? "COPIED ✓" : "COPY"
+                tint: pal.ok; active: win.copiedFix === cmd
+                onClicked: {
+                    fixCopyProc.command = ["wl-copy", "--", cmd];
+                    fixCopyProc.running = true;
+                    win.copiedFix = cmd; copiedTimer.restart();
+                }
+            }
+        }
         component Section: RowLayout {
             property string label
             property string info: ""
@@ -2602,6 +2638,7 @@ ShellRoot {
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
                     Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame && win.selGameSource === "steam") benchProc.running = true; } }
                     Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
+                    Chip { label: "HEALTH";  active: win.gameView === "health";  onClicked: { win.gameView = "health"; healthProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -3132,6 +3169,110 @@ ShellRoot {
                                       onClicked: win.runGame(["bench", "restore", win.selGame], "RESTORING…") }
                             MiniBtn { width: 70; label: "CLEAR"; tint: pal.bad; primary: false; on: !win.gameBusy
                                       onClicked: win.runGame(["bench", "clear", win.selGame], "CLEARING…") }
+                        }
+                    }
+                }
+
+                // ---- HEALTH ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "health"
+                    spacing: 8
+
+                    // summary + everything missing in one command
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: !!win.health.checks
+                        implicitHeight: hSum.implicitHeight + 20
+                        radius: 8; color: pal.card; border.width: 1
+                        border.color: win.health.fail > 0 ? pal.bad : (win.health.warn > 0 ? pal.amber : pal.ok)
+                        ColumnLayout {
+                            id: hSum
+                            anchors.fill: parent; anchors.margins: 10; spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                    color: win.health.fail > 0 ? pal.bad : (win.health.warn > 0 ? pal.amber : pal.ok)
+                                    text: win.health.fail > 0 || win.health.warn > 0
+                                          ? [win.health.fail > 0 ? win.health.fail + " problem" + (win.health.fail > 1 ? "s" : "") : "",
+                                             win.health.warn > 0 ? win.health.warn + " warning" + (win.health.warn > 1 ? "s" : "") : ""]
+                                            .filter(function (x) { return x; }).join(" · ")
+                                            + "  —  nothing is changed from here: copy the command and run it in a terminal"
+                                          : "✓ Everything games need is in place (" + (win.health.vendors || []).join(", ").toUpperCase() + ")"
+                                }
+                                Chip { label: healthProc.running ? "CHECKING…" : "RECHECK"; on: !healthProc.running; onClicked: healthProc.running = true }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                visible: (win.health.installAll || "") !== ""
+                                Text { text: "ALL MISSING"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                FixLine { Layout.fillWidth: true; cmd: win.health.installAll || "" }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+                        EmptyHint {
+                            visible: !win.health.checks
+                            title: healthProc.running ? "CHECKING…" : "NO DATA"
+                        }
+                        ListView {
+                            id: healthList
+                            anchors.fill: parent; anchors.margins: 6
+                            clip: true; spacing: 4
+                            model: win.health.checks || []
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                required property int index
+                                width: healthList.width - 12; spacing: 4
+                                property color stColor: modelData.status === "ok" ? pal.ok : (modelData.status === "fail" ? pal.bad
+                                                        : (modelData.status === "warn" ? pal.amber : pal.sky))
+                                Text {
+                                    visible: index === 0 || healthList.model[index - 1].group !== modelData.group
+                                    Layout.topMargin: index === 0 ? 2 : 8
+                                    text: ({ system: "SYSTEM", driver: "GPU DRIVER", vulkan: "VULKAN", libs: "32-BIT LIBRARIES" })[modelData.group] || modelData.group.toUpperCase()
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 2; font.bold: true
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: hRow.implicitHeight + 14
+                                    radius: 6; color: pal.card; border.width: 1
+                                    border.color: modelData.status === "ok" || modelData.status === "info" ? pal.border : stColor
+                                    ColumnLayout {
+                                        id: hRow
+                                        anchors.fill: parent; anchors.margins: 7; spacing: 5
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Text {
+                                                text: ({ ok: "✓", fail: "✗", warn: "!", info: "i" })[modelData.status]
+                                                color: stColor; font.family: win.mono; font.pixelSize: 12; font.bold: true
+                                                Layout.preferredWidth: 12; horizontalAlignment: Text.AlignHCenter
+                                            }
+                                            Text {
+                                                text: modelData.label; color: pal.text
+                                                font.family: win.mono; font.pixelSize: 11
+                                                Layout.preferredWidth: Math.min(implicitWidth, 260); elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                                text: modelData.detail
+                                                color: modelData.status === "ok" ? pal.dim : pal.text
+                                                font.family: win.mono; font.pixelSize: 10
+                                            }
+                                        }
+                                        FixLine {
+                                            Layout.fillWidth: true; Layout.leftMargin: 20
+                                            visible: modelData.fix !== ""
+                                            cmd: modelData.fix
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

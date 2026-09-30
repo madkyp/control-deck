@@ -221,6 +221,35 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - CLI: `protondb <appid…>`, `pdbindex update|status`, `gsuggest <appid>`,
   `gtips <appid…>`, `gseen <key>`, `compattools`, `steamcompat <appid> <tool|default>`.
 
+### 2.9 Gaming health — `GAMING → HEALTH`
+- Read-only: every check that fails shows the exact command that fixes it, with
+  a COPY button (`wl-copy`). Nothing is installed or changed from the deck.
+- **System:** `[multilib]` enabled in `pacman.conf`; `vm.max_map_count` ≥ 1048576;
+  `/dev/ntsync` present (kernel sync for Proton/Wine; if the kernel has the
+  module but it isn't loaded, the fix loads it and adds it to `modules-load.d`).
+- **GPU driver**, per GPU found in `/sys/class/drm/card*/device/vendor` (a
+  laptop can have two):
+  - NVIDIA: the card is bound to the `nvidia` module; `nvidia-utils` +
+    `lib32-nvidia-utils` installed; kernel module (`/sys/module/nvidia/version`),
+    `nvidia-utils` and `lib32-nvidia-utils` at the same version (a mismatch
+    after an update without rebooting stops games from starting → "Restart the
+    PC"; a 32-bit mismatch → `pacman -Syu`); `nvidia_drm modeset` on.
+  - AMD: `amdgpu` bound; `mesa`, `lib32-mesa`, `vulkan-radeon`,
+    `lib32-vulkan-radeon`; AMDVLK installed → warning with the removal command
+    (discontinued by AMD, no longer in the repos, can take over from RADV).
+  - Intel: `mesa`, `lib32-mesa`, `vulkan-intel`, `lib32-vulkan-intel`.
+- **Vulkan:** `vulkan-icd-loader` + `lib32-vulkan-icd-loader`; `vulkaninfo
+  --summary` must list a discrete or integrated GPU (only llvmpipe = broken
+  driver). Without `vulkan-tools` this check just says how to enable it.
+- **32-bit libraries:** audio (`lib32-pipewire` or `lib32-libpulse`) and
+  `lib32-gnutls` (online features of Wine games).
+- Installed packages are read from pacman's local db (`/var/lib/pacman/local`),
+  so nothing needs root. Every package suggested was checked to exist in the
+  repos (Arch/CachyOS, September 2026).
+- Verified here: RTX 2070 with 615.71.09 — all green. The AMD and failure paths
+  are covered by the tests with a simulated sysfs/pacman db.
+- CLI: `health`.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |
@@ -247,7 +276,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.9 Arch gamer health panel · 2.10 update guardian (the
+2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
 ReShade.
