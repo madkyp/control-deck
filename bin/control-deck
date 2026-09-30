@@ -5385,7 +5385,7 @@ cmd_proton_install() {
     top="$(bsdtar -tzf "$tmp/${asset##*/}" 2>/dev/null | head -1 | cut -d/ -f1)"
     [[ "$top" == GE-Proton* ]] || { rm -rf "$tmp"; err "unexpected archive layout"; return 4; }
     [[ -e "$dir/$top" ]] && { rm -rf "$tmp"; log "✔ $top is already installed."; return 0; }
-    bsdtar -xzf "$tmp/${asset##*/}" -C "$dir" || { rm -rf "$dir/$top" "$tmp"; err "extract failed"; return 4; }
+    bsdtar -xzf "$tmp/${asset##*/}" -C "$dir" || { rm -rf "${dir:?}/${top:?}" "$tmp"; err "extract failed"; return 4; }
     rm -rf "$tmp"
     rm -f "$FX_CACHE/tools.json"
     history_add "proton install" steam "$top" 0
