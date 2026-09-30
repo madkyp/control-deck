@@ -406,6 +406,18 @@ Studied from the community's reference script
   wrapper), AMD, and 32-bit/D3D9/OpenGL titles (none installed here).
 
 
+#### Saved preset pages and the effects switch
+- `fx link add|rm|get steam:<appid> <url> [label]` saves a preset page (Nexus
+  links get the label "Nexus #<id>") for a game, even one that isn't
+  installed yet. Links are keyed by Steam app id in `gaming/fx-links.json`.
+  The FX tab lists them under SAVED, and step 4 then says "Your saved preset:
+  … open it, download the file, then IMPORT…". Saved here: KCD2 (1771300) →
+  Nexus #144.
+- **ON/OFF KEY** (ReShade route): ReShade's `[INPUT] KeyEffects`
+  (`runtime.cpp`), the "all effects on/off" key that preset guides suggest.
+  Choices are END (default, VK 35), F9 or NONE, and a change reaches every
+  game already set up.
+
 #### Guided steps (FX → THIS GAME → STEPS)
 A checklist built from the game's live state, with the pending step's own button:
 1. route (✓ when it's the recommended one; otherwise USE RESHADE ★),

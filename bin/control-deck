@@ -3948,6 +3948,7 @@ Gaming
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
   fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id> | key <Home|Insert|F10|F11|F12>
+  fx link add|rm|get steam:<appid> <url> [label]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
@@ -4230,14 +4231,16 @@ fx_key_dir() { echo "$FX_PROFILES/${1//:/_}"; }
 FX_SETTINGS="$GAMING_DIR/fx.json"
 fx_key() { local k; k="$(jq -r '.key // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-Home}"; }
 fx_vk() {   # key name → Windows virtual-key code (ReShade.ini)
-    case "$1" in Home) echo 36 ;; Insert) echo 45 ;; F10) echo 121 ;; F11) echo 122 ;; F12) echo 123 ;; *) echo 36 ;; esac
+    case "$1" in Home) echo 36 ;; End) echo 35 ;; Insert) echo 45 ;; F9) echo 120 ;; F10) echo 121 ;; F11) echo 122 ;; F12) echo 123 ;; None) echo 0 ;; *) echo 36 ;; esac
 }
+# ReShade's effects on/off switch (KeyEffects); End by default, "None" = no key
+fx_effects_key() { local k; k="$(jq -r '.effectsKey // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-End}"; }
 # fx key <Home|Insert|F10|F11|F12> — saved and pushed to every game already set up
 cmd_fx_key() {
     local k="$1" f st dir
     [[ "$k" =~ ^(Home|Insert|F10|F11|F12)$ ]] || { err "use: fx key Home|Insert|F10|F11|F12"; return 2; }
     mkdir -p "$GAMING_DIR"
-    jq -n --arg k "$k" '{key:$k}' > "$FX_SETTINGS"
+    jq -n --arg k "$k" --arg e "$(fx_effects_key)" '{key:$k, effectsKey:$e}' > "$FX_SETTINGS"
     for f in "$FX_PROFILES"/*/vkBasalt.conf; do
         [[ -f "$f" ]] && sed -i "s/^toggleKey = .*/toggleKey = $k/" "$f"
     done
@@ -4247,6 +4250,20 @@ cmd_fx_key() {
         [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyOverlay "$(fx_vk "$k"),0,0,0"
     done
     log "✔ In-game shader key: $k"
+}
+
+# fx effectskey <End|F9|None> — ReShade's "all effects on/off" key, every game
+cmd_fx_effectskey() {
+    local k="$1" f dir
+    [[ "$k" =~ ^(End|F9|None)$ ]] || { err "use: fx effectskey End|F9|None"; return 2; }
+    mkdir -p "$GAMING_DIR"
+    jq -n --arg k "$(fx_key)" --arg e "$k" '{key:$k, effectsKey:$e}' > "$FX_SETTINGS"
+    for f in "$FX_PROFILES"/*/reshade.json; do
+        [[ -f "$f" ]] || continue
+        dir="$(jq -r .dir "$f")"
+        [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyEffects "$(fx_vk "$k"),0,0,0"
+    done
+    log "✔ Effects on/off key: $k"
 }
 
 # cached download: fx_cached <file> <max age s> <url>  (stale copy beats nothing)
@@ -4364,14 +4381,15 @@ cmd_fx_status() {
     jq -nc --arg v64 "$v64" --arg v32 "$v32" --argjson n "$n" --arg vendor "$(gpu_vendor)" --arg gpu "$(gpu_name)" \
         --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
         --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" \
-        --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" \
+        --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" \
+        --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" '.[$k] // []'; else echo '[]'; fi)" \
         --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
         --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
         --arg chaotic "$(grep -qE '^[[:space:]]*\[chaotic-aur\]' "$PACMAN_CONF" 2>/dev/null && echo 1 || echo 0)" '{
         vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
         chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
         installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end),
-        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key,
+        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, links:$links,
         reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
                  update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
         recommended:(($exes[0].api // "unknown") as $a
@@ -4828,6 +4846,7 @@ cmd_reshade_on() {
         printf '[GENERAL]\n[INPUT]\n[OVERLAY]\nTutorialProgress=4\n' > "$ini"
     fi
     ini_set "$ini" INPUT KeyOverlay "$(fx_vk "$(fx_key)"),0,0,0"
+    ini_set "$ini" INPUT KeyEffects "$(fx_vk "$(fx_effects_key)"),0,0,0"
     ini_set "$ini" GENERAL EffectSearchPaths "$(winpath "$FX_DIR/Shaders")\\**"
     ini_set "$ini" GENERAL TextureSearchPaths "$(winpath "$FX_DIR/Textures")\\**"
     ini_set "$ini" GENERAL PresetPath "$(winpath "$d/ReShadePreset.ini")"
@@ -4961,10 +4980,10 @@ cmd_fx_scan() {
         online="$(fx_online "$id")"
         d="$(fx_key_dir "steam:$id")"; cur="null"; [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
         scan_rows+=("$(jq -nc --arg id "$id" --arg name "$name" --argjson sfx "$sfx" --argjson online "${online:-null}" \
-                 --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" '
+                 --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" --argjson links "$(fx_links_json)" '
             def norm: ascii_downcase | gsub("[™®©]"; "") | gsub("[^a-z0-9]+"; "");
             ([$pcgw[] | select(any(.names[]; norm == $n))] | first // null) as $pc
-            | {key:("steam:" + $id), id:$id, name:$name, sfx:$sfx, pcgw:$pc, online:$online, current:$cur,
+            | {key:("steam:" + $id), id:$id, name:$name, sfx:$sfx, pcgw:$pc, online:$online, current:$cur, links:($links[("steam:" + $id)] // []),
                nexus:("https://duckduckgo.com/?q=" + ("site:nexusmods.com \($name) reshade preset" | @uri))}
             | .blocked = (($pc // {}).avoid == true)
             | .eligible = ((.blocked | not) and ((.online // {}).level // "none") != "anticheat")')")
@@ -5090,6 +5109,32 @@ cmd_fx_import() {
     return $rc
 }
 
+# --- saved preset links per game (e.g. a Nexus page to download and IMPORT) ----
+# Keyed by Steam app id, so a link can be saved before the game is installed.
+FX_LINKS="$GAMING_DIR/fx-links.json"
+fx_links_json() { if [[ -s "$FX_LINKS" ]]; then cat "$FX_LINKS"; else echo '{}'; fi; }
+# fx link add <key> <https url> [label] | rm <key> <url> | get <key>
+cmd_fx_link() {
+    local sub="$1" key="$2" url="${3:-}" label="${4:-}" tmp
+    [[ "$key" =~ ^steam:[0-9]+$ ]] || { err "use: fx link add|rm|get steam:<appid> …"; return 2; }
+    case "$sub" in
+        get) fx_links_json | jq -c --arg k "$key" '.[$k] // []' ;;
+        add)
+            [[ "$url" =~ ^https://[^[:space:]\"\'\`]+$ ]] || { err "a https link is needed"; return 2; }
+            if [[ -z "$label" && "$url" =~ nexusmods\.com/([a-z0-9]+)/mods/([0-9]+) ]]; then label="Nexus #${BASH_REMATCH[2]}"; fi
+            mkdir -p "$GAMING_DIR"; tmp="$(mktemp)"
+            fx_links_json | jq --arg k "$key" --arg u "$url" --arg l "${label:-$url}" \
+                '.[$k] = ((.[$k] // []) | map(select(.url != $u)) + [{url:$u, label:$l}])' > "$tmp" && mv "$tmp" "$FX_LINKS"
+            log "✔ Saved for $key: ${label:-$url}" ;;
+        rm)
+            mkdir -p "$GAMING_DIR"; tmp="$(mktemp)"
+            fx_links_json | jq --arg k "$key" --arg u "$url" '.[$k] = ((.[$k] // []) | map(select(.url != $u))) | with_entries(select(.value | length > 0))' \
+                > "$tmp" && mv "$tmp" "$FX_LINKS"
+            log "✔ Removed." ;;
+        *) err "use: fx link add|rm|get steam:<appid> …"; return 2 ;;
+    esac
+}
+
 cmd_fx() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5101,10 +5146,12 @@ cmd_fx() {
         presets)  cmd_fx_presets "${1:-}" ;;
         set)      cmd_fx_set "${1:-}" "${2:-}" ;;
         importlist) cmd_fx_importlist "${1:-}" ;;
+        link)     cmd_fx_link "$@" ;;
         import)   cmd_fx_import "${1:-}" "${2:-}" "${3:-}" ;;
         mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
         exes)     cmd_fx_exes "${1:-}" ;;
         key)      cmd_fx_key "${1:-}" ;;
+        effectskey) cmd_fx_effectskey "${1:-}" ;;
         scan)     if [[ "${1:-}" == --cached ]]; then
                       if [[ -s "$FX_CACHE/scan.json" ]]; then cat "$FX_CACHE/scan.json"; else echo '[]'; fi
                   else cmd_fx_scan; fi ;;

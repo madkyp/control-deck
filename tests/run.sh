@@ -1157,6 +1157,16 @@ has "key change reaches games already set up (VK 122)" "$(cat "$W/ReShade.ini")"
 "$CD" fx mode steam:4002 vkbasalt >/dev/null 2>&1; "$CD" fx set steam:4002 builtin:sharpen >/dev/null 2>&1
 eq "…and vkBasalt configs" "$(grep '^toggleKey' "$HOME/.local/share/control-deck/gaming/fx/steam_4002/vkBasalt.conf")" "toggleKey = F11"
 eq "status reports it" "$("$CD" fx status | jq -r .key)" F11
+has "effects on/off key defaults to END (VK 35)" "$(cat "$W/ReShade.ini")" "KeyEffects=35,0,0,0"
+"$CD" fx effectskey F9 >/dev/null; has "…changeable, pushed to games" "$(cat "$W/ReShade.ini")" "KeyEffects=120,0,0,0"
+"$CD" fx effectskey None >/dev/null; has "…or none" "$(cat "$W/ReShade.ini")" "KeyEffects=0,0,0,0"
+eq "menu key kept when changing it" "$("$CD" fx status | jq -c '[.key, .effectsKey]')" '["F11","None"]'
+"$CD" fx effectskey End >/dev/null
+"$CD" fx link add steam:1771300 "https://www.nexusmods.com/kingdomcomedeliverance2/mods/144" >/dev/null
+eq "preset page saved for a game not installed yet, labelled from the URL" "$("$CD" fx link get steam:1771300 | jq -c '[.[] | .label]')" '["Nexus #144"]'
+"$CD" fx link add steam:1771300 "javascript:alert(1)" >/dev/null 2>&1; eq "only https links" "$?" 2
+"$CD" fx link rm steam:1771300 "https://www.nexusmods.com/kingdomcomedeliverance2/mods/144" >/dev/null
+eq "removed" "$("$CD" fx link get steam:1771300)" "[]"
 "$CD" fx mode steam:5000 reshade "$W/Old9.exe" d3d9 >/dev/null 2>&1
 eq "switching exe/API moves the links" "$(readlink "$W/d3d9.dll") $([[ -e "$W/dxgi.dll" ]] && echo left || echo gone)" "$FXB/current/ReShade32.dll gone"
 eq "32-bit d3dcompiler for a 32-bit exe" "$(readlink "$W/d3dcompiler_47.dll")" "$FXB/d3dcompiler_47.dll.32"

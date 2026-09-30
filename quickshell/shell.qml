@@ -345,9 +345,13 @@ ShellRoot {
                             : (fx.steamRunning ? "Close Steam, then USE IN STEAM." : "USE IN STEAM puts the deck in its launch options.")],
                 [fxActive, "Pick a look",
                  fxActive ? "Active: " + fx.current.name + ". Change it any time below."
-                          : "Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…"],
+                          : ((fx.links || []).length
+                             ? "Your saved preset: " + fx.links[0].label + " — open it, download the file, then IMPORT… (below)."
+                             : "Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…")],
                 [fxActive && fx.wrapped === true && fxReady, "Play and tweak",
-                 rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). Turn on Performance Mode once you like it."
+                 rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). "
+                      + ((fx.effectsKey || "End") !== "None" ? (fx.effectsKey || "End").toUpperCase() + " switches all effects on/off. " : "")
+                      + "Turn on Performance Mode once you like it."
                     : "Launch the game; " + key + " turns the effects on/off to compare."]
             ];
         }
@@ -3462,8 +3466,15 @@ ShellRoot {
                                             }
                                             Chip {
                                                 visible: next && index === 3
-                                                label: "SEARCH NEXUS ↗"
-                                                onClicked: Qt.openUrlExternally("https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
+                                                label: (win.fx.links || []).length ? "OPEN " + win.fx.links[0].label + " ↗" : "SEARCH NEXUS ↗"
+                                                onClicked: Qt.openUrlExternally((win.fx.links || []).length ? win.fx.links[0].url
+                                                    : "https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
+                                            }
+                                            MiniBtn {
+                                                visible: next && index === 3 && (win.fx.links || []).length > 0
+                                                width: 90; height: 28; label: "IMPORT…"
+                                                on: !win.gameBusy && win.fxReady && !fxPickProc.running
+                                                onClicked: fxPickProc.running = true
                                             }
                                         }
                                     }
@@ -3564,6 +3575,26 @@ ShellRoot {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                             text: win.fxReshade ? "opens ReShade's menu in game" : "turns the effects on/off in game"
+                                        }
+                                    }
+                                    // ReShade: one key that switches every effect on/off (the mod guides' "END")
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxReshade
+                                        Text { text: "ON/OFF KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: [["End", "END", "The key most preset guides suggest"], ["F9", "F9", "Some games quick-load with F9"], ["None", "NONE", "No key: effects stay on"]]
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData[1]; active: (win.fx.effectsKey || "End") === modelData[0]
+                                                on: !win.gameBusy; tip: modelData[2]
+                                                onClicked: win.runGame(["fx", "effectskey", modelData[0]], "SETTING KEY…")
+                                            }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "switches all effects on/off in game — compare, or drop them in heavy scenes"
                                         }
                                     }
                                     // must launch through the wrapper
@@ -3751,6 +3782,32 @@ ShellRoot {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                             text: "download it, then IMPORT"
+                                        }
+                                    }
+                                    // preset pages saved for this game (can be saved before installing it)
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        Text { text: "SAVED"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: win.fx.links || []
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData.label + " ↗"; tip: modelData.url + " — right-click removes it"
+                                                onClicked: Qt.openUrlExternally(modelData.url)
+                                                MouseArea {
+                                                    anchors.fill: parent; acceptedButtons: Qt.RightButton
+                                                    onClicked: win.runGame(["fx", "link", "rm", win.selGame, modelData.url], "REMOVING LINK…")
+                                                }
+                                            }
+                                        }
+                                        Field {
+                                            id: fxLinkField; Layout.fillWidth: true; font.pixelSize: 10
+                                            placeholderText: "paste a preset page (Nexus…) to keep it here"
+                                            onAccepted: if (text.trim()) { win.runGame(["fx", "link", "add", win.selGame, text.trim()], "SAVING LINK…"); text = ""; }
+                                        }
+                                        Chip {
+                                            label: "SAVE"; on: fxLinkField.text.trim().indexOf("https://") === 0 && !win.gameBusy
+                                            onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], "SAVING LINK…"); fxLinkField.text = ""; }
                                         }
                                     }
                                     Flow {
