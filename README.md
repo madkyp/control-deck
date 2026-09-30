@@ -93,6 +93,7 @@ The window has six tabs:
 - **SHADERS**: every game's shader cache split into Steam's pipeline recordings and the GPU driver's compiled cache (NVIDIA or Mesa for AMD/Intel), with **stale** caches (not used since the last driver update) and **orphans** (uninstalled games) detected and cleanable. UPDATES warns before an update that changes the GPU driver.
 - **BENCH**: A/B benchmark of two launch variants (env, args, gamemode, Proton) with MangoHud frame logs: average FPS, 1 % / 0.1 % lows, p99 frametime and both frametime curves side by side.
 - **GPU** *(requires [LACT](https://github.com/ilya-zlobintsev/LACT))*: per-game GPU profile — power limit, clock offsets, AMD undervolt, fan curve — stored as a LACT profile that LACT applies only while the game runs and reverts when it exits. Values are checked against the card's limits and a conservative band (unlocking it is explicit), and applying asks you to accept the risk.
+- **PREFIXES**: every Wine/Proton prefix (Steam, Heroic, Faugus, Bottles, standalone) with size, last use, version and orphans (games no longer installed); backup, instant clone (Btrfs reflink), restore, and delete with an automatic backup first.
 - **STATUS**: gamemode (with a one-click **JOIN GROUP** so it can switch the governor without a password), CPU governor, `vm.max_map_count`, MangoHud/gamescope and the game running now.
 - Design notes, permissions and what's verified: [`docs/gaming.md`](docs/gaming.md).
 

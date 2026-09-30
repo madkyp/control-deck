@@ -157,6 +157,30 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   offsets on RDNA4) — the AMD clock-table format is **not verified**.
 - CLI: `gpu status`, `gpu profile get|set|delete <key> …`, `gpu detect <key>`.
 
+### 2.6 Wine/Proton prefix manager — `GAMING → PREFIXES`
+- A prefix is any folder with `system.reg` + `drive_c` (incomplete folders are
+  ignored). Searched in every Steam library's `compatdata/<appid>/pfx`, Heroic
+  (`…/Heroic/Prefixes/`), Faugus (its configured `default-prefix`), Bottles,
+  `~/.wine`, `~/.local/share/wineprefixes` (winetricks) and `~/Games` (Lutris
+  and umu defaults), 4 levels deep.
+- Per prefix: launcher, game name (Steam), size, last use (`system.reg` mtime,
+  written by Wine on shutdown), Proton/Wine version, arch, and whether it's in
+  use (a process with `WINEPREFIX` or `STEAM_COMPAT_DATA_PATH` pointing at it).
+- Steam prefixes of games no longer installed are **orphans**; a compatibility
+  tool's own prefix (e.g. Proton Experimental, 1493710) and `compatdata/0`
+  (Steam's shared one) are marked as such and can't be deleted from the deck.
+- **Backup** → `~/control-deck-backups/prefixes/<launcher>-<name>-<date>.tar.zst`
+  (gzip without zstd). **Clone** → `cp -a --reflink=auto` (instant and
+  space-free on Btrfs until files diverge). **Delete** always backs up first;
+  only prefixes the deck found can be touched, Steam ones only as
+  `…/steamapps/compatdata/<appid>` (libraries may be on other drives), the rest
+  only inside `$HOME`. **Restore** only from the deck's backup folder into a new
+  folder. Everything is refused while the prefix is in use.
+- Verified here: 7 prefixes (Steam, Steam shared, Proton tool, three
+  umu/Umbral prefixes). Lutris/Heroic/Bottles have no prefixes on this system,
+  so their detection is covered by path rules only.
+- CLI: `prefixes`, `prefix backup|clone|delete <path>`, `prefix restore <backup> <dest>`, `prefix backups`.
+
 ### 2.5 Compatibility manager (Steam + ProtonDB)
 - ProtonDB **summary** per game: tier, score, report count, trending tier,
   confidence. Only the public summary endpoint is used
@@ -228,7 +252,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.6 prefixes · 2.7 save backups ·
+2.7 save backups ·
 2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /

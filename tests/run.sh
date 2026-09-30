@@ -852,6 +852,43 @@ mkdir -p "$T/proc/4300"; printf 'SteamAppId=100\0' > "$T/proc/4300/environ"
 eq "detect: the game's GPU process as LACT sees it" "$(PROC_ROOT="$T/proc" "$CD" gpu detect steam:100)" game.exe
 PROC_ROOT="$T/proc" "$CD" gpu detect steam:555 >/dev/null 2>&1; eq "detect: game not running" "$?" 3
 unset CONTROL_DECK_LACT_CMD FAKE_LACT_LOG
+
+section "Gaming: Wine/Proton prefixes"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
+mkpfx() { mkdir -p "$1/drive_c/windows"; printf 'WINE REGISTRY Version 2\n#arch=win64\n' > "$1/system.reg"; head -c 1000 /dev/zero > "$1/drive_c/file"; [[ -n "${2:-}" ]] && echo "$2" > "$1/../version" || true; }
+CD_=$ST/steamapps/compatdata
+mkpfx "$CD_/100/pfx" GE-Proton9-1; mkpfx "$CD_/777/pfx"; mkpfx "$CD_/1493710/pfx"; mkpfx "$CD_/0/pfx"
+mkdir -p "$CD_/888/pfx"   # incomplete: not a prefix
+mkpfx "$HOME/Games/umbral/battlenet"; mkpfx "$HOME/.wine"
+PX="$("$CD" prefixes)"
+k() { jq -r --arg n "$1" '.prefixes[] | select(.name == $n) | .'"$2" <<<"$PX"; }
+eq "Steam prefix named after its game" "$(jq -r '.prefixes[] | select(.id == "100") | .name' <<<"$PX")" 'Game "Quoted" One'
+eq "Proton version read" "$(jq -r '.prefixes[] | select(.id == "100") | .version' <<<"$PX")" GE-Proton9-1
+eq "uninstalled game's prefix is an orphan" "$(jq -r '.prefixes[] | select(.id == "777") | .orphan' <<<"$PX")" true
+eq "a tool's prefix is not an orphan" "$(jq -r '.prefixes[] | select(.id == "1493710") | .kind' <<<"$PX")" tool
+eq "compatdata/0 is Steam's shared prefix" "$(jq -r '.prefixes[] | select(.id == "0") | .kind' <<<"$PX")" shared
+eq "folders without system.reg/drive_c ignored" "$(jq '[.prefixes[] | select(.id == "888")] | length' <<<"$PX")" 0
+eq "standalone prefixes in ~/Games and ~/.wine found" "$(k battlenet owner)/$(k .wine owner)" "wine/wine"
+eq "architecture read" "$(k battlenet arch)" win64
+mkdir -p "$T/proc/5000"; printf 'WINEPREFIX=%s\0' "$HOME/Games/umbral/battlenet" > "$T/proc/5000/environ"
+eq "prefix in use detected" "$(PROC_ROOT="$T/proc" "$CD" prefixes | jq -r '.prefixes[] | select(.name == "battlenet") | .running')" true
+PROC_ROOT="$T/proc" "$CD" prefix delete "$HOME/Games/umbral/battlenet" >/dev/null 2>&1; eq "busy prefix can't be deleted" "$?" 3
+"$CD" prefix delete "$HOME" >/dev/null 2>&1; eq "arbitrary folders refused" "$?" 2
+export CONTROL_DECK_PREFIX_BACKUPS="$T/pbak"
+"$CD" prefix backup "$HOME/Games/umbral/battlenet" >/dev/null
+B="$(ls "$T/pbak"/wine-battlenet-*.tar.* 2>/dev/null | head -1)"
+yes "backup archive written" "[[ -s '$B' ]]"
+"$CD" prefix clone "$HOME/Games/umbral/battlenet" "$HOME/Games/clone1" >/dev/null
+yes "clone is a full prefix" "[[ -f '$HOME/Games/clone1/system.reg' && -f '$HOME/Games/clone1/drive_c/file' ]]"
+"$CD" prefix clone "$HOME/Games/umbral/battlenet" "$HOME/Games/clone1" >/dev/null 2>&1; eq "clone onto an existing folder refused" "$?" 2
+"$CD" prefix restore "$B" "$HOME/Games/restored" >/dev/null
+yes "restore recreates the prefix" "[[ -f '$HOME/Games/restored/system.reg' ]]"
+"$CD" prefix restore /etc/passwd "$HOME/Games/x" >/dev/null 2>&1; eq "restore only from the deck's backups" "$?" 2
+"$CD" prefix delete "$CD_/777" >/dev/null
+yes "Steam orphan deleted as a whole compatdata folder" "[[ ! -e '$CD_/777' ]]"
+yes "…after an automatic backup" "ls '$T/pbak'/steam-uninstalled_app_777-* >/dev/null"
+eq "backups listed" "$("$CD" prefix backups | jq length)" 2
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_PREFIX_BACKUPS
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

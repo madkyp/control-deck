@@ -3700,6 +3700,147 @@ gpu_detect() {
         | grep . || { err "none of the game's processes is using the GPU yet: try again in-game"; return 4; }
 }
 
+# --- Wine/Proton prefixes (2.6) ------------------------------------------------------
+# A prefix is any folder with system.reg + drive_c. Found in Steam's
+# compatdata (every library), Heroic, Faugus, Bottles, ~/.wine, winetricks'
+# ~/.local/share/wineprefixes and ~/Games (Lutris' and umu's usual home).
+PREFIX_BACKUPS="${CONTROL_DECK_PREFIX_BACKUPS:-$HOME/control-deck-backups/prefixes}"
+
+faugus_prefix_dir() {
+    local c
+    for c in "$HOME/.var/app/io.github.Faugus.faugus-launcher/config/faugus-launcher/config.json" "$CONFIG_HOME/faugus-launcher/config.json"; do
+        [[ -f "$c" ]] && { jq -r '."default-prefix" // empty' "$c" 2>/dev/null; return; }
+    done
+}
+
+# every prefix root (one per line, deduplicated)
+prefix_roots() {
+    local lib r
+    {
+        while IFS= read -r lib; do
+            for r in "$lib"/steamapps/compatdata/*/pfx; do [[ -f "$r/system.reg" ]] && echo "$r"; done
+        done < <(steam_libs)
+        for r in "$HOME/.wine" "$DATA_HOME/wineprefixes" "$HOME/Games" "$(faugus_prefix_dir)" \
+                 "$DATA_HOME/bottles/bottles" "$HOME/.var/app/com.usebottles.bottles/data/bottles/bottles"; do
+            [[ -n "$r" && -d "$r" ]] || continue
+            find "$r" -maxdepth 4 -name system.reg -printf '%h\n' 2>/dev/null
+        done
+    } | while IFS= read -r r; do [[ -d "$r/drive_c" ]] && readlink -f "$r"; done | awk '!seen[$0]++'
+}
+
+# processes using a prefix (WINEPREFIX / STEAM_COMPAT_DATA_PATH in their environment)
+prefix_in_use() {
+    local p="$1" c
+    c="${p%/pfx}"
+    grep -azlxE "(WINEPREFIX=$p/?|STEAM_COMPAT_DATA_PATH=$c/?)" "${PROC_ROOT:-/proc}"/[0-9]*/environ 2>/dev/null | head -1 | grep -q .
+}
+
+cmd_prefixes() {
+    local games p owner id name kind root size used arch ver fdir
+    games="$(steam_games | awk 'NR % 5 == 1 { id = $0 } NR % 5 == 2 { print id "\t" $0 }')"
+    fdir="$(faugus_prefix_dir)"
+    while IFS= read -r p; do
+        owner=wine; id=""; name="${p##*/}"; kind=game; root="$p"
+        if [[ "$p" =~ /steamapps/compatdata/([0-9]+)/pfx$ ]]; then
+            owner=steam; id="${BASH_REMATCH[1]}"; root="${p%/pfx}"
+            name="$(awk -F'\t' -v i="$id" '$1 == i { print $2; exit }' <<<"$games")"
+            if [[ -z "$name" ]]; then
+                local lib="${p%/steamapps/compatdata/*}" m
+                m="$lib/steamapps/appmanifest_$id.acf"
+                if [[ -f "$m" ]]; then name="$(vdf_get "$m" AppState name)"; kind=tool
+                elif [[ "$id" == 0 ]]; then name="Steam (shared, non-Steam shortcuts)"; kind=shared
+                else name="uninstalled app $id"; kind=orphan; fi
+            fi
+            ver="$(cat "$root/version" 2>/dev/null)"
+        else
+            case "$p" in
+                */Heroic/Prefixes/*) owner=heroic ;;
+                */bottles/bottles/*) owner=bottles ;;
+                "$fdir"/*) [[ -n "$fdir" ]] && owner=faugus ;;
+            esac
+            ver="$(cat "$p/version" 2>/dev/null)"
+        fi
+        size="$(dir_bytes "$root")"
+        used="$(stat -c %Y "$p/system.reg" 2>/dev/null || echo 0)"
+        arch="$(grep -m1 -oE '^#arch=win(32|64)' "$p/system.reg" 2>/dev/null | cut -d= -f2)"
+        printf '%s\n' "$p" "$root" "$owner" "$id" "$name" "$kind" "$size" "$used" "${arch:-?}" "$ver" \
+            "$(prefix_in_use "$p" && echo 1 || echo 0)"
+    done < <(prefix_roots) | jq -Rn '[inputs] as $l | [range(0; $l|length; 11) as $i |
+        {path:$l[$i], root:$l[$i+1], owner:$l[$i+2], id:$l[$i+3], name:$l[$i+4], kind:$l[$i+5],
+         size:($l[$i+6]|tonumber), lastUsed:($l[$i+7]|tonumber), arch:$l[$i+8], version:$l[$i+9],
+         running:($l[$i+10] == "1"), orphan:($l[$i+5] == "orphan")}] | sort_by(-.size)
+        | {prefixes:., total:(map(.size) | add // 0), orphanBytes:(map(select(.orphan) | .size) | add // 0)}'
+}
+
+# only prefixes the deck found can be acted on (never an arbitrary path)
+prefix_lookup() {   # path → its JSON entry
+    local p; p="$(readlink -f "$1" 2>/dev/null)"
+    [[ -n "$p" ]] || return 1
+    cmd_prefixes | jq -ce --arg p "$p" '.prefixes[] | select(.path == $p or .root == $p)'
+}
+
+prefix_backup() {   # entry-json → prints archive path
+    local e="$1" root name out
+    root="$(jq -r .root <<<"$e")"; name="$(jq -r '.owner + "-" + (.name | gsub("[^A-Za-z0-9._-]+"; "_"))' <<<"$e")"
+    mkdir -p "$PREFIX_BACKUPS"
+    out="$PREFIX_BACKUPS/$name-$(date +%Y%m%d-%H%M%S).tar.zst"
+    log "→ Backing up $(human "$(jq -r .size <<<"$e")") to ${out/#$HOME/\~}…" >&2
+    if have zstd; then tar -C "${root%/*}" -I 'zstd -T0 -3' -cf "$out" "${root##*/}"
+    else out="${out%.zst}.gz"; tar -C "${root%/*}" -czf "$out" "${root##*/}"; fi || { err "backup failed"; rm -f "$out"; return 4; }
+    echo "$out"
+}
+
+# prefix backup|clone|delete|restore …
+cmd_prefix() {
+    local sub="$1" e root out dest
+    case "$sub" in
+        backup|clone|delete)
+            e="$(prefix_lookup "$2")" || { err "not a prefix Control Deck knows: $2"; return 2; }
+            [[ "$(jq -r .running <<<"$e")" == true ]] && { err "the prefix is in use: close the game/app first"; return 3; }
+            root="$(jq -r .root <<<"$e")" ;;
+    esac
+    case "$sub" in
+        backup)
+            out="$(prefix_backup "$e")" || return 4
+            log "✔ Backup: ${out/#$HOME/\~} ($(human "$(stat -c %s "$out")"))"
+            history_add "prefix backup" "$(jq -r .owner <<<"$e")" "$(jq -r .name <<<"$e")" 0 ;;
+        clone)
+            dest="${3:-$HOME/Games/prefixes/$(jq -r '.name | gsub("[^A-Za-z0-9._-]+"; "_")' <<<"$e")-clone}"
+            [[ "$dest" == "$HOME"/* ]] || { err "clones go inside your home folder"; return 2; }
+            [[ -e "$dest" ]] && { err "$dest already exists"; return 2; }
+            mkdir -p "${dest%/*}"
+            # a Steam prefix's Wine prefix is its pfx/ folder
+            log "→ Cloning to ${dest/#$HOME/\~} (reflink: instant on Btrfs)…"
+            cp -a --reflink=auto "$(jq -r .path <<<"$e")" "$dest" || { err "clone failed"; rm -rf "$dest"; return 4; }
+            log "✔ Clone ready: WINEPREFIX=$dest"
+            history_add "prefix clone" "$(jq -r .owner <<<"$e")" "$(jq -r .name <<<"$e")" 0 ;;
+        delete)
+            if [[ "$3" != --no-backup ]]; then out="$(prefix_backup "$e")" || return 4; log "→ Backup kept: ${out/#$HOME/\~}"; fi
+            # Steam libraries may live on other drives: there only …/steamapps/compatdata/<appid>
+            if [[ "$(jq -r .owner <<<"$e")" == steam ]]; then
+                [[ "$root" =~ /steamapps/compatdata/[0-9]+$ ]] || { err "refusing to delete $root"; return 3; }
+            else
+                [[ "$root" == "$HOME"/* && "$root" != "$HOME" ]] || { err "refusing to delete outside your home"; return 3; }
+            fi
+            rm -rf -- "$root" || { err "delete failed"; return 4; }
+            log "✔ Deleted ${root/#$HOME/\~} ($(human "$(jq -r .size <<<"$e")")).$([[ "$(jq -r .owner <<<"$e")" == steam ]] && echo " Steam recreates it the next time the game starts.")"
+            history_add "prefix delete" "$(jq -r .owner <<<"$e")" "$(jq -r .name <<<"$e")" 0 ;;
+        restore)
+            local arch="$2"; dest="$3"
+            [[ -f "$arch" && "$arch" == "$PREFIX_BACKUPS"/* ]] || { err "not a Control Deck prefix backup: $arch"; return 2; }
+            [[ -n "$dest" && "$dest" == "$HOME"/* ]] || { err "use: prefix restore <backup> <new folder in your home>"; return 2; }
+            [[ -e "$dest" ]] && { err "$dest already exists"; return 2; }
+            mkdir -p "$dest"
+            tar -xf "$arch" -C "$dest" --strip-components=1 || { err "restore failed"; rm -rf "$dest"; return 4; }
+            log "✔ Restored into ${dest/#$HOME/\~}"
+            history_add "prefix restore" wine "${arch##*/}" 0 ;;
+        backups)
+            find "$PREFIX_BACKUPS" -maxdepth 1 -type f -name '*.tar.*' -printf '%T@\t%s\t%p\n' 2>/dev/null | sort -rn \
+                | jq -Rn '[inputs | split("\t") | {date:(.[0]|tonumber|floor), size:(.[1]|tonumber), path:.[2]}]' ;;
+        *) err "use: prefix backup|clone|delete <path> · prefix restore <backup> <dest> · prefix backups"; return 2 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
@@ -3771,6 +3912,8 @@ Gaming
   gpu profile get|set|delete <key> [power= core= mem= temp= voltage= fan= process= unlock=true]
                                 Per-game GPU profile applied by LACT while the game runs
   gpu detect <key>              The running game's GPU process name, as LACT sees it
+  prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
+  prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
 EOF
 }
 
@@ -3859,6 +4002,8 @@ main() {
         shadercache) cmd_shadercache ;;
         bench)       cmd_bench "$@" ;;
         gpu)         cmd_gpu "$@" ;;
+        prefixes)    cmd_prefixes ;;
+        prefix)      cmd_prefix "$@" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

@@ -307,6 +307,8 @@ ShellRoot {
         property string gpuFan: ""          // "", auto, quiet, balanced, performance
         property bool   gpuUnlock: false
         property bool   confirmGpu: false
+        property var    pfx: ({})           // Wine/Proton prefixes
+        property var    pfxBackups: []
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
         property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
@@ -868,6 +870,7 @@ ShellRoot {
                     if (c === 0) { Qt.callLater(function () { win.runGame(["bench", "run", win.selGame, v], "RUN " + v + "…"); }); return; }
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
+                if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
                 if (win.gameArgs[0] === "gpu") {
                     if (win.gameArgs[1] === "detect" && c === 0) { gProc.text = win.gameLog.trim().split("\n").pop(); }
                     else gpuProc.running = true;
@@ -890,6 +893,20 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { try { win.pdbStat = JSON.parse(text); } catch (e) { win.pdbStat = {}; } } }
         }
         Process { id: seenProc }
+        Process {
+            id: pfxProc
+            command: [win.scriptPath, "prefixes"]
+            stdout: StdioCollector { onStreamFinished: { try { win.pfx = JSON.parse(text); } catch (e) { win.pfx = {}; } } }
+        }
+        Process {
+            id: pfxBakProc
+            command: [win.scriptPath, "prefix", "backups"]
+            stdout: StdioCollector { onStreamFinished: { try { win.pfxBackups = JSON.parse(text); } catch (e) { win.pfxBackups = []; } } }
+        }
+        Process {
+            id: pfxOpenProc
+            command: ["xdg-open", win.home + "/control-deck-backups/prefixes"]
+        }
         Process {
             id: gpuProc
             command: [win.scriptPath, "gpu", "status"]
@@ -2587,6 +2604,7 @@ ShellRoot {
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
                     Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame) benchProc.running = true; } }
                     Chip { label: "GPU";     active: win.gameView === "gpu";     onClicked: { win.gameView = "gpu"; gpuProc.running = true; } }
+                    Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -2837,6 +2855,83 @@ ShellRoot {
 
 
 
+
+
+                // ---- PREFIXES ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "prefixes"
+                    spacing: 8
+
+                    Hint {
+                        text: !win.pfx.prefixes ? "" : win.pfx.prefixes.length + " prefixes · " + win.human(win.pfx.total)
+                              + ((win.pfx.orphanBytes || 0) > 0 ? " · " + win.human(win.pfx.orphanBytes) + " in orphans (games no longer installed)" : "")
+                              + " · " + win.pfxBackups.length + " backups in ~/control-deck-backups/prefixes"
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+                        EmptyHint {
+                            visible: !win.pfx.prefixes || win.pfx.prefixes.length === 0
+                            title: pfxProc.running ? "LOOKING FOR PREFIXES…" : "NO WINE/PROTON PREFIXES FOUND"
+                        }
+                        ListView {
+                            id: pfxList
+                            anchors.fill: parent; anchors.margins: 4
+                            clip: true; spacing: 3
+                            model: win.pfx.prefixes || []
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: pfxList.width - 8; height: 52; radius: 8
+                                color: pal.card; border.width: 1
+                                border.color: modelData.orphan ? pal.amber : (modelData.running ? pal.ok : pal.border)
+                                RowLayout {
+                                    anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 2
+                                        RowLayout {
+                                            spacing: 8
+                                            Text { text: modelData.owner.toUpperCase(); color: win.srcColor(modelData.owner === "steam" ? "flatpak" : "aur")
+                                                   font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1 }
+                                            Text { text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true
+                                                   elide: Text.ElideRight; Layout.maximumWidth: 300 }
+                                            Text { text: win.human(modelData.size); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
+                                            Text { visible: modelData.orphan; text: "ORPHAN"; color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.running; text: "IN USE"; color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.kind === "tool" || modelData.kind === "shared"; text: modelData.kind.toUpperCase()
+                                                   color: pal.dim; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideMiddle
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: (modelData.version || "?") + "  ·  " + modelData.arch + "  ·  used " + win.dateOfEpoch(modelData.lastUsed)
+                                                  + "  ·  " + modelData.path.replace(win.home, "~")
+                                        }
+                                    }
+                                    MiniBtn { width: 64; label: "BACKUP"; primary: false; on: !win.gameBusy && !modelData.running
+                                              onClicked: win.runGame(["prefix", "backup", modelData.path], "BACKING UP…") }
+                                    MiniBtn { width: 60; label: "CLONE"; primary: false; on: !win.gameBusy && !modelData.running
+                                              onClicked: win.runGame(["prefix", "clone", modelData.path], "CLONING…") }
+                                    MiniBtn {
+                                        width: 80; tint: pal.bad
+                                        property string key: "pfx:" + modelData.path
+                                        label: win.confirmShader === key ? "CONFIRM?" : "DELETE"
+                                        on: !win.gameBusy && !modelData.running && modelData.kind !== "tool" && modelData.kind !== "shared"
+                                        onClicked: win.shaderAction(["prefix", "delete", modelData.path], key, "BACKING UP + DELETING…")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 8
+                        Hint {
+                            text: "DELETE always makes a backup first (a Steam game's prefix is recreated on its next launch — saves kept only in the prefix would be lost without it). CLONE copies the Wine prefix to ~/Games/prefixes (instant on Btrfs). Restore a backup: control-deck prefix restore <backup> <folder>."
+                        }
+                        MiniBtn { width: 100; label: "BACKUPS ↗"; primary: false; onClicked: pfxOpenProc.running = true }
+                    }
+                }
 
                 // ---- GPU (LACT) ----
                 ColumnLayout {
