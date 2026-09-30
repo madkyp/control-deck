@@ -346,7 +346,8 @@ ShellRoot {
                 [fxActive, "Pick a look",
                  fxActive ? "Active: " + fx.current.name + ". Change it any time below."
                           : ((fx.links || []).length
-                             ? "Your saved preset: " + fx.links[0].label + " — open it, download the file, then IMPORT… (below)."
+                             ? "Your saved preset: " + fx.links[0].label + " — open it, download the file, then IMPORT…"
+                               + (fx.links[0].notes ? " Its guide, mapped to the deck, is under SAVED below." : "")
                              : "Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…")],
                 [fxActive && fx.wrapped === true && fxReady, "Play and tweak",
                  rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). "
@@ -3808,6 +3809,22 @@ ShellRoot {
                                         Chip {
                                             label: "SAVE"; on: fxLinkField.text.trim().indexOf("https://") === 0 && !win.gameBusy
                                             onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], "SAVING LINK…"); fxLinkField.text = ""; }
+                                        }
+                                    }
+                                    // notes of a saved page (e.g. the preset author's install guide, mapped to the deck)
+                                    Repeater {
+                                        model: (win.fx.links || []).filter(function (l) { return !!l.notes; })
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            Layout.fillWidth: true
+                                            implicitHeight: noteTxt.implicitHeight + 14
+                                            radius: 6; color: pal.panel; border.color: pal.border; border.width: 1
+                                            Text {
+                                                id: noteTxt
+                                                anchors.fill: parent; anchors.margins: 7
+                                                text: modelData.label + " — " + modelData.notes
+                                                wrapMode: Text.WordWrap; color: pal.text; font.family: win.mono; font.pixelSize: 10
+                                            }
                                         }
                                     }
                                     Flow {

@@ -413,6 +413,7 @@ Studied from the community's reference script
   The FX tab lists them under SAVED, and step 4 then says "Your saved preset:
   … open it, download the file, then IMPORT…". Saved here: KCD2 (1771300) →
   Nexus #144.
+- A saved page can carry **notes** (`fx link note`), shown under SAVED. KCD2 #144 holds its author's install guide mapped to what the deck does (IMPORT, dxgi for DX12, MENU KEY, ON/OFF KEY = END).
 - **ON/OFF KEY** (ReShade route): ReShade's `[INPUT] KeyEffects`
   (`runtime.cpp`), the "all effects on/off" key that preset guides suggest.
   Choices are END (default, VK 35), F9 or NONE, and a change reaches every

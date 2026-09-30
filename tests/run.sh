@@ -1165,6 +1165,9 @@ eq "menu key kept when changing it" "$("$CD" fx status | jq -c '[.key, .effectsK
 "$CD" fx link add steam:1771300 "https://www.nexusmods.com/kingdomcomedeliverance2/mods/144" >/dev/null
 eq "preset page saved for a game not installed yet, labelled from the URL" "$("$CD" fx link get steam:1771300 | jq -c '[.[] | .label]')" '["Nexus #144"]'
 "$CD" fx link add steam:1771300 "javascript:alert(1)" >/dev/null 2>&1; eq "only https links" "$?" 2
+"$CD" fx link note steam:1771300 "https://www.nexusmods.com/kingdomcomedeliverance2/mods/144" "Use END" >/dev/null
+eq "notes kept with the link" "$("$CD" fx link get steam:1771300 | jq -r '.[0].notes')" "Use END"
+"$CD" fx link note steam:1771300 "https://example.org/x" "n" >/dev/null 2>&1; eq "notes only for a saved link" "$?" 2
 "$CD" fx link rm steam:1771300 "https://www.nexusmods.com/kingdomcomedeliverance2/mods/144" >/dev/null
 eq "removed" "$("$CD" fx link get steam:1771300)" "[]"
 "$CD" fx mode steam:5000 reshade "$W/Old9.exe" d3d9 >/dev/null 2>&1

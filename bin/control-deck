@@ -3948,7 +3948,7 @@ Gaming
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
   fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id> | key <Home|Insert|F10|F11|F12>
-  fx link add|rm|get steam:<appid> <url> [label]   Save a preset page (Nexus…) for a game, even before installing it
+  fx link add|note|rm|get steam:<appid> <url> [label|notes]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
@@ -5113,7 +5113,7 @@ cmd_fx_import() {
 # Keyed by Steam app id, so a link can be saved before the game is installed.
 FX_LINKS="$GAMING_DIR/fx-links.json"
 fx_links_json() { if [[ -s "$FX_LINKS" ]]; then cat "$FX_LINKS"; else echo '{}'; fi; }
-# fx link add <key> <https url> [label] | rm <key> <url> | get <key>
+# fx link add <key> <https url> [label] | note <key> <url> <text> | rm <key> <url> | get <key>
 cmd_fx_link() {
     local sub="$1" key="$2" url="${3:-}" label="${4:-}" tmp
     [[ "$key" =~ ^steam:[0-9]+$ ]] || { err "use: fx link add|rm|get steam:<appid> …"; return 2; }
@@ -5126,6 +5126,14 @@ cmd_fx_link() {
             fx_links_json | jq --arg k "$key" --arg u "$url" --arg l "${label:-$url}" \
                 '.[$k] = ((.[$k] // []) | map(select(.url != $u)) + [{url:$u, label:$l}])' > "$tmp" && mv "$tmp" "$FX_LINKS"
             log "✔ Saved for $key: ${label:-$url}" ;;
+        note)
+            [[ -n "$url" ]] || { err "use: fx link note <key> <url> <text>"; return 2; }
+            fx_links_json | jq -e --arg k "$key" --arg u "$url" '(.[$k] // []) | any(.url == $u)' >/dev/null \
+                || { err "that link isn't saved for $key"; return 2; }
+            mkdir -p "$GAMING_DIR"; tmp="$(mktemp)"
+            fx_links_json | jq --arg k "$key" --arg u "$url" --arg n "$label" \
+                '.[$k] |= map(if .url == $u then .notes = $n else . end)' > "$tmp" && mv "$tmp" "$FX_LINKS"
+            log "✔ Notes saved." ;;
         rm)
             mkdir -p "$GAMING_DIR"; tmp="$(mktemp)"
             fx_links_json | jq --arg k "$key" --arg u "$url" '.[$k] = ((.[$k] // []) | map(select(.url != $u))) | with_entries(select(.value | length > 0))' \
