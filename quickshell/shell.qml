@@ -422,6 +422,7 @@ ShellRoot {
         // ---- system state (clean · backup · history) --------------------
         property string sysView: "clean"
         property var    cleanItems: []
+        property string confirmClean: ""    // gaming rows delete big things: second click confirms
         property var    history: []
         property var    sysArgs: []
         property string sysLog: ""
@@ -443,7 +444,7 @@ ShellRoot {
             sysArgs = args; sysLog = ""; sysStatus = label;
             sysProc.running = true;
         }
-        function scanClean() { cleanItems = []; sysStatus = "SCANNING…"; scanProc.running = true; }
+        function scanClean() { cleanItems = []; confirmClean = ""; sysStatus = "SCANNING…"; scanProc.running = true; }
         function openSystem(sub) {
             sysView = sub;
             if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
@@ -2313,11 +2314,17 @@ ShellRoot {
                                 }
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: 68
-                                    label: modelData.count > 0 ? "CLEAN" : "OK ✓"
+                                    width: win.confirmClean === modelData.id ? 84 : 68
+                                    label: modelData.count === 0 ? "OK ✓" : (win.confirmClean === modelData.id ? "CONFIRM?" : "CLEAN")
                                     primary: modelData.count > 0
                                     on: modelData.count > 0 && !win.sysBusy
-                                    onClicked: win.runSys(["clean", modelData.id], "CLEANING…")
+                                    onClicked: {
+                                        if (["shaders", "prefixes", "protons"].indexOf(modelData.id) >= 0 && win.confirmClean !== modelData.id) {
+                                            win.confirmClean = modelData.id; return;
+                                        }
+                                        win.confirmClean = "";
+                                        win.runSys(["clean", modelData.id], "CLEANING…");
+                                    }
                                 }
                             }
                         }

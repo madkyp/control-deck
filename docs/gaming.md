@@ -250,6 +250,23 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   are covered by the tests with a simulated sysfs/pacman db.
 - CLI: `health`.
 
+### 2.11 Space cleaner — `SYSTEM → CLEAN`
+- No new tab: SYSTEM → CLEAN already had pacman cache, AUR cache, orphans and
+  Flatpak runtimes. Three gaming rows were added there (second click confirms):
+  - **Shader caches**: the stale driver caches and orphan caches that SHADERS
+    finds (`shaderclean orphans` + `stale`).
+  - **Orphan prefixes**: Steam prefixes of uninstalled games, deleted through
+    `prefix delete` (backup first, refused while in use).
+  - **Unused Proton versions**: folders in Steam's `compatibilitytools.d` that
+    are not in `config.vdf`'s CompatToolMapping (per game or default "0"), not
+    a runner in Umbral's config (Umbral's `GE-Proton` = the newest GE it finds,
+    Steam's folder included), not the Proton that made a non-Steam prefix
+    (prefix `version` = the tool's `version` file) and not in a running
+    process' command line. Proton from Steam or a package isn't touched.
+- Verified here: Proton-CachyOS Latest (1.5 GiB, a manual copy no game uses)
+  is listed; GE-Proton11-7 is kept because Umbral's "GE-Proton" prefixes use
+  it. Faugus/Lutris/Heroic runner references aren't read (none installed).
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |
@@ -280,6 +297,5 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.11 space
-cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
+2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /
 ReShade.

@@ -77,7 +77,7 @@ The window has six tabs:
 - **Control Deck updates itself**: when GitHub has a newer version of the deck it shows up here (and as *● NEW VERSION* in the header, next to the installed version). Updating runs `git pull` + `install.sh` in your clone — or downloads the latest code if you didn't install from a clone — and the window reloads by itself.
 
 ### 🧹 SYSTEM — clean-up, backup and history
-- **CLEAN**: orphan packages, pacman cache (`paccache`), unused Flatpak runtimes, AUR cache, deck downloads and **broken launchers** (moved to a trash folder, not deleted) — with the space each one takes.
+- **CLEAN**: orphan packages, pacman cache (`paccache`), unused Flatpak runtimes, AUR cache, deck downloads, **broken launchers** (moved to a trash folder, not deleted) and, for gaming, stale/orphan **shader caches**, **orphan prefixes** (backed up first) and **unused Proton versions** (none of Steam, Umbral, a prefix or a running game uses them) — with the space each one takes. The gaming rows ask for a second click.
 - **BACKUP**: exports your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to a `.json`; **RESTORE** reinstalls whatever is missing on another machine or after a reinstall.
 - **HISTORY**: a log of everything you installed, edited, updated, cleaned or removed.
 - **SNAPSHOTS** (snapper): list your snapshots, **create** one before trying something risky, see **which packages changed** since any snapshot (added / removed / upgraded) and how to roll back (with a shortcut to *Btrfs Assistant* when installed).

@@ -910,6 +910,61 @@ eq "all in sync" "$(st nvidia:sync)" ok
 has "modeset off → modprobe option" "$(fx nvidia:modeset)" "options nvidia_drm modeset=1"
 eq "nothing to install" "$(jq -r .installAll <<<"$HJ")" ""
 rm -f "$T/bin/vulkaninfo" "$T/bin/modinfo"
+# ------------------------------------------------ CLEAN: gaming rows ----
+section "clean: unused Proton versions"
+PT="$HOME/steam-pt"; mkdir -p "$PT/config" "$PT/steamapps"
+cat > "$PT/config/config.vdf" <<'EOF'
+"InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"CompatToolMapping"
+				{
+					"570"
+					{
+						"name"		"steam_mapped"
+						"config"		""
+						"priority"		"250"
+					}
+				}
+			}
+		}
+	}
+}
+EOF
+mktool() {   # dir internal-name version
+    mkdir -p "$PT/compatibilitytools.d/$1"; touch "$PT/compatibilitytools.d/$1/proton"
+    printf '"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "%s" // internal name\n    {\n    }\n  }\n}\n' "$2" \
+        > "$PT/compatibilitytools.d/$1/compatibilitytool.vdf"
+    echo "1700000000 $3" > "$PT/compatibilitytools.d/$1/version"
+    head -c 4096 /dev/zero > "$PT/compatibilitytools.d/$1/files.bin"
+}
+mktool "Mapped Dir" steam_mapped Mapped-1
+mktool GE-Proton9-1 GE-Proton9-1 GE-Proton9-1
+mktool GE-Proton10-3 GE-Proton10-3 GE-Proton10-3
+mktool OldPfx OldPfx Old-7
+mktool "Busy One" busy Busy-1
+mktool "Spare Tool" spare Spare-2
+mkdir -p "$HOME/Games/umbral/pfx/drive_c"; touch "$HOME/Games/umbral/pfx/system.reg"; echo Old-7 > "$HOME/Games/umbral/pfx/version"
+echo '{"prefixes":[{"id":"p","name":"P","path":"'"$HOME"'/Games/umbral/pfx","runner":"GE-Proton"}],"games":[]}' > "$T/umbral-pt.json"
+mkdir -p "$T/proc-pt/7000"; printf '%s\0%s\0' "$PT/compatibilitytools.d/Busy One/files/bin/wine" game.exe > "$T/proc-pt/7000/cmdline"
+ptrun() { CONTROL_DECK_STEAM_ROOT="$PT" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_UMBRAL_CONFIG="$T/umbral-pt.json" PROC_ROOT="$T/proc-pt" "$CD" "$@"; }
+CS="$(ptrun cleanscan)"
+eq "tools nothing uses (Steam-mapped, Umbral's newest GE, a prefix's Proton and a running one are kept)" \
+   "$(jq -r '.[] | select(.id == "protons") | .details' <<<"$CS")" "GE-Proton9-1 · spare"
+yes "its size is measured (folder name with spaces)" "(( $(jq '.[] | select(.id == "protons") | .bytes' <<<"$CS") >= 4096 ))"
+echo '{"prefixes":[{"id":"p","name":"P","path":"'"$HOME"'/Games/umbral/pfx","runner":"GE-Proton9-1"}],"games":[]}' > "$T/umbral-pt.json"
+eq "an explicit Umbral runner keeps that one and frees the newest GE" \
+   "$(ptrun cleanscan | jq -r '.[] | select(.id == "protons") | .details')" "GE-Proton10-3 · spare"
+echo '{"prefixes":[],"games":[]}' > "$T/umbral-pt.json"; rm -rf "$PT/compatibilitytools.d/GE-Proton10-3"
+ptrun clean protons >/dev/null 2>&1
+eq "clean removes exactly the unused ones" "$(ls "$PT/compatibilitytools.d" | paste -sd ,)" "Busy One,Mapped Dir,OldPfx"
+eq "shader and prefix rows present" "$(ptrun cleanscan | jq -c '[.[] | select(.id == "shaders" or .id == "prefixes") | .count]')" "[0,0]"
+rm -rf "$HOME/Games/umbral/pfx" "$PT"
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

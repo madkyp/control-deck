@@ -2295,6 +2295,68 @@ broken_launchers() {
     done
 }
 
+# --- unused Proton versions (SYSTEM → CLEAN) ---------------------------------
+# internal name of a compatibility tool (first block inside "compat_tools";
+# lines may carry // comments)
+compat_tool_name() {
+    sed 's|//.*||' "$1" | awk '/"compat_tools"/ { f = 1; next }
+        f && /"[^"]+"/ { match($0, /"[^"]*"/); print substr($0, RSTART + 1, RLENGTH - 2); exit }'
+}
+
+# every tool name Steam has assigned (per game, and "0" = the default)
+steam_compat_used() {
+    local cfg; cfg="$(steam_root)/config/config.vdf"; [[ -f "$cfg" ]] || return 0
+    awk -v P="$COMPAT_MAPPING" '
+        BEGIN { n = split(tolower(P), want, "/") }
+        function under(   i) { if (d != n + 1) return 0; for (i = 1; i <= n; i++) if (st[i] != want[i]) return 0; return 1 }
+        /^[ \t]*"[^"]*"[ \t]*(\/\/.*)?$/ { match($0, /"[^"]*"/); pend = tolower(substr($0, RSTART + 1, RLENGTH - 2)); next }
+        /^[ \t]*\{/ { st[++d] = pend; next }
+        /^[ \t]*\}/ { d--; next }
+        under() && match($0, /^[ \t]*"name"[ \t]+"/) {
+            v = substr($0, RLENGTH + 1); sub(/"[ \t]*$/, "", v); if (v != "") print v }' "$cfg" | sort -u
+}
+
+# user-installed tools: dir <TAB> internal name <TAB> version (from its `version` file)
+user_compat_tools() {
+    local r d seen="" real
+    for r in "$(steam_root)/compatibilitytools.d" "$HOME/.steam/root/compatibilitytools.d"; do
+        for d in "$r"/*/; do
+            d="${d%/}"; [[ -f "$d/compatibilitytool.vdf" ]] || continue
+            real="$(readlink -f "$d")"; [[ "$seen" == *$'\n'"$real"$'\n'* ]] && continue
+            seen+=$'\n'"$real"$'\n'
+            printf '%s\t%s\t%s\n' "$real" "$(compat_tool_name "$d/compatibilitytool.vdf")" \
+                "$(awk '{ print $2; exit }' "$d/version" 2>/dev/null)"
+        done
+    done
+}
+
+# tools nothing uses: not assigned in Steam, not a runner in Umbral's config
+# ("GE-Proton" there = the newest GE it finds, which can be one of Steam's),
+# no non-Steam prefix made by them (Umbral/umu keep using the prefix's Proton),
+# and not running. Proton that comes with Steam or a package isn't listed.
+unused_compat_tools() {
+    local pfx="${1:-}" steam_used umbral_used pfx_vers ge d name ver
+    [[ -n "$pfx" ]] || pfx="$(cmd_prefixes)"
+    steam_used="$(steam_compat_used)"
+    umbral_used="$(umbral_json | jq -r '[.. | objects | .runner? | strings] | unique[]' 2>/dev/null)"
+    if grep -qx GE-Proton <<<"$umbral_used"; then
+        ge="$(for d in "$DATA_HOME/umbral/runners" "$(steam_root)/compatibilitytools.d" \
+                       "$HOME/.steam/root/compatibilitytools.d" /usr/share/steam/compatibilitytools.d; do
+                  for d in "$d"/GE-Proton*/; do [[ -f "$d/proton" ]] && basename "$d"; done
+              done | sort -V | tail -1)"
+        umbral_used+=$'\n'"$ge"
+    fi
+    pfx_vers="$(jq -r '.prefixes[] | select(.owner != "steam") | .version | strings' <<<"$pfx")"
+    while IFS=$'\t' read -r d name ver; do
+        [[ -n "$d" ]] || continue
+        grep -qxF -- "$name" <<<"$steam_used" && continue
+        grep -qxF -- "${d##*/}" <<<"$umbral_used" && continue
+        [[ -n "$ver" ]] && grep -qxF -- "$ver" <<<"$pfx_vers" && continue
+        grep -qsaF -- "$d/" "${PROC_ROOT:-/proc}"/[0-9]*/cmdline 2>/dev/null && continue
+        printf '%s\t%s\n' "$d" "$name"
+    done < <(user_compat_tools)
+}
+
 # clean items, one field per line: id title desc count bytes details
 clean_items() {
     local list n bytes out
@@ -2342,6 +2404,31 @@ clean_items() {
     n=0; [[ -n "$list" ]] && n="$(wc -l <<<"$list")"
     printf '%s\n' broken "Broken launchers" "Menu entries whose program no longer exists (moved to a trash folder)." \
         "$n" "" "$(while IFS= read -r f; do [[ -n "$f" ]] && printf '%s · ' "$(dget "$f" Name)"; done <<<"$list")"
+
+    # gaming: the same data as GAMING → SHADERS / PREFIXES
+    local sc pfx
+    sc="$(cmd_shadercache 2>/dev/null)"; [[ -n "$sc" ]] || sc='{"games":[],"global":[],"staleBytes":0,"orphanBytes":0}'
+    printf '%s\n' shaders "Shader caches" \
+        "Driver caches older than the last driver update, and caches of uninstalled games (rebuilt when needed)." \
+        "$(jq '[.games[] | select(.stale or (.installed | not))] + [.global[] | select(.stale)] | length' <<<"$sc")" \
+        "$(jq '.staleBytes + .orphanBytes' <<<"$sc")" ""
+
+    pfx="$(cmd_prefixes 2>/dev/null)"; [[ -n "$pfx" ]] || pfx='{"prefixes":[]}'
+    printf '%s\n' prefixes "Orphan prefixes" "Wine prefixes of uninstalled Steam games (each one is backed up first)." \
+        "$(jq '[.prefixes[] | select(.orphan and (.running | not))] | length' <<<"$pfx")" \
+        "$(jq '[.prefixes[] | select(.orphan and (.running | not)) | .size] | add // 0' <<<"$pfx")" \
+        "$(jq -r '[.prefixes[] | select(.orphan and (.running | not)) | .name] | join(" · ")' <<<"$pfx")"
+
+    list="$(unused_compat_tools "$pfx")"
+    n=0; bytes=0
+    if [[ -n "$list" ]]; then
+        n="$(wc -l <<<"$list")"
+        local dirs=(); mapfile -t dirs < <(cut -f1 <<<"$list")
+        bytes="$(dir_bytes "${dirs[@]}")"
+    fi
+    printf '%s\n' protons "Unused Proton versions" \
+        "Proton builds in compatibilitytools.d no Steam game, Umbral prefix or running game uses." \
+        "$n" "$bytes" "$(cut -f2 <<<"$list" | paste -sd '|' | sed 's/|/ · /g')"
 }
 
 cmd_cleanscan() {
@@ -2392,6 +2479,26 @@ clean_one() {
             done < <(broken_launchers)
             refresh_menu
             log "✔ Broken launchers moved to ${dest/#$HOME/\~}" ;;
+        shaders)
+            local sc rc=0; sc="$(cmd_shadercache)"
+            if [[ "$(jq '.orphanBytes' <<<"$sc")" != 0 ]]; then cmd_shaderclean orphans || rc=$?; fi
+            if [[ "$(jq '.staleBytes' <<<"$sc")" != 0 ]]; then cmd_shaderclean stale || rc=$?; fi
+            return $rc ;;
+        prefixes)
+            local p rc=0
+            while IFS= read -r p; do
+                [[ -n "$p" ]] || continue
+                cmd_prefix delete "$p" || rc=$?
+            done < <(cmd_prefixes | jq -r '.prefixes[] | select(.orphan and (.running | not)) | .path')
+            ((rc == 0)) && log "✔ Orphan prefixes removed (backups in ${PREFIX_BACKUPS/#$HOME/\~})."
+            return $rc ;;
+        protons)
+            local d name
+            while IFS=$'\t' read -r d name; do
+                [[ -n "$d" && "$d" == */compatibilitytools.d/* && "$d" == "$HOME"/* ]] || continue
+                rm -rf -- "$d" && log "→ removed $name (${d/#$HOME/\~})"
+            done < <(unused_compat_tools)
+            log "✔ Unused Proton versions removed. Steam lists its tools at startup: restart it if it's open." ;;
         *) err "unknown clean-up: $id"; return 2 ;;
     esac
 }
@@ -3752,7 +3859,7 @@ Maintain
   update <src> <id>             Update one (repo = whole system)
   updateall                     Update everything
   timer on [hours]|off|status   Background update check with notifications (opt-in)
-  cleanscan / clean <id>        Clean-up: orphans pkgcache flatpak aurcache downloads broken
+  cleanscan / clean <id>        Clean-up: orphans pkgcache flatpak aurcache downloads broken shaders prefixes protons
   export [file] / restore <file>   Backup of your apps
   history                       Operation history (JSON)
   news                          Recent Arch news; unread = since your last upgrade (JSON)
