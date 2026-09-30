@@ -306,6 +306,7 @@ ShellRoot {
         property string pendingRun: ""      // "A"/"B": run right after the variants are saved
         property var    pfx: ({})           // Wine/Proton prefixes
         property var    pfxBackups: []
+        property bool   sugExpanded: false
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
         property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
@@ -331,7 +332,7 @@ ShellRoot {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
             selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped; selGameObj = g;
             gameLog = ""; if (g.source === "steam") gprofProc.running = true;
-            sug = {}; if (g.source === "steam") sugProc.running = true;
+            sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
         }
         // is a suggestion already part of the profile being edited?
@@ -351,10 +352,16 @@ ShellRoot {
             var l = (applied ? "✓ " : mark) + x.token + "  " + x.pct + "%";
             if (x.kind === "env" && !applied) {
                 var mine = envValue(x.var);
-                if (mine !== null) l += "  · you: =" + mine;
-                if (x.unset !== undefined) l += "  · " + x.unset + "% keep default";
+                if (mine !== null) l += " · you =" + mine;
             }
             return l;
+        }
+        function sugTip(x, applied) {
+            var t = x.pct + "% of " + (x.basis === "similar" ? "players with a GPU like yours" : (x.basis === "vendor" ? "players with your GPU vendor" : "players"))
+                    + " who say it works use it (" + x.n + " reports)";
+            if (x.kind === "env" && x.unset !== undefined) t += "; " + x.unset + "% leave it at the default";
+            if (x.adapted) t += "; value adapted to this PC";
+            return t + (applied ? ". Already in the profile." : ". Click to add, then SAVE.");
         }
         // add a suggestion to the editor (saved with SAVE, never automatically)
         function applySug(x) {
@@ -1069,6 +1076,7 @@ ShellRoot {
             property bool active: false
             property bool on: true
             property color tint: pal.accent
+            property string tip: ""
             signal clicked
             implicitWidth: ct.implicitWidth + 16
             implicitHeight: 26
@@ -1085,10 +1093,14 @@ ShellRoot {
                 color: chip.active ? chip.tint : pal.dim
             }
             MouseArea {
-                anchors.fill: parent; enabled: chip.on
+                id: chipMa
+                anchors.fill: parent; enabled: chip.on; hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: chip.clicked()
             }
+            ToolTip.visible: chip.tip !== "" && chipMa.containsMouse
+            ToolTip.delay: 500
+            ToolTip.text: chip.tip
         }
 
         // source badge
@@ -2664,123 +2676,180 @@ ShellRoot {
 
                 // profile editor of the selected game
                 ColumnLayout {
-                    Layout.fillWidth: true; spacing: 8
+                    Layout.fillWidth: true; spacing: 10
                     visible: win.gameView === "library" && win.selGame !== ""
 
-                    Section { Layout.fillWidth: true; label: win.selGameSource === "steam" ? "PROFILE" : "GAME"
-                              info: win.selGameName + (win.selGameSource === "steam" ? (win.gp.custom ? "" : " · default") : "") }
+                    // header: game + ProtonDB verdict
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 9
+                        Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
+                        Text {
+                            text: win.selGameSource === "steam" ? "PROFILE" : "GAME"
+                            color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true
+                        }
+                        Text {
+                            Layout.fillWidth: true; elide: Text.ElideRight
+                            text: win.selGameName + (win.selGameSource === "steam" && !win.gp.custom ? "  · default profile" : "")
+                            color: pal.dim; font.family: win.mono; font.pixelSize: 11
+                        }
+                        Text {
+                            id: pdbTxt
+                            visible: win.selGameSource === "steam" && !!(win.pdb[win.selGameId] || {}).total
+                            property var d: win.pdb[win.selGameId] || {}
+                            text: String(d.tier || "").toUpperCase() + " · " + d.total + " reports ↗"
+                            color: win.tierColor(d.tier); font.family: win.mono; font.pixelSize: 10; font.bold: true
+                            font.underline: pdbMa.containsMouse
+                            MouseArea {
+                                id: pdbMa
+                                anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: Qt.openUrlExternally("https://www.protondb.com/app/" + win.selGameId)
+                            }
+                            ToolTip.visible: pdbMa.containsMouse; ToolTip.delay: 400
+                            ToolTip.text: "ProtonDB: score " + pdbTxt.d.score + " · trending " + pdbTxt.d.trendingTier
+                                          + " · confidence " + pdbTxt.d.confidence + ". Click to open."
+                        }
+                    }
 
-                    // Umbral games: info + launch; their options live in Umbral
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 6
+                    // Umbral games: info only; their options live in Umbral
+                    Rectangle {
+                        Layout.fillWidth: true
                         visible: win.selGameSource === "umbral"
-                        Text {
-                            Layout.fillWidth: true; wrapMode: Text.WordWrap
-                            color: pal.text; font.family: win.mono; font.pixelSize: 11
-                            text: "Umbral · " + (win.selGameObj.umbralKind === "battlenet" ? "Battle.net client"
-                                   : (win.selGameObj.umbralKind === "blizzard" ? "Battle.net game" : "own game"))
-                                  + "  ·  prefix " + (win.selGameObj.prefixName || "?") + " (" + (win.selGameObj.compat || "?") + ")"
-                                  + "  ·  " + win.playtimeText(win.selGameObj.playtime)
-                                  + (win.selGameObj.lastPlayed ? "  ·  last " + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
-                        }
-                        Text {
-                            Layout.fillWidth: true; elide: Text.ElideMiddle; visible: !!win.selGameObj.exe
-                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                            text: String(win.selGameObj.exe || "").replace(win.home, "~")
-                        }
-                        Hint { text: "Launch options (Proton, gamemode, MangoHud, gamescope…) of Umbral games are set in Umbral itself; Control Deck lists them, starts them and manages their prefixes (PREFIXES)." }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 6
-                        visible: win.selGameSource === "steam"
-                        Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
-                        Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
-                        Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice) }
-                        Text { text: "NICE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.leftMargin: 6 }
-                        Repeater {
-                            model: [0, -5, -10]
-                            delegate: Chip {
-                                required property var modelData
-                                label: String(modelData); active: win.gp.nice === modelData
-                                onClicked: win.gpSet("nice", modelData)
+                        implicitHeight: umbCol.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            id: umbCol
+                            anchors.fill: parent; anchors.margins: 10; spacing: 4
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                text: (win.selGameObj.umbralKind === "battlenet" ? "Battle.net client"
+                                       : (win.selGameObj.umbralKind === "blizzard" ? "Battle.net game" : "Own game"))
+                                      + "  ·  " + (win.selGameObj.prefixName || "?") + " prefix (" + (win.selGameObj.compat || "?") + ")"
+                                      + "  ·  " + win.playtimeText(win.selGameObj.playtime)
+                                      + (win.selGameObj.lastPlayed ? "  ·  last " + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
+                            }
+                            Text {
+                                Layout.fillWidth: true; elide: Text.ElideMiddle; visible: !!win.selGameObj.exe
+                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                text: String(win.selGameObj.exe || "").replace(win.home, "~")
+                            }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                text: "Launch options are set in Umbral."
                             }
                         }
-                        Item { Layout.fillWidth: true }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        visible: win.selGameSource === "steam"
-                        Text { text: "ENV"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                        Field { id: gEnv; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "VAR=value VAR2=value" }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        visible: win.selGameSource === "steam"
-                        Text { text: "PREFIX"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                        Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "before the game, e.g. gamescope -f --" }
-                        Text { text: "ARGS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
-                        Field { id: gArgs; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "after the game, e.g. -novid" }
                     }
 
-                    // Proton version (Steam's CompatToolMapping)
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
+                    // launch settings (Steam)
+                    Rectangle {
+                        Layout.fillWidth: true
                         visible: win.selGameSource === "steam"
-                        Text { text: "PROTON"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
-                        Flow {
-                            Layout.fillWidth: true; spacing: 6
-                            Chip {
-                                label: "STEAM DEFAULT"; active: win.selGameCompat === ""
-                                on: !win.gameBusy
-                                onClicked: win.runGame(["steamcompat", win.selGameId, "default"], "SETTING PROTON…")
-                            }
-                            Repeater {
-                                model: win.tools
-                                delegate: Chip {
-                                    required property var modelData
-                                    label: modelData.display; active: win.selGameCompat === modelData.name
-                                    on: !win.gameBusy
-                                    onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
+                        implicitHeight: launchGrid.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        GridLayout {
+                            id: launchGrid
+                            anchors.fill: parent; anchors.margins: 10
+                            columns: 2; columnSpacing: 12; rowSpacing: 8
+                            Text { text: "LAUNCH"; Layout.preferredWidth: 52; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
+                                Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
+                                Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
+                                       tip: "ionice best-effort level 0 for the game" }
+                                Item { Layout.fillWidth: true }
+                                Text { text: "NICE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                                Repeater {
+                                    model: [0, -5, -10]
+                                    delegate: Chip {
+                                        required property var modelData
+                                        label: String(modelData); active: win.gp.nice === modelData
+                                        onClicked: win.gpSet("nice", modelData)
+                                    }
                                 }
                             }
-                        }
-                    }
-
-                    // what players who report the game works put in their launch options
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        visible: win.selGameSource === "steam"
-                        Text { text: "PLAYERS\nUSE"; Layout.preferredWidth: 42; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.alignment: Qt.AlignTop; Layout.topMargin: 4 }
-                        ColumnLayout {
-                            Layout.fillWidth: true; spacing: 4
-                            // ★ recommended for THIS PC's hardware, then the rest players use
+                            Text { text: "ENV"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            Field { id: gEnv; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "VAR=value VAR2=value" }
+                            Text { text: "PREFIX"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "before the game, e.g. gamescope -f --" }
+                                Text { text: "ARGS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                Field { id: gArgs; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "after the game, e.g. -novid" }
+                            }
+                            Text { text: "PROTON"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                   Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
                             Flow {
                                 Layout.fillWidth: true; spacing: 6
-                                visible: win.pdbStat.present === true && win.sugRecommended.length > 0
-                                Text {
-                                    text: "★ RECOMMENDED FOR THIS PC"; color: pal.amber; height: 26; verticalAlignment: Text.AlignVCenter
-                                    font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                                Chip {
+                                    label: "STEAM DEFAULT"; active: win.selGameCompat === ""
+                                    on: !win.gameBusy; tip: "Steam must be closed to change it"
+                                    onClicked: win.runGame(["steamcompat", win.selGameId, "default"], "SETTING PROTON…")
                                 }
+                                Repeater {
+                                    model: win.tools
+                                    delegate: Chip {
+                                        required property var modelData
+                                        label: modelData.display; active: win.selGameCompat === modelData.name
+                                        on: !win.gameBusy; tip: "Steam must be closed to change it"
+                                        onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // suggestions from players with hardware like this PC (Steam)
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.selGameSource === "steam"
+                        implicitHeight: sugCol.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            id: sugCol
+                            anchors.fill: parent; anchors.margins: 10; spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Text { text: "★ SUGGESTED FOR THIS PC"; color: pal.amber; font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1 }
+                                Text {
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    text: !win.sug.index || !win.sug.reports ? "" :
+                                          (win.sug.gpuName || "") + " · " + (win.sug.similarReports > 0 ? win.sug.similarReports + " similar players"
+                                          : (win.sug.vendorReports > 0 ? win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + " players" : win.sug.reports + " players"))
+                                }
+                                Chip {
+                                    visible: win.sugOthers.length > 0
+                                    label: win.sugExpanded ? "LESS ▴" : "+" + win.sugOthers.length + " MORE ▾"
+                                    onClicked: win.sugExpanded = !win.sugExpanded
+                                }
+                                Chip {
+                                    visible: win.pdbStat.present !== true || win.pdbStat.stale === true
+                                    label: win.pdbStat.present === true ? "UPDATE DATA" : "GET DATA (70 MB)"
+                                    on: !win.gameBusy; tint: pal.amber; active: true
+                                    tip: "ProtonDB's open data (every game's reported launch options), indexed locally to ≈5 MB"
+                                    onClicked: win.runGame(["pdbindex", "update"], "INDEXING PROTONDB DATA…")
+                                }
+                            }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 6
+                                visible: win.sugRecommended.length > 0
                                 Repeater {
                                     model: win.sugRecommended
                                     delegate: Chip {
                                         required property var modelData
                                         property bool applied: win.sugApplied(modelData)
                                         label: win.sugLabel(modelData, applied, "★ ")
-                                        tint: pal.amber; active: true
-                                        opacity: applied ? 0.6 : 1.0
+                                        tint: pal.amber; active: true; opacity: applied ? 0.55 : 1.0
+                                        tip: win.sugTip(modelData, applied)
                                         onClicked: win.applySug(modelData)
                                     }
                                 }
                             }
                             Flow {
                                 Layout.fillWidth: true; spacing: 6
-                                visible: win.pdbStat.present === true && win.sugOthers.length > 0
-                                Text {
-                                    text: "ALSO USED"; color: pal.dim; height: 26; verticalAlignment: Text.AlignVCenter
-                                    font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
-                                }
+                                visible: win.sugExpanded && win.sugOthers.length > 0
                                 Repeater {
                                     model: win.sugOthers
                                     delegate: Chip {
@@ -2788,73 +2857,46 @@ ShellRoot {
                                         property bool applied: win.sugApplied(modelData)
                                         label: win.sugLabel(modelData, applied, "+ ")
                                         tint: pal.ok; active: applied
+                                        tip: win.sugTip(modelData, applied)
                                         onClicked: win.applySug(modelData)
                                     }
                                 }
                             }
-                            Hint {
-                                text: win.pdbStat.present !== true
-                                      ? "Suggestions come from ProtonDB's open data (every game's reported launch options). Download it once (≈70 MB, indexed to ≈5 MB):"
-                                      : (!win.sug.index ? "" : (win.sug.reports === 0
-                                         ? "No ProtonDB report with launch options for this game yet."
-                                         : (win.sugRecommended.length + win.sugOthers.length === 0
-                                            ? "Players don't agree on any launch option for this game (" + win.sug.reports + " working reports)."
-                                            : "% of players with hardware like this PC (" + (win.sug.gpuName || "your GPU")
-                                              + (win.sug.similarReports > 0 ? ": " + win.sug.similarReports + " reports on " + win.sug.similarLabel
-                                                 : (win.sug.vendorReports > 0 ? ": " + win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + " reports" : ""))
-                                              + (win.sug.cores > 0 ? ", " + win.sug.cores + " threads" : "") + (win.sug.screen ? ", " + win.sug.screen : "")
-                                              + ") among " + win.sug.reports + " who say it works" + (win.sug.window === "3y" ? " (last 3 years)" : "")
-                                              + ". ★ = used by ≥ 20% of them (env vars: by more than keep the default). Values like -threads or +fps_max are adapted to this PC. Click to add, then SAVE.")))
-                                      + (win.pdbStat.present === true ? "  Data: ProtonDB (ODbL), " + win.pdbStat.date + "." : "")
+                            Text {
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                text: win.pdbStat.present !== true ? "Get the data once to see what players with hardware like yours use."
+                                      : (!win.sug.index ? "" : (win.sug.reports === 0 ? "No ProtonDB report with launch options for this game yet."
+                                         : (win.sugRecommended.length + win.sugOthers.length === 0 ? "Players don't agree on any launch option for this game."
+                                            : (win.sugRecommended.length === 0 ? "Nothing is used by enough similar players to recommend it. " : "")
+                                              + "Click to add, then SAVE · % of players who say it works · ProtonDB (ODbL) " + win.pdbStat.date)))
                             }
-                        }
-                        Chip {
-                            visible: win.pdbStat.present !== true || win.pdbStat.stale === true
-                            label: win.pdbStat.present === true ? "UPDATE DATA" : "GET DATA (70 MB)"
-                            on: !win.gameBusy
-                            onClicked: win.runGame(["pdbindex", "update"], "INDEXING PROTONDB DATA…")
                         }
                     }
 
-                    // ProtonDB summary — no invented launch tips, just the verdict and a link
+                    // status + actions
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
-                        visible: win.selGameSource === "steam"
                         Text {
                             Layout.fillWidth: true; elide: Text.ElideRight
-                            text: {
-                                var d = win.pdb[win.selGameId];
-                                if (!d || !d.tier || d.tier === "unknown") return "ProtonDB: no data for this game (or ProtonDB unreachable).";
-                                return "ProtonDB: " + String(d.tier).toUpperCase() + "  ·  score " + d.score + "  ·  " + d.total
-                                       + " reports  ·  trending " + d.trendingTier + "  ·  confidence " + d.confidence;
-                            }
-                            color: win.tierColor((win.pdb[win.selGameId] || {}).tier)
                             font.family: win.mono; font.pixelSize: 10
-                        }
-                        Chip { label: "PROTONDB ↗"; onClicked: Qt.openUrlExternally("https://www.protondb.com/app/" + win.selGameId) }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true; spacing: 8
-                        Hint {
+                            color: win.selGameSource === "steam" && win.selGameWrapped ? pal.ok : pal.dim
                             text: win.selGameSource !== "steam" ? ""
-                                  : (win.selGameWrapped
-                                     ? "Steam launches this game through Control Deck, so the profile applies on every launch."
-                                     : "Current Steam options: " + (win.selGameLaunch || "(none)") + ". Use it in Steam to apply the profile (Steam must be closed).")
+                                  : (win.selGameWrapped ? "● Launched through Control Deck"
+                                     : "○ Steam options: " + (win.selGameLaunch || "none"))
+                            ToolTip.visible: stMa.containsMouse && text !== ""; ToolTip.delay: 400
+                            ToolTip.text: win.selGameWrapped ? "The profile applies on every launch from Steam."
+                                          : "USE IN STEAM moves these options into the profile (Steam must be closed)."
+                            MouseArea { id: stMa; anchors.fill: parent; hoverEnabled: true }
                         }
                         MiniBtn {
-                            width: 76; height: 32; label: "▶ PLAY"; tint: pal.ok
+                            width: 70; height: 32; primary: false; label: "RESET"
+                            visible: win.selGameSource === "steam" && win.gp.custom === true
                             on: !win.gameBusy
-                            onClicked: win.runGame(["gplay", win.selGame], "LAUNCHING…")
+                            onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
                         }
                         MiniBtn {
-                            width: 90; height: 32; label: "SAVE"
-                            visible: win.selGameSource === "steam"
-                            on: !win.gameBusy
-                            onClicked: win.saveGameProfile()
-                        }
-                        MiniBtn {
-                            width: 132; height: 32; primary: !win.selGameWrapped
+                            width: 120; height: 32; primary: false
                             visible: win.selGameSource === "steam"
                             label: win.selGameWrapped ? "RESTORE STEAM" : "USE IN STEAM"
                             on: !win.gameBusy
@@ -2862,17 +2904,18 @@ ShellRoot {
                                                    win.selGameWrapped ? "RESTORING…" : "WRAPPING…")
                         }
                         MiniBtn {
-                            width: 70; height: 32; primary: false; label: "RESET"
+                            width: 76; height: 32; label: "SAVE"
                             visible: win.selGameSource === "steam"
-                            on: win.gp.custom === true && !win.gameBusy
-                            onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
+                            on: !win.gameBusy
+                            onClicked: win.saveGameProfile()
+                        }
+                        MiniBtn {
+                            width: 76; height: 32; label: "▶ PLAY"; tint: pal.ok
+                            on: !win.gameBusy
+                            onClicked: win.runGame(["gplay", win.selGame], "LAUNCHING…")
                         }
                     }
                 }
-
-
-
-
 
                 // ---- PREFIXES ----
                 ColumnLayout {
