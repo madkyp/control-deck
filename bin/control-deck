@@ -44,9 +44,14 @@ err()  { printf 'ERROR: %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 human() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
 # desktop notification (no-op if notify-send is missing)
+# the app's own logo (installed by install.sh), by path: more reliable than a theme lookup
+deck_icon() {
+    local f="$DATA_HOME/icons/hicolor/scalable/apps/control-deck.svg"
+    if [[ -f "$f" ]]; then echo "$f"; else echo control-deck; fi
+}
 notify() {
     have notify-send || return 0
-    notify-send -a "Control Deck" -i "${3:-system-software-install}" "$1" "$2" 2>/dev/null || true
+    notify-send -a "Control Deck" -i "$(deck_icon)" "$1" "$2" 2>/dev/null || true
 }
 # history_add <action> <source> <target> <rc>
 history_add() {
@@ -1111,13 +1116,40 @@ purge_dir() {
 manual_remove() {
     local f="$1" exec bin icon
     exec="$(dget "$f" Exec)"; bin="$(exec_path "$exec")"; icon="$(dget "$f" Icon)"
-    rm -f "$f"; log "→ deleted launcher $(basename "$f")"
+    # only launchers of your own: a system one belongs to a package
+    [[ "$f" == "$HOME/"* ]] || { err "$(basename "$f") is a system launcher: not touched"; return 4; }
+    rm -f "$f" || { err "could not delete $(basename "$f")"; return 4; }
+    log "→ deleted launcher $(basename "$f")"
     [[ "$icon" = "$ICON_DIR/"* && -f "$icon" ]] && { rm -f "$icon"; log "→ deleted icon"; }
     if [[ "$bin" = "$HOME/"* && -f "$bin" ]]; then
         rm -f "$bin"; log "→ deleted executable $bin"
     fi
     refresh_menu
     log "✔ Manual clean-up done."
+}
+
+# installed packages whose dependencies would break without <pkg> (no root:
+# pacman -R --print only resolves the transaction)
+pkg_required_by() {
+    LC_ALL=C pacman -R --print "$1" 2>&1 \
+        | sed -nE "s/.*breaks dependency '[^']*' required by (.*)$/\1/p" | sort -u | paste -sd ' '
+}
+
+# how to remove a package that a bundle (meta-package) pulls in, keeping the
+# bundle's other apps: mark them as explicitly installed first, so dropping
+# the bundle doesn't turn them into orphans
+pkg_blocked_help() {
+    local pkg="$1" need="$2" n deps=()
+    for n in $need; do
+        while IFS= read -r d; do
+            [[ -n "$d" && "$d" != "$pkg" ]] && pacman -Qq "$d" >/dev/null 2>&1 && deps+=("$d")
+        done < <(LC_ALL=C pacman -Qi "$n" 2>/dev/null | awk -F': ' '/^Depends On/ { print $2 }' \
+                   | tr ' ' '\n' | sed -E 's/[<>=].*//' | grep -v '^None$')
+    done
+    log "  If you still want it gone (the other apps of $need stay installed):"
+    ((${#deps[@]})) && log "    sudo pacman -D --asexplicit ${deps[*]}"
+    log "    sudo pacman -R $need"
+    log "    sudo pacman -Rns $pkg"
 }
 
 # --- uninstall: remove the app according to its source ---------------------
@@ -1165,17 +1197,23 @@ uninstall_app() {
             local pkg; pkg="$(pkg_of "$exec")"
             if [[ -z "$pkg" ]]; then
                 err "could not determine the package; trying a manual clean-up…"
-                manual_remove "$f"
+                manual_remove "$f" || return 4
             else
+                # other packages that need it: asked before any password prompt
+                local need; need="$(pkg_required_by "$pkg")"
+                if [[ -n "$need" ]]; then
+                    err "$pkg is needed by: $need — pacman won't remove it on its own."
+                    pkg_blocked_help "$pkg" "$need"
+                    return 5
+                fi
                 log "→ pkexec pacman -Rns $pkg (authorization required)"
                 if pk_pacman -Rns --noconfirm "$pkg"; then
                     log "✔ Package $pkg removed."
                     # a user copy made by `edit` would keep a dead entry in the menu
                     [[ "$f" == "$DESKTOP_DIR/"* && -f "$f" ]] && rm -f "$f"
                 else
-                    err "pacman -Rns failed (dependencies in use or cancelled)."
-                    log "→ trying another way: manual launcher clean-up…"
-                    manual_remove "$f"
+                    err "pacman -Rns failed or was cancelled: $pkg is still installed."
+                    return 4
                 fi
             fi ;;
         wine)
@@ -2007,7 +2045,7 @@ cmd_updateall() {
     fi
     log "═════════════════════════════════════════"
     if [[ $fail -eq 0 ]]; then log "✔ Update complete."; notify "Updated ✓" "$n update(s)"
-    else log "⚠ Finished with $fail error(s)."; notify "Update finished with errors" "$fail failure(s)" dialog-error; fi
+    else log "⚠ Finished with $fail error(s)."; notify "Update finished with errors ✗" "$fail failure(s)"; fi
     [[ $fail -eq 0 ]]
 }
 
@@ -2033,7 +2071,7 @@ cmd_notify_updates() {
     summary="$(jq -r 'group_by(.source) | map("\(length) \(.[0].source)") | join(" · ")' <<<"$list")"
     have notify-send || return 0
     # waits for a click (bounded, so the service never hangs)
-    action="$(timeout 15m notify-send -a "Control Deck" -i system-software-update \
+    action="$(timeout 15m notify-send -a "Control Deck" -i "$(deck_icon)" \
               -A "open=Open Control Deck" "$n update(s) available" "$summary" 2>/dev/null)"
     [[ "$action" == open ]] && open_deck updates
     return 0
@@ -3920,7 +3958,7 @@ with_notify() {
     local ok_title="$1" fail_title="$2" label="$3"; shift 3
     "$@"; local rc=$?
     if [[ $rc -eq 0 ]]; then notify "$ok_title" "$label"
-    else notify "$fail_title" "$label" dialog-error; fi
+    else notify "$fail_title" "$label"; fi
     return $rc
 }
 

@@ -56,6 +56,8 @@ stub pacman 'case "$1" in
     -Fq) [[ "$2" == libgtk-3.so.0 ]] && echo extra/gtk3 ;;
     -Si) [[ "$2" == python-requests ]] && exit 0; exit 1 ;;
     -Qoq) exit 1 ;;
+    -R)  [[ "$2" == --print && "$3" == bundled-app ]] && { echo "error: failed to prepare transaction (could not satisfy dependencies)" >&2
+             echo ":: removing bundled-app breaks dependency '"'"'bundled-app'"'"' required by some-bundle"; exit 1; } ;;
 esac
 exit 0'
 stub flatpak 'case "$1" in
@@ -1201,6 +1203,13 @@ has "definitions merged, no duplicates" "$(grep PreprocessorDefinitions "$SG/Bin
 "$CD" fx set steam:5000 off >/dev/null
 unset CONTROL_DECK_PCGW_API CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 \
       CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
+
+section "uninstall: packages other packages need"
+eq "blocker found without root (pacman -R --print)" "$(bash -c 'source "$1"; pkg_required_by bundled-app' _ "$CD")" "some-bundle"
+eq "free package: nothing blocks it" "$(bash -c 'source "$1"; pkg_required_by free-app' _ "$CD")" ""
+mkdir -p "$T/sysapps"; printf '[Desktop Entry]\nType=Application\nName=Sys\nExec=/usr/bin/sys\n' > "$T/sysapps/sys.desktop"
+bash -c 'source "$1"; manual_remove "$2"' _ "$CD" "$T/sysapps/sys.desktop" >/dev/null 2>&1; eq "a system launcher is never 'cleaned up' by hand" "$?" 4
+yes "…and stays" "[[ -f '$T/sysapps/sys.desktop' ]]"
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
