@@ -316,11 +316,13 @@ ShellRoot {
         property bool   fxActive: !!fx.current && !!win.gp.fx
         property bool   fxAnticheat: !!fx.online && fx.online.level === "anticheat"
         property bool   fxReshade: fx.mode === "reshade"
+        property bool   fxGame: selGameSource === "steam" || selGameSource === "umbral"
+        property bool   fxUmbral: selGameSource === "umbral"
         property var    fxRsGame: fx.reshade ? fx.reshade.game : null
         property bool   fxReady: fxReshade ? (!!fx.reshade && fx.reshade.ready === true) : (fx.vkbasalt === true && fx.shadersInstalled === true)
         function openFx() {
             gameView = "fx"; fxConfirm = ""; fxTopFor = "";
-            if (selGameSource === "steam") {
+            if (selGameSource === "steam" || selGameSource === "umbral") {
                 fxStatProc.running = true;
                 if (fxQuery.text === "" || fxLastGame !== selGame) { fxQuery.text = selGameName; fxLastGame = selGame; fxSearch(selGameName); }
             }
@@ -341,7 +343,11 @@ ShellRoot {
                        : "ReShade is recommended here: presets run exactly as made (depth effects too), with its in-game menu.")],
                 [fxReady, "Install " + (rs ? "ReShade" : "vkBasalt + shaders"),
                  rs ? "Downloaded from reshade.me into your user folder, no password." : "From chaotic-aur (asks for your password) plus the standard shaders."],
-                [fx.wrapped === true, "Launch it through Control Deck",
+                fxUmbral
+                ? [fx.wrapped === true, "Launch it from Umbral",
+                   fx.wrapped ? "Umbral asks the deck for the shaders/TEMPS each time it starts the game."
+                              : "Needs Umbral 0.10.0 or newer (it asks the deck before launching): update Umbral."]
+                : [fx.wrapped === true, "Launch it through Control Deck",
                  fx.wrapped ? "Its Steam launch options go through the deck, which loads the shaders."
                             : (fx.steamRunning ? "Close Steam, then USE IN STEAM." : "USE IN STEAM puts the deck in its launch options.")],
                 [fxActive, "Pick a look",
@@ -408,7 +414,7 @@ ShellRoot {
         function selectGame(g) {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
             selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped; selGameObj = g;
-            gameLog = ""; if (g.source === "steam") gprofProc.running = true;
+            gameLog = ""; if (g.source === "steam" || g.source === "umbral") gprofProc.running = true;
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
             fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
@@ -2973,7 +2979,20 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                text: "Launch options are set in Umbral."
+                                text: "Launch options are set in Umbral. Control Deck adds TEMPS and shaders when Umbral 0.10.0+ starts the game."
+                            }
+                            RowLayout {
+                                spacing: 6
+                                Chip {
+                                    label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; on: !win.gameBusy
+                                    tip: "CPU · GPU temperature line at the top right while the game runs"
+                                    onClicked: win.runGame(["gprofile", "set", win.selGame, "overlay=" + !(win.gp.overlay === true)], "SAVING…")
+                                }
+                                Chip {
+                                    label: "FX"; tint: pal.ok; active: win.gp.fx === true
+                                    tip: "Visual shaders (ReShade / vkBasalt) for this game"
+                                    onClicked: win.openFx()
+                                }
                             }
                         }
                     }
@@ -3406,14 +3425,14 @@ ShellRoot {
 
                             EmptyHint {
                                 Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 40; anchors.centerIn: undefined
-                                visible: win.selGameSource !== "steam"
-                                title: "PICK A STEAM GAME IN LIBRARY"
+                                visible: !win.fxGame
+                                title: "PICK A STEAM OR UMBRAL GAME IN LIBRARY"
                             }
 
                             // header: game · GPU · vkBasalt
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 9
-                                visible: win.selGameSource === "steam"
+                                visible: win.fxGame
                                 Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
                                 Text { text: "VISUAL SHADERS"; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
                                 Text { Layout.fillWidth: true; elide: Text.ElideRight; text: win.selGameName; color: pal.dim; font.family: win.mono; font.pixelSize: 11 }
@@ -3426,10 +3445,24 @@ ShellRoot {
                                 }
                             }
 
+                            // a game no shader tool can hook (2D GDI, e.g. RPG Maker XP)
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: win.fxGame && win.fx.recommended === "none"
+                                implicitHeight: noFxTxt.implicitHeight + 16
+                                radius: 8; color: pal.card; border.color: pal.amber; border.width: 1
+                                Text {
+                                    id: noFxTxt
+                                    anchors.fill: parent; anchors.margins: 8; wrapMode: Text.WordWrap
+                                    color: pal.amber; font.family: win.mono; font.pixelSize: 11
+                                    text: "This game is drawn in 2D with GDI (RPG Maker style), not with DirectX, OpenGL or Vulkan: neither ReShade nor vkBasalt can hook it. TEMPS still works (LIBRARY)."
+                                }
+                            }
+
                             // guided steps (live state of this game)
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && !!win.fx.gpu
+                                visible: win.fxGame && !!win.fx.gpu && win.fx.recommended !== "none"
                                 implicitHeight: guideCol.implicitHeight + 16
                                 radius: 8; color: pal.card; border.width: 1
                                 border.color: win.fxStepsDone === 5 ? pal.ok : pal.accent
@@ -3484,7 +3517,7 @@ ShellRoot {
                                                 onClicked: win.runGame(win.fxReshade ? ["fx", "reshade", "install"] : ["fx", "install"], "INSTALLING…")
                                             }
                                             MiniBtn {
-                                                visible: next && index === 2
+                                                visible: next && index === 2 && !win.fxUmbral
                                                 width: 120; height: 28; label: "USE IN STEAM"
                                                 on: !win.gameBusy && !win.fx.steamRunning
                                                 onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
@@ -3509,7 +3542,7 @@ ShellRoot {
                             // route: ReShade (DLL) or vkBasalt (Vulkan layer)
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && !!win.fx.gpu
+                                visible: win.fxGame && !!win.fx.gpu && win.fx.recommended !== "none"
                                 implicitHeight: fxRoute.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                                 ColumnLayout {
@@ -3629,9 +3662,11 @@ ShellRoot {
                                         Text {
                                             Layout.fillWidth: true; wrapMode: Text.WordWrap
                                             color: pal.amber; font.family: win.mono; font.pixelSize: 10
-                                            text: "⚠ This game doesn't launch through Control Deck yet, so the shaders won't load. " + (win.fx.steamRunning ? "Close Steam, then press USE IN STEAM." : "Press USE IN STEAM.")
+                                            text: win.fxUmbral ? "⚠ Umbral 0.10.0 or newer is needed: it asks the deck for shaders and TEMPS before starting the game. Update Umbral."
+                                                  : "⚠ This game doesn't launch through Control Deck yet, so the shaders won't load. " + (win.fx.steamRunning ? "Close Steam, then press USE IN STEAM." : "Press USE IN STEAM.")
                                         }
                                         MiniBtn {
+                                            visible: !win.fxUmbral
                                             width: 120; height: 28; label: "USE IN STEAM"
                                             on: !win.gameBusy && !win.fx.steamRunning
                                             onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
@@ -3643,7 +3678,7 @@ ShellRoot {
                             // one-time setup (ReShade: no password, all user files)
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && win.fxReshade && !!win.fx.reshade && (!win.fx.reshade.ready || win.fx.reshade.update)
+                                visible: win.fxGame && win.fxReshade && !!win.fx.reshade && (!win.fx.reshade.ready || win.fx.reshade.update)
                                 implicitHeight: fxRsSetup.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
                                 RowLayout {
@@ -3667,7 +3702,7 @@ ShellRoot {
                             // one-time setup
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && !win.fxReshade && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
+                                visible: win.fxGame && !win.fxReshade && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
                                 implicitHeight: fxSetup.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
                                 RowLayout {
@@ -3692,7 +3727,7 @@ ShellRoot {
                             // online / anti-cheat warning
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && !!win.fx.online && win.fx.online.level !== "none"
+                                visible: win.fxGame && !!win.fx.online && win.fx.online.level !== "none"
                                 implicitHeight: fxWarn.implicitHeight + 16
                                 radius: 8; border.width: 1
                                 color: win.fxAnticheat ? "#1f0d14" : "#1a150c"
@@ -3711,7 +3746,7 @@ ShellRoot {
                             // route + what's active
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.selGameSource === "steam" && !!win.fx.route
+                                visible: win.fxGame && !!win.fx.route
                                 implicitHeight: fxCur.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                                 ColumnLayout {
@@ -3767,7 +3802,7 @@ ShellRoot {
                             // quick looks (vkBasalt's own effects) + presets from the internet
                             Rectangle {
                                 Layout.fillWidth: true; Layout.preferredHeight: 380
-                                visible: win.selGameSource === "steam" && !!win.fx.route && (win.fx.route.ok || win.fxReshade)
+                                visible: win.fxGame && !!win.fx.route && (win.fx.route.ok || win.fxReshade) && win.fx.recommended !== "none"
                                 radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8

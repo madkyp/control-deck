@@ -520,6 +520,23 @@ reports:
   use them. CLEAN → Unused Proton versions lists the ones nothing uses.
 - CLI: `proton install [tag]`, `update proton <tag>`.
 
+### Umbral games: TEMPS and FX
+- Umbral (≥ 0.10.0) runs `control-deck hook umbral:<id>` before starting a
+  game. It gets back `{env, overlay}`: ReShade's
+  `WINEDLLOVERRIDES=d3dcompiler_47=n;<api>=n,b`, or vkBasalt's
+  `ENABLE_VKBASALT`/`VKBASALT_CONFIG_FILE`, and whether to show TEMPS. Umbral
+  merges the environment (its own options and the user's variables win) and
+  starts `control-deck overlay <pid>`. GameMode, MangoHud, gamescope and FPS
+  limits stay Umbral's own settings.
+- FX works from the game's configured `.exe` (always a candidate, however
+  small) and its folder. An RPG Maker folder (RGSS*.dll) is detected as a
+  2D GDI game: no shader tool can hook it, and the tab says so (Pokémon
+  Iberia here).
+- The online risk comes from AreWeAntiCheatYet by name. An entry whose
+  normalised name (≥ 8 characters) starts the game's name matches, so WoW
+  Forever → "World of Warcraft" (Warden) → red warning.
+- LIBRARY → an Umbral game has TEMPS and FX chips.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

@@ -1295,6 +1295,35 @@ rm -rf "$GST/compatibilitytools.d/GE-Proton12-1-x86_64"; echo "0000  GE-Proton12
 yes "…nothing left behind" "[[ ! -e '$GST/compatibilitytools.d/GE-Proton12-1-x86_64' ]]"
 "$CD" proton install 'x;rm' >/dev/null 2>&1; eq "bad tag refused" "$?" 2
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_GH_API
+section "Umbral games: FX + TEMPS through the hook"
+UG="$HOME/Games/umbral/games/StoryU"; mkdir -p "$UG" "$HOME/Games/umbral/games/Rpg"
+mkpe "$UG/StoryU.exe" dxgi.dll 0x8664
+mkpe "$HOME/Games/umbral/games/Rpg/Game.exe" kernel32.dll 0x14c; touch "$HOME/Games/umbral/games/Rpg/RGSS102E.dll"
+cat > "$T/umbral-fx.json" <<EOF
+{"prefixes":[{"id":"p","name":"P","path":"$HOME/Games/umbral/pfx","runner":"GE-Proton"}],
+ "games":[{"id":"story","name":"Story U","kind":"custom","prefix_id":"p","exe":"$UG/StoryU.exe"},
+          {"id":"rpg","name":"Rpg Game","kind":"custom","prefix_id":"p","exe":"$HOME/Games/umbral/games/Rpg/Game.exe"},
+          {"id":"battlenet:wow","name":"World of Warcraft: Forever (beta)","kind":"blizzard","prefix_id":"p","exe":"$UG/StoryU.exe"}]}
+EOF
+echo '[{"name":"World of Warcraft","anticheats":["Warden"],"status":"Running","storeIds":{}},{"name":"Doom","anticheats":["X"],"status":"Running","storeIds":{}}]' > "$T/awacy-u.json"
+export CONTROL_DECK_UMBRAL_CONFIG="$T/umbral-fx.json" CONTROL_DECK_AWACY_URL="file://$T/awacy-u.json" \
+       CONTROL_DECK_RESHADE_URL="file://$RS/web" CONTROL_DECK_FF_D3DC_URL="file://$RS/ff" CONTROL_DECK_FF_D3DC_SHA64="$FFSHA" CONTROL_DECK_FF_D3DC_SHA32="$FFSHA"
+rm -f "$HOME/.cache/control-deck/fx/awacy.json"
+eq "Umbral game: its own .exe, API from imports" "$("$CD" fx exes umbral:story | jq -c '.[0] | [.rel, .arch, .api]')" '["StoryU.exe",64,"dxgi"]'
+eq "tiny RPG Maker Game.exe kept, marked GDI" "$("$CD" fx exes umbral:rpg | jq -c '.[0] | [.rel, .api]')" '["Game.exe","gdi"]'
+eq "…nothing recommended for it" "$("$CD" fx status umbral:rpg | jq -r .recommended)" none
+"$CD" fx mode umbral:rpg reshade >/dev/null 2>&1; eq "…and ReShade refused" "$?" 3
+eq "anti-cheat by name prefix (AreWeAntiCheatYet)" "$("$CD" fx status umbral:battlenet:wow | jq -c '.online | [.level, .anticheats]')" '["anticheat",["Warden"]]'
+eq "short names don't match loosely" "$("$CD" fx status umbral:story | jq -r .online.level)" none
+"$CD" fx mode umbral:story reshade >/dev/null 2>&1
+eq "ReShade next to the Umbral game's exe" "$(readlink "$UG/dxgi.dll")" "$HOME/.local/share/control-deck/reshade/bin/current/ReShade64.dll"
+"$CD" fx set umbral:story builtin:sharpen >/dev/null 2>&1
+"$CD" gprofile set umbral:story overlay=true >/dev/null
+eq "hook: DLL overrides + TEMPS for Umbral" "$("$CD" hook umbral:story)" '{"env":{"WINEDLLOVERRIDES":"d3dcompiler_47=n;dxgi=n,b"},"overlay":true}'
+eq "hook: nothing set → empty" "$("$CD" hook umbral:rpg)" '{"env":{},"overlay":false}'
+"$CD" fx set umbral:story off >/dev/null
+yes "OFF cleans the Umbral game's folder" "[[ ! -e '$UG/dxgi.dll' ]]"
+unset CONTROL_DECK_UMBRAL_CONFIG CONTROL_DECK_AWACY_URL CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
