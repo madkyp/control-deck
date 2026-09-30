@@ -4121,7 +4121,9 @@ cmd_health() {
     need_pkgs vulkan fail "Vulkan loader" vulkan-icd-loader lib32-vulkan-icd-loader
     local f; icd=""
     for f in /usr/share/vulkan/icd.d/*.json; do [[ -e "$f" ]] && icd+="${f##*/} "; done
-    if have vulkaninfo; then
+    if [[ -n "${HEALTH_QUICK:-}" ]]; then
+        :   # STATUS's summary: starting Vulkan every few minutes isn't worth it
+    elif have vulkaninfo; then
         local devs
         devs="$(timeout 15 vulkaninfo --summary 2>/dev/null | awk -F'= ' '
             /deviceType/ {t=$2} /deviceName/ {n=$2}
@@ -5266,10 +5268,11 @@ gs_displays() {
 gs_tools() {
     local f="$FX_CACHE/tools.json"; mkdir -p "$FX_CACHE"
     if [[ ! -s "$f" ]] || (( $(date +%s) - $(stat -c %Y "$f") > 86400 )); then
-        jq -nc --arg gm "$(gamemoded --version 2>/dev/null | grep -oE 'v?[0-9][0-9.]+' | head -1)" \
-            --arg mh "$(mangohud --version 2>/dev/null | head -1)" \
-            --arg gs "$(gamescope --version 2>&1 | grep -oE 'version [0-9][0-9.]*' | head -1 | cut -d' ' -f2)" \
-            '{gamemode:$gm, mangohud:$mh, gamescope:$gs}' > "$f"
+        # from pacman's db: running the tools would start Vulkan (gamescope), which
+        # also writes driver shader caches
+        jq -nc --arg gm "$(pkg_ver gamemode)" --arg mh "$(pkg_ver mangohud)" --arg gs "$(pkg_ver gamescope)" \
+            'def v: sub("-[^-]*$"; "") | sub("^[0-9]+:"; "");
+             {gamemode:($gm | v), mangohud:($mh | v), gamescope:($gs | v)}' > "$f"
     fi
     jq -c --argjson steam "$(steam_running && echo true || echo false)" --argjson ntsync "$([[ -e "$NTSYNC_DEV" ]] && echo true || echo false)" \
         --arg rs "$(reshade_version | sed 's/^ReShade-//')" --arg vkb "$(pkg_ver vkbasalt)" \
@@ -5321,7 +5324,7 @@ gs_library() {
         done < <(jq -r '.[] | select(.source == "umbral" and (.lastPlayed // "") != "") | [.name, .lastPlayed, (.playtime // 0 | tostring)] | @tsv' <<<"$games")
         sc="$(cmd_shadercache 2>/dev/null | jq -c '{total:(([.games[].total] + [.global[].size]) | add // 0), stale:(.staleBytes // 0), orphan:(.orphanBytes // 0)}')"
         pf="$(cmd_prefixes 2>/dev/null | jq -c '{total:([.prefixes[].size] | add // 0), count:(.prefixes | length), orphans:([.prefixes[] | select(.orphan)] | length)}')"
-        hl="$(cmd_health 2>/dev/null | jq -c '{fail, warn}')"
+        hl="$(HEALTH_QUICK=1 cmd_health 2>/dev/null | jq -c '{fail, warn}')"
         jq -nc --argjson g "$games" --argjson recent "$(printf '%s\n' "${recent[@]}" | jq -sc 'map(select(. != null and .last != null)) | sort_by(-.last) | .[0:4]')" \
             --argjson sc "${sc:-null}" --argjson pf "${pf:-null}" --argjson hl "${hl:-null}" \
             --argjson fx "$(ls -d "$FX_PROFILES"/*/report.json 2>/dev/null | wc -l)" \
