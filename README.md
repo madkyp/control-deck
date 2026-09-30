@@ -135,6 +135,7 @@ The window has six tabs:
 - `paru` or `yay` + a terminal (`kitty`, `alacritty`…) — AUR
 - `zenity` — file pickers (icons, backup restore)
 - `wl-clipboard` — copy an app's command
+- `python` — FX: reads a game's .exe to tell which graphics API ReShade must hook (without it only 32/64-bit is detected and you pick the API)
 - `appimageupdatetool` (AUR) — update AppImages that don't come from GitHub
 - `debtap` (AUR) — install `.deb` files (then run `sudo debtap -u` once)
 - `snapper` (+ `snap-pac`, `grub-btrfs`, `btrfs-assistant`) — SNAPSHOTS tab and snapshots before pacman changes

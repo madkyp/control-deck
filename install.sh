@@ -12,7 +12,7 @@ WITH_DEPS=1
 
 # Package names (official repos / AUR). The font is handled separately.
 REQUIRED=(quickshell jq libarchive polkit)
-OPTIONAL=(flatpak libnotify curl zenity hyprpolkitagent pacman-contrib wl-clipboard)
+OPTIONAL=(flatpak libnotify curl zenity hyprpolkitagent pacman-contrib wl-clipboard python)
 
 is_installed() { pacman -Qq "$1" &>/dev/null; }
 in_repo()      { pacman -Si "$1" &>/dev/null; }
