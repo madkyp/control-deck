@@ -4486,6 +4486,7 @@ cmd_fx_status() {
         --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
         --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" --arg wrappedKey "${key%%:*}" \
         --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" \
+        --arg shots "$(if [[ -n "$key" ]]; then reshade_shots_dir "$key" | sed "s|^$HOME|~|"; fi)" \
         --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" '.[$k] // []'; else echo '[]'; fi)" \
         --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
         --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
@@ -4493,7 +4494,7 @@ cmd_fx_status() {
         vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
         chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
         installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end),
-        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, links:$links,
+        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, links:$links, shotsDir:$shots,
         reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
                  update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
         recommended:(($exes[0].api // "unknown") as $a
@@ -4959,6 +4960,22 @@ cmd_hook() {
         '{env:$env, overlay:$overlay, session:$session}'
 }
 
+# ReShade's screenshots (PrtSc) go to ~/Pictures/ReShade/<game>, not the game folder
+reshade_shots_dir() {   # key → folder
+    local name pics
+    case "$1" in
+        steam:*)  name="$(steam_games | awk -v i="${1#steam:}" 'NR % 5 == 1 { x = $0 } NR % 5 == 2 && x == i { print; exit }')" ;;
+        umbral:*) name="$(umbral_game_name "$1")" ;;
+    esac
+    name="${name:-${1//:/_}}"; name="${name//\//-}"; name="${name//[:*?\"<>|]/}"
+    pics="${CONTROL_DECK_PICTURES:-$(xdg-user-dir PICTURES 2>/dev/null)}"; [[ -d "$pics" ]] || pics="$HOME/Pictures"
+    echo "$pics/ReShade/$name"
+}
+reshade_set_shots() {   # key ini
+    local d; d="$(reshade_shots_dir "$1")"
+    mkdir -p "$d" && ini_set "$2" SCREENSHOT SavePath "$(winpath "$d")"
+}
+
 reshade_state() { local f; f="$(fx_key_dir "$1")/reshade.json"; [[ -s "$f" ]] && cat "$f"; }
 
 # fx reshade on <key> [exe path] [dxgi|d3d9|opengl32]
@@ -5004,9 +5021,10 @@ cmd_reshade_on() {
     ini_set "$ini" GENERAL TextureSearchPaths "$(winpath "$FX_DIR/Textures")\\**"
     ini_set "$ini" GENERAL PresetPath "$(winpath "$d/ReShadePreset.ini")"
     ini_set "$ini" GENERAL IntermediateCachePath 'C:\users\steamuser\Temp'
+    reshade_set_shots "$key" "$ini"
     jq -nc --arg exe "$exe" --arg dir "$dir" --arg api "$api" --argjson arch "$arch" --argjson d3dc "$d3dc" \
         --argjson created "$created" --arg v "$(reshade_version)" \
-        '{exe:$exe, dir:$dir, api:$api, arch:$arch, d3dcompiler:$d3dc, iniCreated:$created, version:$v}' > "$d/reshade.json"
+        --arg key "$key" '{key:$key, exe:$exe, dir:$dir, api:$api, arch:$arch, d3dcompiler:$d3dc, iniCreated:$created, version:$v}' > "$d/reshade.json"
     profile_write "$key" '{"fx":true,"fxMode":"reshade"}'
     history_add "reshade on" gaming "$key $api" 0
     log "✔ ReShade on: ${exe#"$(dirname "$dir")"/} ($arch-bit, $api.dll). In game, $(fx_key) opens its menu."
@@ -5312,6 +5330,12 @@ cmd_fx() {
         mode)     cmd_fx_mode "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
         exes)     cmd_fx_exes "${1:-}" ;;
         key)      cmd_fx_key "${1:-}" ;;
+        screenshots) local f k; for f in "$FX_PROFILES"/*/reshade.json; do
+                         [[ -f "$f" ]] || continue
+                         k="$(jq -r '.key // empty' "$f")"; [[ -n "$k" ]] || { k="$(basename "$(dirname "$f")")"; k="${k/_/:}"; }
+                         [[ -f "$(jq -r .dir "$f")/ReShade.ini" ]] && reshade_set_shots "$k" "$(jq -r .dir "$f")/ReShade.ini" \
+                             && log "→ $k: screenshots to $(reshade_shots_dir "$k" | sed "s|^$HOME|~|")"
+                     done ;;
         effectskey) cmd_fx_effectskey "${1:-}" ;;
         scan)     if [[ "${1:-}" == --cached ]]; then
                       if [[ -s "$FX_CACHE/scan.json" ]]; then cat "$FX_CACHE/scan.json"; else echo '[]'; fi

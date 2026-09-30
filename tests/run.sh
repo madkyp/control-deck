@@ -1116,6 +1116,7 @@ export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0 CONTROL_DECK_R
        CONTROL_DECK_FF_D3DC_URL="file://$RS/ff" CONTROL_DECK_FF_D3DC_SHA64="$FFSHA" CONTROL_DECK_FF_D3DC_SHA32="$FFSHA" \
        CONTROL_DECK_FX_PACKAGES_URL="file://$FXS/EffectPackages.ini" CONTROL_DECK_SFX_URL="file://$FXS/sfx" \
        CONTROL_DECK_AWACY_URL="file://$FXS/awacy.json" CONTROL_DECK_STEAM_STORE_API="file://$FXS/store-4002.json#"
+mkdir -p "$HOME/Pictures"; export CONTROL_DECK_PICTURES="$HOME/Pictures"
 man 5000 "Story Game" StoryGame 100
 SG="$ST/steamapps/common/StoryGame"; mkdir -p "$SG/Binaries/Win64" "$SG/Redist"
 mkpe "$SG/StoryGame.exe" kernel32.dll 0x8664
@@ -1142,6 +1143,8 @@ eq "dxgi.dll → ReShade64 beside the Shipping exe" "$(readlink "$W/dxgi.dll")" 
 eq "d3dcompiler_47 linked (64-bit)" "$(readlink "$W/d3dcompiler_47.dll")" "$FXB/d3dcompiler_47.dll.64"
 has "ReShade.ini: shaders searched recursively (Windows path)" "$(cat "$W/ReShade.ini")" 'EffectSearchPaths=Z:'"${HOME//\//\\}"'\.local\share\control-deck\reshade\Shaders\**'
 has "…preset kept in the deck's folder" "$(cat "$W/ReShade.ini")" 'PresetPath=Z:'"${HOME//\//\\}"'\.local\share\control-deck\gaming\fx\steam_5000\ReShadePreset.ini'
+has "screenshots go to Pictures/ReShade/<game>" "$(cat "$W/ReShade.ini")" 'SavePath=Z:'"${HOME//\//\\}"'\Pictures\ReShade\Story Game'
+yes "…folder created" "[[ -d '$HOME/Pictures/ReShade/Story Game' ]]"
 printf '#!/bin/sh\necho "o=$WINEDLLOVERRIDES vkb=$ENABLE_VKBASALT"\n' > "$T/fake/rsgame"; chmod +x "$T/fake/rsgame"
 "$CD" fx set steam:5000 sfx:501 >/dev/null 2>&1 || true
 printf -- '--> Nice preset\r\nTechniques=Vibrance@Vibrance.fx,DOF@DOF.fx,Missing@Missing.fx\r\n\r\n[Vibrance.fx]\r\nVibrance=0.300000\r\n' > "$FXS/sfx/games/preset/501/download/index.html"

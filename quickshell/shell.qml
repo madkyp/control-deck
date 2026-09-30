@@ -360,7 +360,7 @@ ShellRoot {
                 [fxActive && fx.wrapped === true && fxReady, "Play and tweak",
                  rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). "
                       + ((fx.effectsKey || "End") !== "None" ? (fx.effectsKey || "End").toUpperCase() + " switches all effects on/off. " : "")
-                      + "Turn on Performance Mode once you like it."
+                      + "Turn on Performance Mode once you like it. Screenshots (PRINT SCREEN): " + (fx.shotsDir || "~/Pictures/ReShade") + "."
                     : "Launch the game; " + key + " turns the effects on/off to compare."]
             ];
         }

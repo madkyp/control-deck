@@ -583,6 +583,13 @@ signal, e.g. Steam's STOP) isn't treated as a crash.
   useless variables and sets ReShade up again, keeping the look; vkBasalt
   points to FX → INSTALL.
 
+### ReShade screenshots
+`[SCREENSHOT] SavePath` in each game's ReShade.ini points to
+`<XDG Pictures>/ReShade/<game name>`, here `~/Imágenes/ReShade/…`. ReShade
+reads ini paths as UTF-8 (`std::filesystem::u8path` in `ini_file.hpp`), so
+the accent is fine. It's set when ReShade is installed in a game, and
+`fx screenshots` updates the games already set up.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |
