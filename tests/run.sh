@@ -37,6 +37,7 @@ case "$*" in
     *"--jsonout list"*) [[ -n "${FAKE_SNAPLIST:-}" ]] && cat "$FAKE_SNAPLIST" ;;
 esac'
 stub gtk-update-icon-cache 'exit 0'
+stub steam 'echo "steam $*" >> "'"$T"'/steam.log"'
 stub pgrep '[[ -n "${FAKE_FOSSILIZE:-}" && "$*" == *fossilize* ]] && exit 0; exit 1'
 stub xdg-open 'exit 0'
 stub checkupdates 'printf "%s" "${FAKE_UPDATES:-}"'
@@ -734,6 +735,59 @@ yes "fresh driver cache kept" "[[ -f '$SCD/200/nvidiav1/GLCache/fresh.bin' ]]"
 yes "all: every part of that game gone" "[[ -d '$SCD/200' && -z \"\$(ls -A '$SCD/200')\" ]]"
 "$CD" shaderclean 'steam:../x' >/dev/null 2>&1; eq "bad target refused" "$?" 2
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_PACMAN_LOG
+
+section "Gaming: A/B benchmark"
+export CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
+mh_csv() {   # file frametime… — a MangoHud 0.8 per-frame log
+    local out="$1" ft; shift
+    mkdir -p "$(dirname "$out")"
+    { echo "os,cpu,gpu,ram,kernel,driver,cpuscheduler"; echo "Arch,CPU,GPU,16,6.x,,schedutil"
+      echo "fps,frametime,cpu_load,cpu_power,gpu_load,cpu_temp,gpu_temp,gpu_core_clock,gpu_mem_clock,gpu_vram_used,gpu_power,ram_used,swap_used,process_rss,cpu_mhz,elapsed"
+      for ft in "$@"; do echo "0,$ft,20,0,90,60,70,0,0,0,0,0,0,0,0,0"; done; } > "$out"
+}
+fts=(); for i in $(seq 990); do fts+=(10); done; for i in $(seq 10); do fts+=(40); done; fts+=(99999)
+mh_csv "$T/bench.csv" "${fts[@]}"
+BS="$(bash -c 'source "$1"; bench_stats "$2"' _ "$CD" "$T/bench.csv")"
+eq "frames (pause over 5 s dropped)" "$(jq -r .frames <<<"$BS")" 1000
+eq "average FPS"  "$(jq -r .avgFps <<<"$BS")" 97.1
+eq "1 % low"      "$(jq -r .low1 <<<"$BS")" 25
+eq "p99 frametime" "$(jq -r .p99ms <<<"$BS")" 10
+eq "spikes counted" "$(jq -r .spikes <<<"$BS")" 10
+eq "loads averaged" "$(jq -r '"\(.cpuLoad)/\(.gpuLoad)"' <<<"$BS")" "20/90"
+"$CD" bench set steam:100 duration=3 >/dev/null 2>&1; eq "duration below 5 s refused" "$?" 2
+"$CD" bench set steam:100 A 'env=X=1' >/dev/null
+"$CD" bench set steam:100 duration=30 delay=10 A label=stock B label=wayland 'env=PROTON_ENABLE_WAYLAND=1' 'args=-vulkan' >/dev/null
+eq "variants saved" "$("$CD" bench get steam:100 | jq -r '"\(.A.label)/\(.B.label)/\(.B.env)/\(.duration)"')" "stock/wayland/PROTON_ENABLE_WAYLAND=1/30"
+"$CD" steamwrap 100 off >/dev/null 2>&1
+"$CD" bench run steam:100 B >/dev/null 2>&1; eq "run refused unless Steam launches it through the deck" "$?" 3
+"$CD" steamwrap 100 on >/dev/null
+rm -f "$T/steam.log"
+"$CD" bench run steam:100 B >/dev/null
+has "run launches the game through Steam" "$(cat "$T/steam.log" 2>/dev/null)" "steam://rungameid/100"
+printf '#!/bin/sh\necho "MH=$MANGOHUD_CONFIG W=$PROTON_ENABLE_WAYLAND args=$*"\n' > "$T/fake/bgame"; chmod +x "$T/fake/bgame"
+O="$(SteamAppId=100 "$CD" run "$T/fake/bgame")"
+has "armed launch logs frames into the variant folder" "$O" "output_folder=$HOME/.local/share/control-deck/gaming/bench/steam_100/B,autostart_log=10,log_duration=30"
+has "variant env applied" "$O" "W=1"
+has "variant args applied" "$O" "args=-vulkan"
+O="$(SteamAppId=100 "$CD" run "$T/fake/bgame")"
+hasnt "armed only once: the next launch is normal" "$O" "output_folder="
+mapfile -t fts < <(for i in $(seq 100); do echo 20; done)
+mh_csv "$HOME/.local/share/control-deck/gaming/bench/steam_100/A/game_1.csv" "${fts[@]}"
+mapfile -t fts < <(for i in $(seq 100); do echo 10; done)
+mh_csv "$HOME/.local/share/control-deck/gaming/bench/steam_100/B/game_2.csv" "${fts[@]}"
+BG="$("$CD" bench get steam:100)"
+eq "A vs B compared (B doubles the FPS)" "$(jq -r '"\(.results.A.avgFps) \(.results.B.avgFps) \(.compare.avgFps)%"' <<<"$BG")" "50 100 100%"
+"$CD" bench set steam:100 B proton=NotAProton >/dev/null 2>&1; eq "unknown Proton refused" "$?" 2
+"$CD" bench set steam:100 B proton=GE-Proton9-1 >/dev/null
+CONTROL_DECK_STEAM_RUNNING=1 "$CD" bench run steam:100 B >/dev/null 2>&1; eq "Proton variant needs Steam closed" "$?" 3
+"$CD" bench run steam:100 B >/dev/null
+eq "Proton switched for the run" "$(bash -c 'source "$1"; vdf_get "$2" InstallConfigStore/Software/Valve/Steam/CompatToolMapping/100 name' _ "$CD" "$ST/config/config.vdf")" GE-Proton9-1
+eq "original Proton remembered" "$("$CD" bench get steam:100 | jq -r .originalProton)" default
+"$CD" bench restore steam:100 >/dev/null
+hasnt "restore puts the default back" "$(cat "$ST/config/config.vdf")" '"100"'
+"$CD" bench clear steam:100 >/dev/null
+eq "clear drops the results" "$("$CD" bench get steam:100 | jq -r '.results.A')" null
+unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

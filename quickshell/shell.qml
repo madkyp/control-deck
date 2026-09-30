@@ -300,6 +300,7 @@ ShellRoot {
         property var    pdbStat: ({})       // local ProtonDB index status
         property var    shaders: ({})       // shader caches (per game + driver)
         property string confirmShader: ""   // target awaiting a second click
+        property var    bench: ({})         // A/B benchmark of the selected game
         property var    sugRecommended: (sug.suggestions || []).filter(function (x) { return x.recommended; })
         property var    sugOthers: (sug.suggestions || []).filter(function (x) { return x.foryou && !x.recommended; })
         property bool   gameBusy: gamesProc.running || gameProc.running || gprofProc.running
@@ -373,6 +374,22 @@ ShellRoot {
             if (confirmShader !== key) { confirmShader = key; return; }
             runGame(args, label);
         }
+        function loadBench() {
+            [benchA, benchB].forEach(function (w) {
+                var x = bench[w.v] || {};
+                w.label = x.label || w.v; w.env = x.env || ""; w.args = x.args || "";
+                w.gm = x.gamemode || ""; w.proton = x.proton || "";
+            });
+        }
+        function saveBench(extra) {
+            var a = ["bench", "set", selGame];
+            [benchA, benchB].forEach(function (w) {
+                a = a.concat([w.v, "label=" + w.label.trim(), "env=" + w.env.trim(), "args=" + w.args.trim(),
+                              "gamemode=" + w.gm, "proton=" + w.proton]);
+            });
+            runGame(a.concat(extra || []), "SAVING…");
+        }
+        function pct(v) { return v === undefined || v === null ? "" : (v > 0 ? "+" : "") + v + "%"; }
         function dateOfEpoch(e) { return e ? new Date(e * 1000).toISOString().substring(0, 10) : "?"; }
         function saveGameProfile() {
             runGame(["gprofile", "set", selGame,
@@ -831,6 +848,7 @@ ShellRoot {
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
+                if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -849,6 +867,13 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { try { win.pdbStat = JSON.parse(text); } catch (e) { win.pdbStat = {}; } } }
         }
         Process { id: seenProc }
+        Process {
+            id: benchProc
+            command: [win.scriptPath, "bench", "get", win.selGame]
+            stdout: StdioCollector {
+                onStreamFinished: { try { win.bench = JSON.parse(text); } catch (e) { win.bench = {}; } win.loadBench(); benchChart.requestPaint(); }
+            }
+        }
         Process {
             id: shaderProc
             command: [win.scriptPath, "shadercache"]
@@ -928,6 +953,50 @@ ShellRoot {
         }
 
         component BarSep: Rectangle { width: 1; Layout.preferredHeight: 46; color: pal.border }
+        // one variant of an A/B benchmark
+        component BenchVariant: Rectangle {
+            id: bv
+            property string v
+            property color tint
+            property alias label: bvLabel.text
+            property alias env: bvEnv.text
+            property alias args: bvArgs.text
+            property string gm: ""        // "", "true", "false"
+            property string proton: ""    // "" = as is
+            Layout.fillWidth: true
+            implicitHeight: bvCol.implicitHeight + 16
+            radius: 8; color: pal.card; border.width: 1; border.color: tint
+            ColumnLayout {
+                id: bvCol
+                anchors.fill: parent; anchors.margins: 8; spacing: 6
+                RowLayout {
+                    spacing: 6
+                    Text { text: bv.v; color: bv.tint; font.family: win.mono; font.pixelSize: 13; font.bold: true }
+                    Field { id: bvLabel; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "name" }
+                }
+                Field { id: bvEnv; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: "extra env: VAR=1 VAR2=x" }
+                Field { id: bvArgs; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: "args (replace the profile's)" }
+                Flow {
+                    Layout.fillWidth: true; spacing: 4
+                    Text { text: "GAMEMODE"; color: pal.dim; font.family: win.mono; font.pixelSize: 8; height: 22; verticalAlignment: Text.AlignVCenter }
+                    Repeater {
+                        model: [["", "PROFILE"], ["true", "ON"], ["false", "OFF"]]
+                        delegate: Chip { required property var modelData; label: modelData[1]; implicitHeight: 22
+                                         active: bv.gm === modelData[0]; onClicked: bv.gm = modelData[0] }
+                    }
+                }
+                Flow {
+                    Layout.fillWidth: true; spacing: 4
+                    Text { text: "PROTON"; color: pal.dim; font.family: win.mono; font.pixelSize: 8; height: 22; verticalAlignment: Text.AlignVCenter }
+                    Repeater {
+                        model: [{ name: "", display: "AS IS" }].concat(win.tools)
+                        delegate: Chip { required property var modelData; label: modelData.display; implicitHeight: 22
+                                         active: bv.proton === modelData.name; onClicked: bv.proton = modelData.name }
+                    }
+                }
+            }
+        }
+
 
         component NavTab: Item {
             property string label
@@ -2484,6 +2553,7 @@ ShellRoot {
                     Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
                     Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
+                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame) benchProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -2732,6 +2802,150 @@ ShellRoot {
                     }
                 }
 
+
+
+                // ---- BENCH (A/B) ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "bench"
+                    spacing: 8
+
+                    Item {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        visible: win.selGame === ""
+                        EmptyHint { title: "PICK A GAME IN LIBRARY FIRST" }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 8
+                        visible: win.selGame !== ""
+
+                        Section { Layout.fillWidth: true; label: "A / B"; info: win.selGameName }
+
+                        // the two variants side by side
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 10
+                            BenchVariant { id: benchA; v: "A"; tint: pal.accent }
+                            BenchVariant { id: benchB; v: "B"; tint: pal.pink }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 6
+                            Text { text: "MEASURE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                            Repeater {
+                                model: [30, 60, 120, 300]
+                                delegate: Chip { required property int modelData; label: modelData + " s"; active: win.bench.duration === modelData
+                                                 onClicked: win.saveBench(["duration=" + modelData]) }
+                            }
+                            Text { text: "AFTER"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.leftMargin: 8 }
+                            Repeater {
+                                model: [5, 15, 30, 60]
+                                delegate: Chip { required property int modelData; label: modelData + " s"; active: win.bench.delay === modelData
+                                                 onClicked: win.saveBench(["delay=" + modelData]) }
+                            }
+                            Item { Layout.fillWidth: true }
+                            MiniBtn { width: 70; label: "SAVE"; on: !win.gameBusy; onClicked: win.saveBench([]) }
+                            MiniBtn { width: 70; label: "RUN A"; tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
+                                      onClicked: win.runGame(["bench", "run", win.selGame, "A"], "RUN A…") }
+                            MiniBtn { width: 70; label: "RUN B"; tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
+                                      onClicked: win.runGame(["bench", "run", win.selGame, "B"], "RUN B…") }
+                        }
+                        Hint {
+                            text: !win.selGameWrapped ? "The game must launch through Control Deck: LIBRARY → USE IN STEAM first."
+                                  : "RUN starts the game from Steam; MangoHud records every frame after the delay, for the measured time. Play the same scene in both runs, quit the game, then REFRESH. Variants changing Proton need Steam closed."
+                                    + (win.bench.originalProton ? "  Proton was changed for a run: RESTORE PROTON when done." : "")
+                        }
+
+                        // results
+                        Rectangle {
+                            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 150
+                            radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
+                            EmptyHint {
+                                visible: !win.bench.results || (!win.bench.results.A && !win.bench.results.B)
+                                title: "NO RUNS YET"
+                            }
+                            RowLayout {
+                                anchors.fill: parent; anchors.margins: 10; spacing: 12
+                                visible: !!win.bench.results && (!!win.bench.results.A || !!win.bench.results.B)
+                                GridLayout {
+                                    columns: 4; rowSpacing: 4; columnSpacing: 12
+                                    Layout.alignment: Qt.AlignTop
+                                    Repeater {
+                                        model: [["", "A", "B", "Δ B vs A"],
+                                                ["Avg FPS", "avgFps", "avgFps", "avgFps"], ["1% low", "low1", "low1", "low1"],
+                                                ["0.1% low", "low01", "low01", ""], ["p99 frame ms", "p99ms", "p99ms", "p99ms"],
+                                                ["Spikes", "spikes", "spikes", ""], ["CPU load %", "cpuLoad", "cpuLoad", ""],
+                                                ["GPU load %", "gpuLoad", "gpuLoad", ""], ["GPU max °C", "gpuTempMax", "gpuTempMax", ""],
+                                                ["Frames", "frames", "frames", ""]]
+                                        delegate: Item {
+                                            required property var modelData
+                                            required property int index
+                                            Layout.columnSpan: 4; Layout.fillWidth: true; implicitHeight: 16
+                                            RowLayout {
+                                                anchors.fill: parent; spacing: 12
+                                                property var ra: (win.bench.results || {}).A
+                                                property var rb: (win.bench.results || {}).B
+                                                Text { Layout.preferredWidth: 96; text: modelData[0]; color: pal.dim; font.family: win.mono; font.pixelSize: 10 }
+                                                Text { Layout.preferredWidth: 60; color: index === 0 ? pal.accent : pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: index === 0
+                                                       text: index === 0 ? ((win.bench.A || {}).label || "A") : (parent.ra ? String(parent.ra[modelData[1]]) : "—") }
+                                                Text { Layout.preferredWidth: 60; color: index === 0 ? pal.pink : pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: index === 0
+                                                       text: index === 0 ? ((win.bench.B || {}).label || "B") : (parent.rb ? String(parent.rb[modelData[2]]) : "—") }
+                                                Text {
+                                                    Layout.preferredWidth: 70; font.family: win.mono; font.pixelSize: 10
+                                                    property var d: index === 0 || modelData[3] === "" || !win.bench.compare ? undefined : win.bench.compare[modelData[3]]
+                                                    // higher FPS is better; lower frametime is better
+                                                    color: index === 0 ? pal.dim : (d === undefined ? pal.dim
+                                                           : ((modelData[3] === "p99ms" ? -d : d) >= 0 ? pal.ok : pal.bad))
+                                                    text: index === 0 ? modelData[3] : (d === undefined ? "" : win.pct(d))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // frametime curves (worst frame per bucket)
+                                Canvas {
+                                    id: benchChart
+                                    Layout.fillWidth: true; Layout.fillHeight: true
+                                    onWidthChanged: requestPaint()
+                                    onHeightChanged: requestPaint()
+                                    onPaint: {
+                                        var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height);
+                                        var r = win.bench.results || {}, a = r.A ? r.A.series : [], b = r.B ? r.B.series : [];
+                                        var p99 = Math.max(r.A ? r.A.p99ms : 0, r.B ? r.B.p99ms : 0);
+                                        var ymax = Math.max(p99 * 1.6, 5);
+                                        ctx.strokeStyle = "#2a2740"; ctx.lineWidth = 1;
+                                        [16.7, 33.3].forEach(function (ms) {
+                                            if (ms > ymax) return;
+                                            var y = height - ms / ymax * height;
+                                            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
+                                            ctx.fillStyle = "#6a6580"; ctx.font = "9px monospace"; ctx.fillText(ms + " ms", 2, y - 2);
+                                        });
+                                        function line(sr, col) {
+                                            if (!sr || sr.length < 2) return;
+                                            ctx.strokeStyle = col; ctx.lineWidth = 1.2; ctx.beginPath();
+                                            for (var i = 0; i < sr.length; i++) {
+                                                var x = i / (sr.length - 1) * width, y = height - Math.min(sr[i], ymax) / ymax * height;
+                                                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                                            }
+                                            ctx.stroke();
+                                        }
+                                        line(a, "#b9a3e3"); line(b, "#d9a7d0");
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 8
+                            Item { Layout.fillWidth: true }
+                            MiniBtn { width: 110; label: "REFRESH RESULTS"; primary: false; on: !win.gameBusy; onClicked: benchProc.running = true }
+                            MiniBtn { width: 110; label: "RESTORE PROTON"; primary: false; visible: !!win.bench.originalProton; on: !win.gameBusy
+                                      onClicked: win.runGame(["bench", "restore", win.selGame], "RESTORING…") }
+                            MiniBtn { width: 70; label: "CLEAR"; tint: pal.bad; primary: false; on: !win.gameBusy
+                                      onClicked: win.runGame(["bench", "clear", win.selGame], "CLEARING…") }
+                        }
+                    }
+                }
 
                 // ---- SHADERS ----
                 ColumnLayout {

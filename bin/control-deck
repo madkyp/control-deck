@@ -2748,6 +2748,10 @@ cmd_run() {
     mkdir -p "$STATE_DIR/logs"
     local rlog="$STATE_DIR/logs/run.log"
     printf '%s  %s  %s\n' "$(date '+%F %T')" "$key" "$*" >> "$rlog"
+    p="$(bench_overlay "$key" "$p")"
+    # (runs in a subshell above, so the benchmark's MangoHud logging is exported here)
+    local mhc; mhc="$(jq -r '.mangohudConfig // empty' <<<"$p")"
+    [[ -n "$mhc" ]] && export MANGOHUD_CONFIG="$mhc"
 
     while IFS=$'\t' read -r name val; do
         [[ -n "$name" ]] && export "$name=$val"
@@ -3351,6 +3355,151 @@ cmd_shaderclean() {
     history_add "shader cache clean" gaming "$target${2:+ $2}" 0
 }
 
+# --- A/B benchmark ----------------------------------------------------------------
+# Two launch variants of the same game, each run once through the wrapper with
+# MangoHud logging every frame; the per-frame CSV (verified format, MangoHud
+# 0.8.x: 2 system-info lines, a column header, one row per frame with
+# frametime in ms) is turned into avg FPS, 1 % / 0.1 % lows and frametimes.
+# MangoHud's own *_summary.csv is ignored: its values are unreliable.
+BENCH_DIR="$GAMING_DIR/bench"
+BENCH_ARMED="$BENCH_DIR/armed"            # key<TAB>variant<TAB>epoch — one launch only
+
+bench_path() { echo "$BENCH_DIR/${1//:/_}"; }
+bench_cfg() {
+    local f; f="$(bench_path "$1")/config.json"
+    if [[ -s "$f" ]]; then cat "$f"
+    else echo '{"duration":60,"delay":15,"A":{"label":"A"},"B":{"label":"B"}}'; fi
+}
+
+# frame stats of one MangoHud per-frame CSV → JSON
+bench_stats() {
+    local f="$1"
+    [[ -s "$f" ]] || { echo null; return; }
+    awk -F, 'NR == 3 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+             NR > 3 && col["frametime"] { print $(col["frametime"]) "\t" $(col["cpu_load"]) "\t" $(col["gpu_load"]) "\t" $(col["gpu_temp"]) "\t" $(col["cpu_temp"]) }' "$f" |
+    # frames over 5 s are pauses/loading (or MangoHud glitches), not performance
+    jq -Rsc 'split("\n") | map(select(. != "") | split("\t") | map(tonumber? // 0)) | map(select(.[0] > 0 and .[0] < 5000)) as $r
+        | if ($r | length) < 10 then null else
+          ($r | map(.[0])) as $ft | ($ft | length) as $n | ($ft | add / $n) as $avg
+          | ($ft | sort) as $asc | ($asc | reverse) as $desc
+          | def lowavg($p): ([($n * $p | ceil), 1] | max) as $k | 1000 / ($desc[:$k] | add / $k);
+          {frames:$n, seconds:(($ft | add) / 1000 | floor),
+           avgFps:(1000 / $avg * 10 | round / 10), low1:(lowavg(0.01) * 10 | round / 10), low01:(lowavg(0.001) * 10 | round / 10),
+           p99ms:($asc[(($n - 1) * 0.99 | floor)] * 100 | round / 100), maxms:($desc[0] * 100 | round / 100),
+           spikes:([$ft[] | select(. > $avg * 2.5)] | length),
+           cpuLoad:(($r | map(.[1]) | add / $n) | round), gpuLoad:(($r | map(.[2]) | add / $n) | round),
+           gpuTempMax:($r | map(.[3]) | max), cpuTempMax:($r | map(.[4]) | max),
+           # frametime curve for the chart: ≤ 240 buckets, worst frame of each (keeps stutter visible)
+           series:(([($n / 240 | ceil), 1] | max) as $b | [range(0; $n; $b) as $i | $ft[$i:$i+$b] | max * 100 | round / 100])}
+          end'
+}
+
+# newest per-frame log of a variant (MangoHud names it <exe>_<date>.csv)
+bench_log() {
+    local f best="" bt=0 t
+    for f in "$(bench_path "$1")/$2"/*.csv; do
+        [[ -f "$f" && "$f" != *_summary.csv ]] || continue
+        t="$(stat -c %Y "$f")"; (( t >= bt )) && { best="$f"; bt=$t; }
+    done
+    [[ -n "$best" ]] && echo "$best"
+}
+
+bench_get() {
+    local key="$1" a b
+    a="$(bench_stats "$(bench_log "$key" A)")"; b="$(bench_stats "$(bench_log "$key" B)")"
+    bench_cfg "$key" | jq -c --argjson a "$a" --argjson b "$b" '. + {results:{A:$a, B:$b}}
+        | if $a != null and $b != null then .compare = {
+            avgFps:((($b.avgFps - $a.avgFps) / $a.avgFps * 1000 | round) / 10),
+            low1:((($b.low1 - $a.low1) / $a.low1 * 1000 | round) / 10),
+            p99ms:((($b.p99ms - $a.p99ms) / $a.p99ms * 1000 | round) / 10)} else . end'
+}
+
+# cmd_run hook: if a benchmark launch is armed for this game, overlay the
+# variant on the profile, force MangoHud logging into the variant's folder,
+# and disarm (a normal launch afterwards is untouched)
+bench_overlay() {   # key profile-json → profile-json (+ .mangohudConfig for the wrapper to export)
+    local key="$1" p="$2" akey variant when cfg dir
+    [[ -f "$BENCH_ARMED" ]] || { echo "$p"; return; }
+    IFS=$'\t' read -r akey variant when < "$BENCH_ARMED"
+    if [[ "$akey" != "$key" ]] || (( $(date +%s) - ${when:-0} > 1800 )); then echo "$p"; return; fi
+    rm -f "$BENCH_ARMED"
+    cfg="$(bench_cfg "$key")"; dir="$(bench_path "$key")/$variant"
+    mkdir -p "$dir"; find "$dir" -name '*.csv' -delete
+    local mhc
+    mhc="output_folder=$dir,autostart_log=$(jq -r '.delay' <<<"$cfg"),log_duration=$(jq -r '.duration' <<<"$cfg"),log_interval=0"
+    echo "  benchmark $variant armed → $dir" >> "$STATE_DIR/logs/run.log"
+    jq -c --arg mhc "$mhc" --argjson v "$(jq -c --arg x "$variant" '.[$x] // {}' <<<"$cfg")" '
+        . + {mangohud:true, mangohudConfig:$mhc}
+        + (if ($v.gamemode // "") != "" then {gamemode:($v.gamemode == "true")} else {} end)
+        + (if ($v.args // "") != "" then {args:$v.args} else {} end)
+        + (if ($v.prefix // "") != "" then {prefix:$v.prefix} else {} end)
+        + {env:(.env + ($v.env // "" | split(" ") | map(select(test("^[A-Za-z_][A-Za-z0-9_]*=")) | {key:split("=")[0], value:(split("=")[1:] | join("="))}) | from_entries))}' <<<"$p"
+}
+
+# bench get|set|run|restore|clear <key> …
+cmd_bench() {
+    local sub="$1" key="$2"; shift 2 2>/dev/null
+    [[ "$key" =~ ^steam:[0-9]+$ ]] || { err "use: bench get|set|run|restore|clear steam:<appid> …"; return 2; }
+    local id="${key#steam:}" dir cfg; dir="$(bench_path "$key")"
+    case "$sub" in
+        get) bench_get "$key" ;;
+        set)
+            local kv f v var="" patch
+            cfg="$(bench_cfg "$key")"
+            for kv in "$@"; do
+                f="${kv%%=*}"; v="${kv#*=}"
+                case "$f" in
+                    A|B) var="$f"; continue ;;
+                    duration|delay)
+                        [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 5 && v <= 900 )) || { err "$f must be 5–900 seconds"; return 2; }
+                        cfg="$(jq -c --arg f "$f" --argjson v "$v" '.[$f] = $v' <<<"$cfg")"; continue ;;
+                    label|env|args|prefix|gamemode|proton)
+                        [[ -n "$var" ]] || { err "say which variant first: A or B"; return 2; }
+                        [[ "$v" != *[\"\'\`\$\;\&\|\<\>]* ]] || { err "$f can't contain quotes or shell characters"; return 2; }
+                        [[ "$f" == gamemode && -n "$v" && "$v" != true && "$v" != false ]] && { err "gamemode: true, false or empty"; return 2; }
+                        if [[ "$f" == proton && -n "$v" ]] && ! cmd_compattools | jq -e --arg t "$v" 'any(.[]; .name == $t)' >/dev/null; then
+                            err "unknown Proton: $v"; return 2; fi
+                        patch="$(jq -cn --arg f "$f" --arg v "$v" '{($f): $v}')"
+                        cfg="$(jq -c --arg x "$var" --argjson p "$patch" '.[$x] = ((.[$x] // {}) + $p)' <<<"$cfg")" ;;
+                    *) err "unknown benchmark field: $f"; return 2 ;;
+                esac
+            done
+            mkdir -p "$dir"; printf '%s\n' "$cfg" > "$dir/config.json"
+            log "✔ Benchmark of $key saved." ;;
+        run)
+            local variant="$1" lc proton cur cfgv
+            [[ "$variant" == A || "$variant" == B ]] || { err "use: bench run $key A|B"; return 2; }
+            have mangohud || { err "MangoHud is needed to measure frames (pacman -S mangohud lib32-mangohud)"; return 4; }
+            lc="$(steam_localconfig)"
+            [[ -f "$lc" && "$(vdf_get "$lc" "$LOCALCONFIG_APPS/$id" LaunchOptions)" == *"control-deck run"* ]] \
+                || { err "the game must be launched through Control Deck: USE IN STEAM first"; return 3; }
+            cfg="$(bench_cfg "$key")"; proton="$(jq -r --arg x "$variant" '.[$x].proton // ""' <<<"$cfg")"
+            if [[ -n "$proton" ]]; then
+                steam_running && { err "this variant changes Proton: close Steam first"; return 3; }
+                cur="$(vdf_get "$(steam_root)/config/config.vdf" "$COMPAT_MAPPING/$id" name)"
+                if [[ "$(jq -r 'has("originalProton")' <<<"$cfg")" != true ]]; then
+                    cfg="$(jq -c --arg o "${cur:-default}" '.originalProton = $o' <<<"$cfg")"
+                    mkdir -p "$dir"; printf '%s\n' "$cfg" > "$dir/config.json"
+                fi
+                [[ "$cur" != "$proton" ]] && { cmd_steamcompat "$id" "$proton" || return 4; }
+            fi
+            mkdir -p "$BENCH_DIR"
+            printf '%s\t%s\t%s\n' "$key" "$variant" "$(date +%s)" > "$BENCH_ARMED"
+            cfgv="$(jq -r '"logging starts after \(.delay) s and lasts \(.duration) s"' <<<"$cfg")"
+            log "→ Launching $key for run $variant ($cfgv). Play the same scene for both runs, then quit the game."
+            setsid -f steam "steam://rungameid/$id" >/dev/null 2>&1 || true
+            history_add "benchmark $variant" steam "$key" 0 ;;
+        restore)
+            local orig; orig="$(bench_cfg "$key" | jq -r '.originalProton // ""')"
+            [[ -z "$orig" ]] && { log "✔ Nothing to restore: no variant changed Proton."; return 0; }
+            cmd_steamcompat "$id" "$orig" || return $?
+            bench_cfg "$key" | jq -c 'del(.originalProton)' > "$dir/config.json"
+            log "✔ Proton restored to $orig." ;;
+        clear) rm -rf "$dir/A" "$dir/B" "$BENCH_ARMED"; log "✔ Benchmark results of $key cleared." ;;
+        *) err "use: bench get|set|run|restore|clear <key> …"; return 2 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
@@ -3417,6 +3566,7 @@ Gaming
   gtips <appid…> / gseen <key>  Suggestion counts per game · mark a new game as seen
   shadercache                   Shader caches per game + driver caches, stale/orphan detection (JSON)
   shaderclean <target> [part]   steam:<appid> [driver|all] · orphans · stale · global:<id>
+  bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
 EOF
 }
 
@@ -3503,6 +3653,7 @@ main() {
         gtips)       cmd_gtips "$@" ;;
         gseen)       cmd_gseen "$1" ;;
         shadercache) cmd_shadercache ;;
+        bench)       cmd_bench "$@" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

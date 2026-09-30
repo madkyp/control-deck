@@ -100,6 +100,29 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   uses; verified here only on NVIDIA.
 - CLI: `shadercache`, `shaderclean steam:<appid> [driver|all] | orphans | stale | global:<id>`.
 
+### 2.3 A/B benchmark — `GAMING → BENCH`
+- Two variants of the selected game's launch: extra env vars, args (replace
+  the profile's), gamemode on/off/profile and Proton version. Measure time
+  (30–300 s) and a delay before measuring (skips loading screens).
+- **RUN A/B** arms the wrapper for exactly one launch and starts the game from
+  Steam (`steam://rungameid/<appid>`). The wrapper overlays the variant and
+  turns on MangoHud frame logging (`output_folder`, `autostart_log`,
+  `log_duration`, `log_interval=0`) into the variant's folder; the next normal
+  launch is untouched. A variant that changes Proton needs Steam closed; the
+  original Proton is remembered and **RESTORE PROTON** puts it back.
+- MangoHud's per-frame CSV was verified on this system (0.8.4): 2 system-info
+  lines, a column header, one row per frame (`frametime` in ms). Its own
+  `*_summary.csv` reported "Average FPS 0.0" and is ignored; frames longer than
+  5 s (pauses, and one bogus 16 330 800 ms frame seen in a real log) are
+  dropped. Stats: average FPS, 1 % and 0.1 % lows (average of the slowest
+  1 % / 0.1 % frames), p99 frametime, spikes (> 2.5× the average frametime),
+  CPU/GPU load and max temperatures. Cross-check: the 1 % low of a real vkcube
+  run (59.8) matched MangoHud's own (59.77).
+- The UI compares A and B (% change, green = better) and draws both frametime
+  curves (worst frame per bucket, so stutter stays visible).
+- Needs: `mangohud` (+`lib32-mangohud`), the game launched through the deck.
+- CLI: `bench get|set|run|restore|clear steam:<appid> …`.
+
 ### 2.5 Compatibility manager (Steam + ProtonDB)
 - ProtonDB **summary** per game: tier, score, report count, trending tier,
   confidence. Only the public summary endpoint is used
@@ -171,7 +194,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.3 A/B benchmark · 2.4 GPU tuner (plan: LACT
+2.4 GPU tuner (plan: LACT
 backend, which supports NVIDIA and AMD) · 2.6 prefixes · 2.7 save backups ·
 2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
