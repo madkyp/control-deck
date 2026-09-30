@@ -306,6 +306,36 @@ ShellRoot {
         property var    pdbStat: ({})       // local ProtonDB index status
         property var    shaders: ({})       // shader caches (per game + driver)
         property var    health: ({})        // gaming health checks
+        property var    fx: ({})            // visual shaders: install state + selected game
+        property var    fxGames: []         // SweetFX DB games matching the search
+        property string fxGameId: ""
+        property var    fxPresets: []
+        property string fxMsg: ""
+        property string fxConfirm: ""       // anti-cheat games: second click applies
+        property bool   fxActive: !!fx.current && !!win.gp.fx
+        property bool   fxAnticheat: !!fx.online && fx.online.level === "anticheat"
+        function openFx() {
+            gameView = "fx"; fxConfirm = "";
+            if (selGameSource === "steam") {
+                fxStatProc.running = true;
+                if (fxQuery.text === "" || fxLastGame !== selGame) { fxQuery.text = selGameName; fxLastGame = selGame; fxSearch(selGameName); }
+            }
+        }
+        property string fxLastGame: ""
+        function fxSearch(q) {
+            if (!q || fxSearchProc.running) return;
+            fxGames = []; fxPresets = []; fxGameId = ""; fxMsg = "";
+            fxSearchProc.command = [scriptPath, "fx", "search", q]; fxSearchProc.running = true;
+        }
+        function fxLoadPresets(id) {
+            fxGameId = id; fxPresets = []; fxMsg = "Loading presets…";
+            fxPresetsProc.command = [scriptPath, "fx", "presets", id]; fxPresetsProc.running = true;
+        }
+        function fxApply(k, label) {
+            if (fxAnticheat && fxConfirm !== k) { fxConfirm = k; return; }
+            fxConfirm = "";
+            runGame(["fx", "set", selGame, k], label);
+        }
         property string copiedFix: ""       // fix command just copied (for feedback)
         property string confirmShader: ""   // target awaiting a second click
         property var    bench: ({})         // A/B benchmark of the selected game
@@ -341,6 +371,7 @@ ShellRoot {
             gameLog = ""; if (g.source === "steam") gprofProc.running = true;
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
+            fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
         }
         // is a suggestion already part of the profile being edited?
         function sugApplied(x) {
@@ -891,6 +922,7 @@ ShellRoot {
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
+                if (win.gameArgs[0] === "fx") fxStatProc.running = true;
                 if (win.selGame) gprofProc.running = true;
             }
         }
@@ -940,6 +972,30 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { try { win.health = JSON.parse(text); } catch (e) { win.health = {}; } } }
         }
         Process { id: fixCopyProc }
+        Process {
+            id: fxStatProc
+            command: [win.scriptPath, "fx", "status", win.selGame]
+            stdout: StdioCollector { onStreamFinished: { try { win.fx = JSON.parse(text); } catch (e) { win.fx = {}; } } }
+        }
+        Process {
+            id: fxSearchProc
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.fxGames = JSON.parse(text); } catch (e) { win.fxGames = []; }
+                    if (win.fxGames.length === 0) win.fxMsg = "No game with that name on SweetFX Settings DB: try another name, or use a quick look.";
+                    else win.fxLoadPresets(win.fxGames[0].id);
+                }
+            }
+        }
+        Process {
+            id: fxPresetsProc
+            stdout: StdioCollector {
+                onStreamFinished: {
+                    try { win.fxPresets = JSON.parse(text); } catch (e) { win.fxPresets = []; }
+                    win.fxMsg = win.fxPresets.length === 0 ? "This game has no presets yet." : win.fxPresets.length + " presets — newest first";
+                }
+            }
+        }
         Timer { id: copiedTimer; interval: 1800; onTriggered: win.copiedFix = "" }
         Process {
             id: shaderProc
@@ -2660,6 +2716,7 @@ ShellRoot {
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
                     Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame && win.selGameSource === "steam") benchProc.running = true; } }
                     Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
+                    Chip { label: "FX";      active: win.gameView === "fx";      onClicked: win.openFx() }
                     Chip { label: "HEALTH";  active: win.gameView === "health";  onClicked: { win.gameView = "health"; healthProc.running = true; } }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
@@ -2815,6 +2872,8 @@ ShellRoot {
                                 Layout.fillWidth: true; spacing: 6
                                 Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
                                 Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
+                                Chip { label: "FX"; tint: pal.ok; active: win.gp.fx === true; onClicked: win.openFx()
+                                       tip: "Visual shaders (vkBasalt): sharpening, anti-aliasing, ReShade presets" }
                                 Chip { label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; onClicked: win.gpSet("overlay", !win.gp.overlay)
                                        tip: "A CPU · GPU temperature line at the top right while the game runs (click-through, closes with the game)" }
                                 Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
@@ -3193,6 +3252,219 @@ ShellRoot {
                                       onClicked: win.runGame(["bench", "restore", win.selGame], "RESTORING…") }
                             MiniBtn { width: 70; label: "CLEAR"; tint: pal.bad; primary: false; on: !win.gameBusy
                                       onClicked: win.runGame(["bench", "clear", win.selGame], "CLEARING…") }
+                        }
+                    }
+                }
+
+                // ---- FX (visual shaders) ----
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    visible: win.gameView === "fx"
+                    spacing: 8
+
+                    EmptyHint {
+                        Layout.alignment: Qt.AlignCenter; anchors.centerIn: undefined
+                        visible: win.selGameSource !== "steam"
+                        title: "PICK A STEAM GAME IN LIBRARY"
+                    }
+
+                    // header: game · GPU · vkBasalt
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: 9
+                        visible: win.selGameSource === "steam"
+                        Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
+                        Text { text: "VISUAL SHADERS"; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
+                        Text { Layout.fillWidth: true; elide: Text.ElideRight; text: win.selGameName; color: pal.dim; font.family: win.mono; font.pixelSize: 11 }
+                        Text {
+                            text: (win.fx.gpu || "") + "  ·  " + (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : "vkBasalt not installed")
+                            color: win.fx.vkbasalt ? pal.dim : pal.amber; font.family: win.mono; font.pixelSize: 10
+                        }
+                    }
+
+                    // one-time setup
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.selGameSource === "steam" && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
+                        implicitHeight: fxSetup.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
+                        RowLayout {
+                            id: fxSetup
+                            anchors.fill: parent; anchors.margins: 10; spacing: 10
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                text: win.fx.chaotic === false && !win.fx.vkbasalt
+                                      ? "vkBasalt comes from chaotic-aur, which isn't enabled here. Enable it (or build vkbasalt + lib32-vkbasalt from the AUR), then come back."
+                                      : "One-time setup: vkBasalt (the Vulkan layer that draws the effects, 64 + 32-bit, from chaotic-aur) and the standard ReShade shaders (official packages, ~0.5 MB). Works the same on AMD and NVIDIA."
+                            }
+                            MiniBtn {
+                                visible: win.fx.chaotic !== false || win.fx.vkbasalt
+                                width: 96; height: 32; label: "INSTALL"
+                                on: !win.gameBusy
+                                onClicked: win.runGame(["fx", "install"], "INSTALLING SHADERS…")
+                            }
+                        }
+                    }
+
+                    // online / anti-cheat warning
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.selGameSource === "steam" && !!win.fx.online && win.fx.online.level !== "none"
+                        implicitHeight: fxWarn.implicitHeight + 16
+                        radius: 8; border.width: 1
+                        color: win.fxAnticheat ? "#1f0d14" : "#1a150c"
+                        border.color: win.fxAnticheat ? pal.bad : pal.amber
+                        Text {
+                            id: fxWarn
+                            anchors.fill: parent; anchors.margins: 8
+                            wrapMode: Text.WordWrap; font.family: win.mono; font.pixelSize: 10
+                            color: win.fxAnticheat ? pal.bad : pal.amber
+                            text: win.fxAnticheat
+                                  ? "⚠ ONLINE GAME WITH ANTI-CHEAT (" + win.fx.online.anticheats.join(", ") + "). Shaders hook into the game's rendering; an anti-cheat may treat that as a modification and ban the account. Use them only if you accept that risk — applying one here asks for confirmation."
+                                  : "⚠ Online multiplayer game: some online games forbid visual mods in their rules. Check before using shaders there."
+                        }
+                    }
+
+                    // route + what's active
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.selGameSource === "steam" && !!win.fx.route
+                        implicitHeight: fxCur.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            id: fxCur
+                            anchors.fill: parent; anchors.margins: 10; spacing: 6
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                font.family: win.mono; font.pixelSize: 10
+                                color: (win.fx.route || {}).ok ? pal.dim : pal.bad
+                                text: ((win.fx.route || {}).ok ? "✓ " : "✗ ") + ((win.fx.route || {}).reason || "")
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Text {
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    font.family: win.mono; font.pixelSize: 11; font.bold: true
+                                    color: win.fxActive ? pal.ok : pal.dim
+                                    text: win.fxActive
+                                          ? "● ACTIVE: " + win.fx.current.name + "  ·  " + win.fx.current.applied + " effect" + (win.fx.current.applied > 1 ? "s" : "")
+                                            + ((win.fx.current.skipped || []).length ? "  ·  " + win.fx.current.skipped.length + " skipped" : "")
+                                          : "○ No shaders on this game"
+                                }
+                                Chip {
+                                    visible: win.fxActive && win.fx.current.source === "sfx"
+                                    label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fx.current.url)
+                                }
+                                MiniBtn {
+                                    visible: win.fxActive
+                                    width: 60; height: 28; primary: false; label: "OFF"
+                                    on: !win.gameBusy
+                                    onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                }
+                            }
+                            Repeater {
+                                model: win.fxActive ? (win.fx.current.skipped || []) : []
+                                delegate: Text {
+                                    required property var modelData
+                                    Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: "✗ " + modelData.effect + " — " + modelData.why
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                }
+                            }
+                            Text {
+                                visible: win.fxActive
+                                text: "In game: HOME turns the effects on/off to compare."
+                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                            }
+                        }
+                    }
+
+                    // quick looks (vkBasalt's own effects) + presets from the internet
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        visible: win.selGameSource === "steam" && !!win.fx.route && win.fx.route.ok
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 10; spacing: 8
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                Text { text: "QUICK LOOK"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                Repeater {
+                                    model: [["sharpen", "SHARPEN", "AMD FidelityFX CAS: crisper image, almost free"],
+                                            ["sharpen-aa", "SHARPEN + AA", "SMAA anti-aliasing, then CAS sharpening"],
+                                            ["fxaa", "FXAA", "Light anti-aliasing, softer edges"],
+                                            ["clarity", "CLARITY", "Denoised luma sharpening: detail without boosting grain"]]
+                                    delegate: Chip {
+                                        required property var modelData
+                                        property string k: "builtin:" + modelData[0]
+                                        label: win.fxConfirm === k ? "CONFIRM?" : modelData[1]
+                                        tint: pal.ok; tip: modelData[2]
+                                        active: win.fxActive && win.fx.current.source === "builtin" && win.fx.current.name === modelData[0]
+                                        on: !win.gameBusy && win.fx.vkbasalt === true
+                                        onClicked: win.fxApply(k, "APPLYING…")
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                Text { text: "PRESETS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                Field {
+                                    id: fxQuery; Layout.fillWidth: true; font.pixelSize: 11
+                                    placeholderText: "game name on SweetFX Settings DB"
+                                    onAccepted: win.fxSearch(text)
+                                }
+                                Chip { label: fxSearchProc.running ? "SEARCHING…" : "SEARCH"; on: !fxSearchProc.running; onClicked: win.fxSearch(fxQuery.text) }
+                            }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 6
+                                visible: win.fxGames.length > 1
+                                Repeater {
+                                    model: win.fxGames
+                                    delegate: Chip {
+                                        required property var modelData
+                                        label: modelData.title; active: win.fxGameId === modelData.id
+                                        onClicked: win.fxLoadPresets(modelData.id)
+                                    }
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                visible: win.fxMsg !== ""
+                                text: win.fxMsg; color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                            }
+                            ListView {
+                                id: fxList
+                                Layout.fillWidth: true; Layout.fillHeight: true
+                                clip: true; spacing: 3
+                                model: win.fxPresets
+                                ScrollBar.vertical: ScrollBar {}
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    property string k: "sfx:" + modelData.id
+                                    width: fxList.width - 10; height: 34; radius: 6
+                                    color: pal.panel; border.width: 1
+                                    border.color: win.fxActive && win.fx.current.id === modelData.id ? pal.ok : pal.border
+                                    RowLayout {
+                                        anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 6
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                        }
+                                        Chip { label: "↗"; tip: "Open the preset's page"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
+                                        Chip {
+                                            label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fx.current.id === modelData.id ? "ACTIVE ✓" : "APPLY")
+                                            tint: pal.ok; on: !win.gameBusy && win.fx.shadersInstalled === true && win.fx.vkbasalt === true
+                                            tip: win.fx.shadersInstalled && win.fx.vkbasalt ? "Download, fetch the shaders it needs and convert it for vkBasalt" : "Run INSTALL above first"
+                                            onClicked: win.fxApply(k, "APPLYING PRESET…")
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                text: "Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade — effects that need the depth buffer can't run in vkBasalt and are skipped. Shaders: the packages the official ReShade installer lists."
+                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                            }
                         }
                     }
                 }

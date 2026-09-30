@@ -288,6 +288,69 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
   wrapper) get it; Umbral games don't go through the wrapper.
 - CLI: `temps [pid]`, `overlay [pid]`.
 
+### 2.14 Visual shaders — `GAMING → FX`
+- **One route, both vendors:** vkBasalt, a Vulkan layer. Under Proton every
+  D3D9–12 game is drawn through DXVK/VKD3D (Vulkan), so it applies to all of
+  them; native Linux games only if they render with Vulkan. The layer is the
+  same on AMD (RADV) and NVIDIA, and CAS is AMD FidelityFX sharpening. Not
+  offered when the profile forces `PROTON_USE_WINED3D=1` (OpenGL) or for
+  non-Steam games (they don't go through the wrapper).
+- **Real ReShade (DLL injection) is not automated:** under Proton it only
+  helps games that don't draw through Vulkan (rare there), it needs a DLL
+  and override per game and per API, and it's the riskier one with
+  anti-cheats. The FX tab says so rather than half-supporting it.
+- **Install (one click):** `vkbasalt` + `lib32-vkbasalt` from chaotic-aur
+  through the deck's pkexec pacman (snapshot first without snap-pac), then the
+  shader packages the official ReShade installer enables by default, from
+  `crosire/reshade-shaders` `EffectPackages.ini` (Standard effects, SweetFX).
+  Other packages are fetched automatically when a preset needs one of their
+  files (each package lists its `EffectFiles`). Shaders keep the package's
+  folder; textures are flattened, because vkBasalt takes one texture folder.
+  Stored in `~/.local/share/control-deck/reshade/`.
+- **Quick looks** (vkBasalt's own effects, nothing to download): SHARPEN (CAS
+  0.5), SHARPEN + AA (SMAA → CAS 0.4), FXAA, CLARITY (DLS).
+- **Presets from the internet:** SweetFX Settings DB (sfx.thelazy.net), the
+  per-game ReShade preset site. Its JSON search (`/games/game/search/?query=`)
+  is prefilled with the game's name, its game page lists presets, and
+  `/games/preset/<id>/download/` gives the preset. Requests only happen on a
+  user action; the game pages are cached for a day. No robots.txt or terms
+  restrict this.
+- **Preset → vkBasalt conversion** (checked in vkBasalt's source, 2023-05
+  `4f97f09`): it compiles ReShade FX with "uniforms to spec constants", so a
+  preset's values can be set by uniform name in `vkBasalt.conf`. What can't be
+  carried over, and is listed as skipped in the tab:
+  - effects that read the depth buffer (vkBasalt's `depthCapture` "isn't
+    ready");
+  - a technique that isn't the first one in its `.fx` (vkBasalt only runs
+    `techniques[0]`);
+  - vector values whose components differ (every component of a spec constant
+    gets the same value), which stay at the shader's default;
+  - uniforms share one namespace, so when two effects share a name, the first
+    effect's value wins.
+  Entries on the site that are only a link or text (no `Techniques=`) are
+  refused with what they contain.
+- **Online/anti-cheat warning:** AreWeAntiCheatYet `games.json` (MIT) by
+  Steam id, plus the Steam store's categories (8 = VAC, 1/9/27/36/38/49 =
+  multiplayer/co-op/PvP), both cached for 7 days. Anti-cheat gives a red
+  banner and every apply asks for a second click. Multiplayer only gives an
+  amber note.
+- The wrapper exports `ENABLE_VKBASALT=1` and `VKBASALT_CONFIG_FILE=<game's
+  conf>` when the profile has `fx: true`. HOME toggles the effects in game.
+- Verified here:
+  - The two default packages installed (0.5 MB).
+  - A real Cyberpunk 2077 preset from the DB converted: 6 effects applied, 2
+    skipped (depth). The extra packages it needed (FXShaders, AstrayFX, legacy)
+    were fetched automatically. Every value written matches a real uniform in
+    the installed shaders.
+  - Deadlock is flagged VAC.
+  - vkBasalt itself isn't installed on this PC, so the in-game result is
+    untested, as are AMD cards. vkBasalt's bundled ReShadeFX compiler dates
+    from 2023, and very new shaders may not compile in it (vkBasalt then
+    logs the error).
+- CLI: `fx status [key]`, `fx install`, `fx packages`, `fx package <idx>`,
+  `fx search <name>`, `fx presets <id>`,
+  `fx set <key> builtin:<look>|sfx:<id>|off`.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |
@@ -321,5 +384,4 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.14 vkBasalt /
-ReShade.
+Nothing: every module is implemented or listed under Dropped.

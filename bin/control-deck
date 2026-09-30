@@ -2773,7 +2773,7 @@ control_deck_bin() {
 # --- profiles ----------------------------------------------------------------
 GAMING_DIR="$STATE_DIR/gaming"
 PROFILES="$GAMING_DIR/profiles.json"
-DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"overlay":false,"ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
+DEFAULT_PROFILE='{"gamemode":true,"mangohud":false,"overlay":false,"fx":false,"ionice":false,"nice":0,"env":{},"prefix":"","args":""}'
 
 profiles_json() { if [[ -s "$PROFILES" ]]; then cat "$PROFILES"; else echo '{}'; fi; }
 
@@ -2875,6 +2875,12 @@ cmd_run() {
     [[ "$(jq -r '.mangohud' <<<"$p")" == true ]] && { have mangohud && pre+=(mangohud) || echo "  mangohud not installed" >> "$rlog"; }
     read -ra extra <<<"$(jq -r '.prefix' <<<"$p")"; pre+=("${extra[@]}")
     read -ra extra <<<"$(jq -r '.args' <<<"$p")"
+    # visual shaders: vkBasalt layer with this game's config
+    if [[ "$(jq -r '.fx' <<<"$p")" == true ]]; then
+        local fxc; fxc="$(fx_key_dir "$key")/vkBasalt.conf"
+        if [[ -s "$fxc" ]]; then export ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE="$fxc"
+        else echo "  visual shaders on but no config at $fxc" >> "$rlog"; fi
+    fi
     # this process becomes the game (exec), so the overlay follows our pid
     [[ "$(jq -r '.overlay' <<<"$p")" == true ]] && { cmd_overlay $$ || echo "  overlay not started" >> "$rlog"; }
     exec "${pre[@]}" "$@" "${extra[@]}"
@@ -3893,6 +3899,8 @@ Gaming
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
   prefixes                      Wine/Proton prefixes (Steam, Heroic, Faugus, Bottles, standalone) (JSON)
   prefix backup|clone|delete <path> [dest|--no-backup] · prefix restore <backup> <dest> · prefix backups
+  fx status [key] | install | packages | package <idx> | search <name> | presets <sfx id>
+     fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   temps [pid] / overlay [pid]   CPU/GPU °C · on-screen temperature line until <pid> exits (no pid: 10 s preview)
   health                        Gaming health: multilib, GPU driver, Vulkan, 32-bit libraries, with fix commands (JSON)
 EOF
@@ -4151,6 +4159,319 @@ cmd_overlay() {
         setsid -f qs -p "$OVERLAY_QML" >"$STATE_DIR/logs/overlay.log" 2>&1 </dev/null
 }
 
+# ------------------------------------------------------ 2.14 visual shaders ----
+# vkBasalt (a Vulkan layer) runs ReShade FX shaders and its own CAS/SMAA/FXAA on
+# any game that draws through Vulkan: native Vulkan, and D3D9–12 under Proton
+# (DXVK / VKD3D). Same on AMD and NVIDIA. Shaders come from the packages the
+# official ReShade installer lists (EffectPackages.ini); per-game presets from
+# the SweetFX Settings DB are converted to a vkBasalt config (see fx_convert for
+# what can't be carried over). The wrapper turns it on with ENABLE_VKBASALT=1.
+FX_DIR="$DATA_HOME/control-deck/reshade"               # Shaders/ Textures/ packages.json
+FX_PROFILES="$GAMING_DIR/fx"                            # <key>/vkBasalt.conf, preset.ini, report.json
+FX_CACHE="$CACHE_HOME/control-deck/fx"
+FX_PACKAGES_URL="${CONTROL_DECK_FX_PACKAGES_URL:-https://raw.githubusercontent.com/crosire/reshade-shaders/list/EffectPackages.ini}"
+SFX_URL="${CONTROL_DECK_SFX_URL:-https://sfx.thelazy.net}"
+AWACY_URL="${CONTROL_DECK_AWACY_URL:-https://raw.githubusercontent.com/AreWeAntiCheatYet/AreWeAntiCheatYet/master/games.json}"
+STEAM_STORE_API="${CONTROL_DECK_STEAM_STORE_API:-https://store.steampowered.com/api/appdetails}"
+FX_UA="control-deck (+https://github.com/madkyp/control-deck)"
+
+fx_key_dir() { echo "$FX_PROFILES/${1//:/_}"; }
+
+# cached download: fx_cached <file> <max age s> <url>  (stale copy beats nothing)
+fx_cached() {
+    local f="$FX_CACHE/$1" age="$2" url="$3" tmp
+    mkdir -p "$FX_CACHE"
+    if [[ -s "$f" ]] && (( $(date +%s) - $(stat -c %Y "$f") < age )); then cat "$f"; return 0; fi
+    tmp="$(mktemp)"
+    if curl -fsSL --max-time 20 -A "$FX_UA" "$url" -o "$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv "$tmp" "$f"; cat "$f"
+    else
+        rm -f "$tmp"; [[ -s "$f" ]] && cat "$f"
+    fi
+}
+
+# EffectPackages.ini → JSON [{idx,name,desc,url,repo,sub,files:[…],deny:[…],default}]
+fx_packages() {
+    fx_cached EffectPackages.ini 604800 "$FX_PACKAGES_URL" | tr -d '\r' | awk '
+        function flush() { if (sec != "") print sec "\t" en "\t" nm "\t" ds "\t" u "\t" rp "\t" ip "\t" ef "\t" dn }
+        /^\[/ { flush(); sec = substr($0, 2, length($0) - 2); en = ""; nm = ""; ds = ""; u = ""; rp = ""; ip = ""; ef = ""; dn = ""; next }
+        { i = index($0, "="); if (!i) next; k = substr($0, 1, i - 1); v = substr($0, i + 1) }
+        k == "Enabled" { en = v } k == "Required" { en = v } k == "PackageName" { nm = v }
+        k == "PackageDescription" { ds = v } k == "DownloadUrl" { u = v } k == "RepositoryUrl" { rp = v }
+        k == "InstallPath" { ip = v } k == "EffectFiles" { ef = v } k == "DenyEffectFiles" { dn = v }
+        END { flush() }' \
+    | jq -Rsc --slurpfile inst <(fx_installed_json) '
+        [split("\n")[] | select(. != "") | split("\t")
+         | {idx:.[0], default:(.[1] == "1"), name:.[2], desc:.[3], url:.[4], repo:.[5],
+            sub:(.[6] | sub("^\\.\\\\reshade-shaders\\\\Shaders\\\\?"; "") | gsub("\\\\"; "/")),
+            files:(.[7] | split(",") | map(select(. != ""))), deny:(.[8] | split(",") | map(select(. != "")))}
+         | . + {installed:(($inst[0][.idx] // null) != null)}]'
+}
+fx_installed_json() { if [[ -s "$FX_DIR/packages.json" ]]; then cat "$FX_DIR/packages.json"; else echo '{}'; fi; }
+
+# download one package and merge it: shaders keep the package's sub-folder,
+# textures are flattened (vkBasalt takes a single texture folder)
+fx_install_pkg() {
+    local idx="$1" p url sub tmp top shd tex f n=0
+    p="$(fx_packages | jq -c --arg i "$idx" '.[] | select(.idx == $i)')"
+    [[ -n "$p" ]] || { err "unknown shader package: $idx"; return 2; }
+    url="$(jq -r .url <<<"$p")"; sub="$(jq -r .sub <<<"$p")"
+    [[ "$url" == https://github.com/* || "$url" == file://* ]] || { err "unexpected download URL: $url"; return 4; }
+    log "→ $(jq -r .name <<<"$p")  ($url)"
+    tmp="$(mktemp -d)"
+    if ! curl -fsSL --max-time 300 -A "$FX_UA" "$url" -o "$tmp/p.zip" || ! bsdtar -xf "$tmp/p.zip" -C "$tmp"; then
+        rm -rf "$tmp"; err "download failed: $url"; return 4
+    fi
+    top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    shd="$(find "$top" -type d -iname Shaders | awk '{ print length, $0 }' | sort -n | head -1 | cut -d' ' -f2-)"
+    tex="$(find "$top" -type d -iname Textures | awk '{ print length, $0 }' | sort -n | head -1 | cut -d' ' -f2-)"
+    mkdir -p "$FX_DIR/Shaders/$sub" "$FX_DIR/Textures"
+    if [[ -n "$shd" ]]; then cp -rf "$shd"/. "$FX_DIR/Shaders/$sub/"
+    else find "$top" -type f \( -name '*.fx' -o -name '*.fxh' \) -exec cp -f {} "$FX_DIR/Shaders/$sub/" \; ; fi
+    [[ -n "$tex" ]] && find "$tex" -type f -exec cp -f {} "$FX_DIR/Textures/" \;
+    while IFS= read -r f; do
+        [[ -n "$f" ]] && find "$FX_DIR/Shaders/$sub" -type f -name "$f" -delete
+    done < <(jq -r '.deny[]' <<<"$p")
+    n="$(find "$FX_DIR/Shaders/$sub" -name '*.fx' | wc -l)"
+    rm -rf "$tmp"
+    local cur; cur="$(fx_installed_json)"
+    jq --arg i "$idx" --arg n "$(jq -r .name <<<"$p")" --argjson t "$(date +%s)" '.[$i] = {name:$n, installed:$t}' \
+        <<<"$cur" > "$FX_DIR/packages.json"
+    log "  ✔ installed ($n effects in Shaders/${sub:-.})"
+}
+
+# the .fx file for an effect name, searched like ReShade does (recursively)
+fx_find() { find "$FX_DIR/Shaders" -type f -iname "$1" 2>/dev/null | head -1; }
+
+# is this game known to use anti-cheat / to be online? → JSON
+fx_online() {
+    local id="$1" aw cats
+    aw="$(fx_cached awacy.json 604800 "$AWACY_URL" | jq -c --arg id "$id" \
+          '[.[] | select((.storeIds.steam // "") == $id)] | first // null | if . then {anticheats, status} else null end' 2>/dev/null)"
+    cats="$(fx_cached "store-$id.json" 604800 "$STEAM_STORE_API?appids=$id&filters=categories&l=english" \
+            | jq -c --arg id "$id" '[.[$id].data.categories[]? | .id]' 2>/dev/null)"
+    jq -nc --argjson aw "${aw:-null}" --argjson c "${cats:-[]}" '
+        ($c | index(8) != null) as $vac
+        | ([$c[] | select(. == 1 or . == 9 or . == 27 or . == 36 or . == 38 or . == 49)] | length > 0) as $mp
+        | {anticheats:((($aw // {}).anticheats // []) + (if $vac then ["VAC"] else [] end) | unique),
+           multiplayer:$mp, awacyStatus:(($aw // {}).status // null)}
+        | .level = (if (.anticheats | length) > 0 then "anticheat" elif .multiplayer then "online" else "none" end)'
+}
+
+# can vkBasalt reach this game? → JSON {ok, route, reason}
+fx_route() {
+    local key="$1" p env
+    p="$(profile_get "$key")"; env="$(jq -r '.env | to_entries | map("\(.key)=\(.value)") | join(" ")' <<<"$p")"
+    if [[ "$key" != steam:* ]]; then
+        jq -nc '{ok:false, route:"none", reason:"Only Steam games go through the Control Deck wrapper."}'
+    elif [[ "$env" =~ PROTON_USE_WINED3D=1 ]]; then
+        jq -nc '{ok:false, route:"wined3d", reason:"PROTON_USE_WINED3D=1 draws with OpenGL: vkBasalt only works on Vulkan. Remove it from ENV."}'
+    else
+        jq -nc '{ok:true, route:"vulkan", reason:"Under Proton, D3D9–12 is drawn through DXVK/VKD3D (Vulkan), so vkBasalt applies; a native Linux game only if it renders with Vulkan (not OpenGL)."}'
+    fi
+}
+
+# fx status [key] → install state, GPU, and (with a key) route, online risk, current preset
+cmd_fx_status() {
+    local key="${1:-}" v64 v32 n cur="null" route="null" online="null" d
+    v64="$(pkg_ver vkbasalt)"; v32="$(pkg_ver lib32-vkbasalt)"
+    n="$(find "$FX_DIR/Shaders" -name '*.fx' 2>/dev/null | wc -l)"
+    if [[ -n "$key" ]]; then
+        valid_game_key "$key" || { err "not a game key: $key"; return 2; }
+        d="$(fx_key_dir "$key")"
+        [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
+        route="$(fx_route "$key")"
+        [[ "$key" == steam:* ]] && online="$(fx_online "${key#steam:}")"
+    fi
+    jq -nc --arg v64 "$v64" --arg v32 "$v32" --argjson n "$n" --arg vendor "$(gpu_vendor)" --arg gpu "$(gpu_name)" \
+        --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
+        --arg chaotic "$(grep -qE '^[[:space:]]*\[chaotic-aur\]' "$PACMAN_CONF" 2>/dev/null && echo 1 || echo 0)" '{
+        vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
+        chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
+        installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end)}'
+}
+
+# fx install — vkBasalt (pkexec pacman, chaotic-aur) + the default shader packages
+cmd_fx_install() {
+    local miss=() p
+    for p in vkbasalt lib32-vkbasalt; do [[ -n "$(pkg_ver "$p")" ]] || miss+=("$p"); done
+    if ((${#miss[@]})); then
+        pacman -Si vkbasalt >/dev/null 2>&1 || { err "vkbasalt isn't in your repositories (it comes from chaotic-aur): enable chaotic-aur or install it from the AUR"; return 4; }
+        log "→ pkexec pacman -S --needed ${miss[*]}"
+        pk_pacman -S --needed --noconfirm -- "${miss[@]}" || { err "pacman failed"; return 4; }
+    fi
+    local idx
+    while IFS= read -r idx; do
+        [[ -n "$idx" ]] && { fx_install_pkg "$idx" || return 4; }
+    done < <(fx_packages | jq -r '.[] | select(.default and (.installed | not)) | .idx')
+    history_add "shader install" gaming "vkBasalt + standard shaders" 0
+    log "✔ Visual shaders ready: pick a preset for a game."
+}
+
+# SweetFX Settings DB: games matching a name → [{title, id}]
+cmd_fx_search() {
+    local q="$1" out
+    [[ -n "$q" ]] || { err "use: fx search <game name>"; return 2; }
+    out="$(curl -fsS --max-time 15 -A "$FX_UA" -G "$SFX_URL/games/game/search/" --data-urlencode "query=$q" 2>/dev/null)" \
+        || { err "SweetFX Settings DB didn't answer"; return 4; }
+    jq -c '[.Games[]? | {title, id:(.url | capture("/games/game/(?<i>[0-9]+)/").i)}]' <<<"$out"
+}
+
+# presets of a SweetFX DB game → [{id, name}] (newest first, as the site lists them)
+cmd_fx_presets() {
+    local g="$1" html
+    [[ "$g" =~ ^[0-9]+$ ]] || { err "use: fx presets <sfx game id>"; return 2; }
+    html="$(fx_cached "sfx-game-$g.html" 86400 "$SFX_URL/games/game/$g/")"
+    [[ -n "$html" ]] || { err "couldn't load the game's presets"; return 4; }
+    grep -oE 'href="/games/preset/[0-9]+/"[^>]*>[^<]+' <<<"$html" \
+        | sed -E 's|href="/games/preset/([0-9]+)/"[^>]*>|\1\t|' \
+        | jq -Rsc '[split("\n")[] | select(. != "") | split("\t") | {id:.[0], name:(.[1] | gsub("&amp;"; "&") | gsub("&#39;"; "\u0027") | gsub("&quot;"; "\""))}] | unique_by(.id) | sort_by(-(.id | tonumber))'
+}
+
+# turn a ReShade preset (.ini text) into a vkBasalt config; missing effect files
+# are fetched from the package that lists them. Can't be carried over:
+# - effects that read the depth buffer (vkBasalt has none),
+# - a technique that isn't the first one of its file (vkBasalt runs only that),
+# - vector values whose components differ (vkBasalt sets every component of a
+#   uniform to one value) — those keep the shader's default.
+fx_convert() {   # preset.ini out.conf → report JSON on stdout
+    local ini="$1" out="$2" techs name file path first pk skipped="[]" partial="[]" opts="" fxlist="" n=0
+    local -a t=() used=()
+    techs="$(tr -d '\r' < "$ini" | grep -m1 -E '^Techniques=' | cut -d= -f2-)"
+    [[ -n "$techs" ]] || { err "not a ReShade preset (no Techniques= line); it only says: $(tr -d '\r' < "$ini" | head -c 120)"; return 4; }
+    local pkgs; pkgs="$(fx_packages)"
+    IFS=',' read -ra t <<<"$techs"
+    for name in "${t[@]}"; do
+        [[ "$name" == *@* ]] || continue
+        file="${name#*@}"; name="${name%@*}"
+        path="$(fx_find "$file")"
+        if [[ -z "$path" ]]; then
+            pk="$(jq -r --arg f "$file" '[.[] | select(.files | index($f)) | .idx] | first // empty' <<<"$pkgs")"
+            [[ -n "$pk" ]] && fx_install_pkg "$pk" >&2 && pkgs="$(fx_packages)"
+            path="$(fx_find "$file")"
+        fi
+        if [[ -z "$path" ]]; then
+            skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any official package"}]' <<<"$skipped")"; continue
+        fi
+        if grep -qE 'ReShade::(GetLinearizedDepth|DepthBuffer)|GetLinearizedDepth\(|DepthBufferTex|SV_Depth' "$path"; then
+            skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"uses the depth buffer, which vkBasalt can'\''t read"}]' <<<"$skipped")"; continue
+        fi
+        first="$(grep -oE '^[[:space:]]*technique[[:space:]]+[A-Za-z0-9_]+' "$path" | head -1 | awk '{ print $2 }')"
+        if [[ -n "$first" && "$first" != "$name" ]]; then
+            skipped="$(jq -c --arg n "$name" --arg f "$file" --arg x "$first" '. + [{effect:$n, file:$f, why:"vkBasalt only runs the first technique of \($f) (\($x))"}]' <<<"$skipped")"; continue
+        fi
+        n=$((n + 1)); fxlist+="${fxlist:+:}fx$n"; opts+="fx$n = \"$path\""$'\n'
+        used+=("$file")
+    done
+    # values of the effects kept: [File.fx] sections, key=value
+    local vals
+    vals="$(tr -d '\r' < "$ini" | awk -v keep="$(printf '%s\n' "${used[@]}")" '
+        BEGIN { n = split(keep, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") want[k[i]] = 1 }
+        /^\[/ { sec = substr($0, 2, length($0) - 2); next }
+        sec != "" && (sec in want) && index($0, "=") { i = index($0, "="); print sec "\t" substr($0, 1, i - 1) "\t" substr($0, i + 1) }')"
+    local sec k v seen="" first_v
+    while IFS=$'\t' read -r sec k v; do
+        [[ -n "$k" && "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        if [[ "$v" == *,* ]]; then
+            first_v="${v%%,*}"
+            if [[ -n "$(tr ',' '\n' <<<"$v" | grep -vxF -- "$first_v")" ]]; then
+                partial="$(jq -c --arg f "$sec" --arg k "$k" '. + [{file:$f, value:$k}]' <<<"$partial")"; continue
+            fi
+            v="$first_v"
+        fi
+        [[ "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || continue
+        [[ "$seen" == *$'\n'"$k"$'\n'* ]] && continue      # one namespace for all effects: first wins
+        seen+=$'\n'"$k"$'\n'
+        opts+="$k = $v"$'\n'
+    done <<<"$vals"
+    if (( n == 0 )); then
+        jq -nc --argjson s "$skipped" '{applied:0, effects:[], skipped:$s, partial:[]}'; return 5
+    fi
+    {
+        echo "# written by Control Deck from a ReShade preset — edits are overwritten"
+        echo "effects = $fxlist"
+        echo "reshadeTexturePath = \"$FX_DIR/Textures\""
+        echo "reshadeIncludePath = \"$FX_DIR/Shaders\""
+        echo "depthCapture = off"
+        echo "toggleKey = Home"
+        echo "enableOnLaunch = True"
+        printf '%s' "$opts"
+    } > "$out"
+    jq -nc --argjson s "$skipped" --argjson p "$partial" --args '{applied:($ARGS.positional | length), effects:$ARGS.positional, skipped:$s, partial:$p}' "${used[@]}"
+}
+
+# built-in looks: vkBasalt's own effects, no downloads
+fx_builtin() {   # name out.conf
+    local body
+    case "$1" in
+        sharpen)    body=$'effects = cas\ncasSharpness = 0.5' ;;
+        sharpen-aa) body=$'effects = smaa:cas\ncasSharpness = 0.4\nsmaaEdgeDetection = luma\nsmaaThreshold = 0.05\nsmaaMaxSearchSteps = 32\nsmaaMaxSearchStepsDiag = 16\nsmaaCornerRounding = 25' ;;
+        fxaa)       body=$'effects = fxaa\nfxaaQualitySubpix = 0.75\nfxaaQualityEdgeThreshold = 0.125\nfxaaQualityEdgeThresholdMin = 0.0312' ;;
+        clarity)    body=$'effects = dls\ndlsSharpness = 0.5\ndlsDenoise = 0.17' ;;
+        *) return 2 ;;
+    esac
+    printf '# written by Control Deck (built-in look: %s)\n%s\ntoggleKey = Home\nenableOnLaunch = True\n' "$1" "$body" > "$2"
+}
+
+# fx set <key> builtin:<name> | sfx:<preset id> | off
+cmd_fx_set() {
+    local key="$1" what="$2" d rep name
+    valid_game_key "$key" && [[ "$key" != default ]] || { err "not a game key: $key"; return 2; }
+    d="$(fx_key_dir "$key")"
+    case "$what" in
+        off)
+            rm -rf "$d"; profile_write "$key" '{"fx":false}'
+            log "✔ Visual shaders off for $key."; return 0 ;;
+        builtin:*)
+            name="${what#builtin:}"; mkdir -p "$d"
+            fx_builtin "$name" "$d/vkBasalt.conf.new" || { rm -f "$d/vkBasalt.conf.new"; err "unknown built-in look: $name"; return 2; }
+            mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"; rm -f "$d/preset.ini"
+            rep="$(jq -nc --arg n "$name" '{source:"builtin", name:$n, applied:1, effects:[$n], skipped:[], partial:[]}')" ;;
+        sfx:*)
+            local id="${what#sfx:}" tmp r
+            [[ "$id" =~ ^[0-9]+$ ]] || { err "bad preset id"; return 2; }
+            [[ "$(find "$FX_DIR/Shaders" -name '*.fx' 2>/dev/null | head -1)" ]] || { err "install the shaders first (fx install)"; return 3; }
+            mkdir -p "$d"; tmp="$(mktemp)"
+            curl -fsSL --max-time 20 -A "$FX_UA" "$SFX_URL/games/preset/$id/download/" -o "$tmp" \
+                || { rm -f "$tmp"; err "couldn't download the preset"; return 4; }
+            name="$(tr -d '\r' < "$tmp" | head -1 | sed -E 's/^-->[[:space:]]*//' | cut -c1-80)"
+            local rc=0; r="$(fx_convert "$tmp" "$d/vkBasalt.conf.new")" || rc=$?
+            if (( rc != 0 )); then
+                rm -f "$tmp" "$d/vkBasalt.conf.new"
+                if [[ -n "$r" ]]; then
+                    jq -r '.skipped[] | "  ✗ \(.effect): \(.why)"' <<<"$r"
+                    err "nothing in this preset works with vkBasalt"
+                fi
+                return "$rc"
+            fi
+            mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"; mv "$tmp" "$d/preset.ini"
+            rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
+                   '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")" ;;
+        *) err "use: fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off"; return 2 ;;
+    esac
+    printf '%s\n' "$rep" > "$d/report.json"
+    profile_write "$key" '{"fx":true}'
+    log "✔ $(jq -r '.name' <<<"$rep") → $key ($(jq -r '.applied' <<<"$rep") effect(s))"
+    jq -r '.skipped[]? | "  ✗ \(.effect): \(.why)"' <<<"$rep"
+    [[ "$(jq '.partial | length' <<<"$rep")" != 0 ]] && log "  ~ $(jq '.partial | length' <<<"$rep") colour value(s) kept at the shader's default (vkBasalt can't set vectors)"
+    history_add "visual shaders" gaming "$key $(jq -r '.name' <<<"$rep")" 0
+    return 0
+}
+
+cmd_fx() {
+    local sub="$1"; shift 2>/dev/null
+    case "$sub" in
+        status)   cmd_fx_status "$@" ;;
+        install)  cmd_fx_install ;;
+        packages) fx_packages ;;
+        package)  [[ -n "${1:-}" ]] || { err "use: fx package <idx>"; return 2; }; fx_install_pkg "$1" ;;
+        search)   cmd_fx_search "$*" ;;
+        presets)  cmd_fx_presets "${1:-}" ;;
+        set)      cmd_fx_set "${1:-}" "${2:-}" ;;
+        *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look>"; return 2 ;;
+    esac
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -4229,6 +4550,7 @@ main() {
         prefix)      cmd_prefix "$@" ;;
         health)      cmd_health ;;
         temps)       cmd_temps "$1" ;;
+        fx)          cmd_fx "$@" ;;
         overlay)     cmd_overlay "$1" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;

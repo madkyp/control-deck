@@ -23,7 +23,14 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$T/bin/$1"; chmod +x "$T/bin
 stub pkexec 'echo "pkexec $*" >> "'"$T"'/pkexec.log"; exit 1'
 stub notify-send 'echo "notify-send $*" >> "'"$T"'/notify.log"'
 stub update-desktop-database 'exit 0'
-stub curl 'for a in "$@"; do url="$a"; done
+stub curl 'out="" q="" prev=""; for a in "$@"; do
+    case "$prev" in -o) out="$a" ;; --data-urlencode) q="${a#*=}" ;; esac
+    case "$a" in file://*|http://*|https://*) url="$a" ;; esac; prev="$a"; done
+[[ -z "${url:-}" ]] && for a in "$@"; do url="$a"; done
+# -G --data-urlencode query=X on file:// → <path>q_<X>.json
+[[ -n "$q" && "$url" == file://* ]] && url="${url}q_${q// /_}.json"
+url="${url%%#*}"; [[ "$url" == file://*/ ]] && url="${url}index.html"
+[[ -n "$out" ]] && exec > "$out"
 case "$url" in
     file://*)    cat "${url#file://}" ;;
     */compare/*) [[ -n "${FAKE_COMPARE:-}" ]] && cat "$FAKE_COMPARE" || exit 22 ;;
@@ -988,15 +995,93 @@ touch "$T/overlay.qml"; export CONTROL_DECK_OVERLAY_QML="$T/overlay.qml"
 "$CD" gprofile set steam:300 overlay=true gamemode=false >/dev/null
 printf '#!/bin/sh\necho "pid=$$"\n' > "$T/fake/ogame"; chmod +x "$T/fake/ogame"
 rm -f "$T/qs.log"; O="$(SteamAppId=300 "$CD" run "$T/fake/ogame")"
-for _ in 1 2 3 4 5; do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
+for _ in $(seq 25); do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
 eq "overlay started with the game's own pid (the wrapper execs into the game)" "$(grep -o 'pid=[0-9]*' "$T/qs.log")" "$O"
 has "…from the overlay config" "$(cat "$T/qs.log")" "qs -p $T/overlay.qml"
 rm -f "$T/qs.log"; LD_LIBRARY_PATH=/steam/pinned_libs LD_PRELOAD=/steam/gameoverlayrenderer.so SteamAppId=300 "$CD" run "$T/fake/ogame" >/dev/null
-for _ in 1 2 3 4 5; do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
+for _ in $(seq 25); do [[ -s "$T/qs.log" ]] && break; sleep 0.2; done
 has "Steam's LD_LIBRARY_PATH / LD_PRELOAD don't reach the overlay (they break Qt)" "$(cat "$T/qs.log")" "ldp=none pre=none"
 rm -f "$T/qs.log"; SteamAppId=301 "$CD" run "$T/fake/ogame" >/dev/null; sleep 0.3
 yes "no overlay when the profile doesn't ask for it" "[[ ! -e '$T/qs.log' ]]"
 unset CONTROL_DECK_OVERLAY_QML; "$CD" gprofile reset steam:300 >/dev/null
+# ------------------------------------------------------ visual shaders ----
+section "visual shaders (vkBasalt)"
+FXS="$T/fxsrc"; mkdir -p "$FXS/pkgA/Pack-main/Shaders" "$FXS/pkgA/Pack-main/Textures" "$FXS/sfx/games/game/7" "$FXS/sfx/games/preset/501/download" "$FXS/sfx/games/game/search"
+cat > "$FXS/pkgA/Pack-main/Shaders/Vibrance.fx" <<'EOF'
+uniform float Vibrance < ui_type = "slider"; > = 0.15;
+uniform float3 VibranceRGBBalance < ui_type = "drag"; > = float3(1.0, 1.0, 1.0);
+technique Vibrance { pass { } }
+EOF
+cat > "$FXS/pkgA/Pack-main/Shaders/Multi.fx" <<'EOF'
+uniform float Amount < > = 1.0;
+technique First { pass { } }
+technique Second { pass { } }
+EOF
+cat > "$FXS/pkgA/Pack-main/Shaders/DOF.fx" <<'EOF'
+float d = ReShade::GetLinearizedDepth(uv);
+technique DOF { pass { } }
+EOF
+echo 'template' > "$FXS/pkgA/Pack-main/Shaders/Template.fx"
+echo png > "$FXS/pkgA/Pack-main/Textures/lut.png"
+( cd "$FXS/pkgA" && bsdtar -a -cf "$FXS/pack.zip" Pack-main )
+cat > "$FXS/EffectPackages.ini" <<EOF
+[00]
+Enabled=1
+Required=1
+PackageName=Test pack
+PackageDescription=test
+InstallPath=.\reshade-shaders\Shaders\Sub
+DownloadUrl=file://$FXS/pack.zip
+EffectFiles=Vibrance.fx,Multi.fx,DOF.fx
+DenyEffectFiles=Template.fx
+EOF
+echo '{"Games": [{"title": "Test Game", "url": "/games/game/7/"}]}' > "$FXS/sfx/games/game/search/q_Test_Game.json"
+echo '<a href="/games/preset/499/">Old one</a> <a href="/games/preset/501/">Nice &amp; sharp</a>' > "$FXS/sfx/games/game/7/index.html"
+printf -- '--> Nice preset\r\nTechniques=Vibrance@Vibrance.fx,Second@Multi.fx,DOF@DOF.fx,Missing@Missing.fx\r\n\r\n[Vibrance.fx]\r\nVibrance=0.300000\r\nVibranceRGBBalance=1.000000,0.900000,1.000000\r\n' > "$FXS/sfx/games/preset/501/download/index.html"
+cat > "$FXS/awacy.json" <<'EOF'
+[{"name":"Shooter","anticheats":["Easy Anti-Cheat"],"status":"Denied","storeIds":{"steam":"4000"}}]
+EOF
+echo '{"4000":{"success":true,"data":{"categories":[{"id":1}]}}}' > "$FXS/store-4000.json"
+echo '{"4001":{"success":true,"data":{"categories":[{"id":2},{"id":36}]}}}' > "$FXS/store-4001.json"
+echo '{"4002":{"success":true,"data":{"categories":[{"id":2}]}}}' > "$FXS/store-4002.json"
+export CONTROL_DECK_FX_PACKAGES_URL="file://$FXS/EffectPackages.ini" CONTROL_DECK_SFX_URL="file://$FXS/sfx" \
+       CONTROL_DECK_AWACY_URL="file://$FXS/awacy.json"
+# the store API URL carries ?appids=…: serve per-id files through a tiny wrapper URL
+fxon() { CONTROL_DECK_STEAM_STORE_API="file://$FXS/store-$1.json#" "$CD" fx status "steam:$1" | jq -c '.online | [.level, .anticheats]'; }
+eq "anti-cheat game (AreWeAntiCheatYet)" "$(fxon 4000)" '["anticheat",["Easy Anti-Cheat"]]'
+eq "online PvP without anti-cheat" "$(fxon 4001)" '["online",[]]'
+eq "single-player" "$(fxon 4002)" '["none",[]]'
+eq "packages parsed from the official list" "$("$CD" fx packages | jq -c '.[0] | [.name, .default, .sub, (.files | length), .installed]')" '["Test pack",true,"Sub",3,false]'
+"$CD" fx package 00 >/dev/null
+FXD="$HOME/.local/share/control-deck/reshade"
+yes "shaders keep the package folder" "[[ -f '$FXD/Shaders/Sub/Vibrance.fx' ]]"
+yes "textures are flattened (one folder for vkBasalt)" "[[ -f '$FXD/Textures/lut.png' ]]"
+yes "DenyEffectFiles removed" "[[ ! -e '$FXD/Shaders/Sub/Template.fx' ]]"
+eq "marked installed" "$("$CD" fx packages | jq '.[0].installed')" true
+eq "search on SweetFX DB" "$("$CD" fx search Test Game)" '[{"title":"Test Game","id":"7"}]'
+eq "presets of a game, newest first, entities decoded" "$("$CD" fx presets 7 | jq -c '[.[] | [.id, .name]]')" '[["501","Nice & sharp"],["499","Old one"]]'
+"$CD" fx set steam:4002 builtin:nope >/dev/null 2>&1; eq "unknown look refused" "$?" 2
+"$CD" fx set steam:4002 sfx:501 >/dev/null 2>&1
+FXC="$HOME/.local/share/control-deck/gaming/fx/steam_4002"
+R="$(cat "$FXC/report.json")"
+eq "only the effect vkBasalt can run is applied" "$(jq -c .effects <<<"$R")" '["Vibrance.fx"]'
+has "second technique of a file skipped" "$(jq -r '.skipped[] | select(.effect == "Second") | .why' <<<"$R")" "only runs the first technique"
+has "depth effect skipped" "$(jq -r '.skipped[] | select(.effect == "DOF") | .why' <<<"$R")" "depth buffer"
+has "missing shader skipped" "$(jq -r '.skipped[] | select(.effect == "Missing") | .why' <<<"$R")" "not found"
+eq "vector with different components left at default" "$(jq -c .partial <<<"$R")" '[{"file":"Vibrance.fx","value":"VibranceRGBBalance"}]'
+has "config points at the shader" "$(cat "$FXC/vkBasalt.conf")" "fx1 = \"$FXD/Shaders/Sub/Vibrance.fx\""
+has "preset value carried over" "$(cat "$FXC/vkBasalt.conf")" "Vibrance = 0.300000"
+eq "profile flag on" "$("$CD" gprofile get steam:4002 | jq .fx)" true
+printf '#!/bin/sh\necho "vkb=$ENABLE_VKBASALT conf=$VKBASALT_CONFIG_FILE"\n' > "$T/fake/fxgame"; chmod +x "$T/fake/fxgame"
+eq "wrapper enables vkBasalt with the game's config" "$(SteamAppId=4002 "$CD" run "$T/fake/fxgame")" "vkb=1 conf=$FXC/vkBasalt.conf"
+"$CD" fx set steam:4002 builtin:sharpen-aa >/dev/null
+eq "built-in look" "$(grep '^effects' "$FXC/vkBasalt.conf")" "effects = smaa:cas"
+"$CD" fx set steam:4002 off >/dev/null
+eq "off: wrapper leaves vkBasalt alone" "$(SteamAppId=4002 "$CD" run "$T/fake/fxgame")" "vkb= conf="
+printf 'https://www.nexusmods.com/x/mods/1' > "$FXS/sfx/games/preset/501/download/index.html"
+O="$("$CD" fx set steam:4002 sfx:501 2>&1)"; eq "a link instead of a preset is refused" "$?" 4
+has "…saying what it is" "$O" "not a ReShade preset"
+unset CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
