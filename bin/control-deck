@@ -3168,12 +3168,20 @@ cmd_gstatus() {
     run="$( { running_games | sed 's/^/steam:/'; umbral_running; } | while IFS=$'\t' read -r key pid; do
             printf '%s\n%s\n' "$key" "$pid"; done | jq -Rn '[inputs] as $l | [range(0; $l|length; 2) as $i |
               {key:$l[$i], id:($l[$i] | sub("^[a-z]+:"; "")), pid:($l[$i+1]|tonumber)}]')"
+    # details of each running game (uptime, Proton, shaders)
+    local r det=() k pid
+    while IFS=$'\t' read -r k pid; do
+        [[ -n "$k" ]] && det+=("$(gs_running_detail "$k" "$pid" | jq -c --arg k "$k" '. + {key:$k}')")
+    done < <(jq -r '.[] | [.key, (.pid | tostring)] | @tsv' <<<"$run")
+    run="$(jq -c --argjson d "$(printf '%s\n' "${det[@]}" | jq -sc 'map({(.key): .}) | add // {}')" 'map(. + ($d[.key] // {}))' <<<"$run")"
     jq -n --argjson gi "$gm_inst" --argjson ga "$gm_active" --argjson grp "$ingroup" --argjson add "$added" \
           --arg gov "$gov" --arg drv "$drv" --argjson mmc "${mmc:-0}" --argjson run "$run" \
+          --argjson sys "$(gs_system)" --argjson gpu "$(gs_gpu)" --argjson displays "$(gs_displays)" --argjson tools "$(gs_tools)" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
         '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
-          max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run}'
+          max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run,
+          system:$sys, gpu:$gpu, displays:$displays, tools:$tools}'
 }
 
 # join the gamemode group: lets gamemode switch the CPU governor without a
@@ -5171,6 +5179,120 @@ cmd_fx() {
                   esac ;;
         *) err "use: fx status [key] | install | packages | package <idx> | search <name> | presets <id> | set <key> <look> | mode <key> reshade|vkbasalt | exes <key> | key <name> | scan | autoinstall [key…] | reshade install|off"; return 2 ;;
     esac
+}
+
+# --- STATUS: live system / GPU / display / tools info (polled every few s) ------
+gs_system() {
+    local mi kt kf st ops mhz
+    mi="$(cat "${PROCFS}/meminfo" 2>/dev/null)"
+    mhz="$(awk -F: '/^cpu MHz/ { s += $2; n++ } END { if (n) printf "%d", s / n }' "${PROCFS}/cpuinfo" 2>/dev/null)"
+    st="$(cat "$SYSFS/kernel/sched_ext/state" 2>/dev/null)"; ops="$(cat "$SYSFS/kernel/sched_ext/root/ops" 2>/dev/null)"
+    jq -nc --arg kernel "$(uname -r)" \
+        --arg cpu "$(awk -F': ' '/^model name/ { print $2; exit }' "${PROCFS}/cpuinfo" 2>/dev/null)" \
+        --argjson threads "$(nproc 2>/dev/null || echo 0)" --arg mhz "$mhz" \
+        --arg temp "$(hwmon_temp coretemp 'Package id 0' || hwmon_temp 'k10temp|zenpower' 'Tctl|Tdie' || true)" \
+        --arg load "$(cut -d' ' -f1 "${PROCFS}/loadavg" 2>/dev/null)" \
+        --arg memTotal "$(awk '/^MemTotal:/ { print $2 * 1024 }' <<<"$mi")" \
+        --arg memAvail "$(awk '/^MemAvailable:/ { print $2 * 1024 }' <<<"$mi")" \
+        --arg swapTotal "$(awk '/^SwapTotal:/ { print $2 * 1024 }' <<<"$mi")" \
+        --arg swapFree "$(awk '/^SwapFree:/ { print $2 * 1024 }' <<<"$mi")" \
+        --argjson zram "$(swapon --show=NAME --noheadings 2>/dev/null | grep -q zram && echo true || echo false)" \
+        --arg scx "$st" --arg scxOps "$ops" \
+        --argjson scxLoader "$(systemctl is-active --quiet scx_loader 2>/dev/null && echo true || echo false)" '
+        def n: (tonumber? // null);
+        {kernel:$kernel, cpu:$cpu, threads:$threads, mhz:($mhz | n), temp:($temp | n), load:($load | n),
+         memTotal:($memTotal | n), memUsed:((($memTotal | n) // 0) - (($memAvail | n) // 0)),
+         swapTotal:($swapTotal | n), swapUsed:((($swapTotal | n) // 0) - (($swapFree | n) // 0)), zram:$zram,
+         scx:{state:(if $scx == "" then null else $scx end), ops:(if $scxOps == "" then null else $scxOps end), loader:$scxLoader}}'
+}
+
+# NVIDIA clock-event reasons (NVML bitmask) → words
+nv_reasons() {
+    local v=$(( ${1:-0} )) out=()
+    (( v & 0x1 ))   && out+=("idle")
+    (( v & 0x2 ))   && out+=("app clocks")
+    (( v & 0x4 ))   && out+=("power cap")
+    (( v & 0x8 ))   && out+=("hw slowdown")
+    (( v & 0x10 ))  && out+=("sync boost")
+    (( v & 0x20 ))  && out+=("thermal (sw)")
+    (( v & 0x40 ))  && out+=("thermal (hw)")
+    (( v & 0x80 ))  && out+=("power brake")
+    (( v & 0x100 )) && out+=("display clock")
+    printf '%s\n' "${out[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))'
+}
+
+gs_gpu() {
+    local v; v="$(gpu_vendor)"
+    case "$v" in
+        nvidia)
+            local q; q="$(nvidia-smi --query-gpu=name,driver_version,memory.used,memory.total,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,utilization.gpu,pstate,clocks_throttle_reasons.active --format=csv,noheader,nounits 2>/dev/null | head -1)"
+            [[ -n "$q" ]] || { jq -nc --arg v "$v" --arg n "$(gpu_name)" '{vendor:$v, name:$n}'; return; }
+            IFS=',' read -r name drv mu mt t pw pl clk clkmax util ps thr <<<"$q"
+            jq -nc --arg name "${name# }" --arg drv "${drv# }" --arg mu "${mu# }" --arg mt "${mt# }" --arg t "${t# }" \
+                --arg pw "${pw# }" --arg pl "${pl# }" --arg clk "${clk# }" --arg clkmax "${clkmax# }" --arg util "${util# }" \
+                --arg ps "${ps# }" --argjson why "$(nv_reasons "${thr# }")" '
+                def n: (tonumber? // null);
+                {vendor:"nvidia", name:$name, driver:("NVIDIA " + $drv), vramUsed:(($mu | n) // 0) * 1048576, vramTotal:(($mt | n) // 0) * 1048576,
+                 temp:($t | n), power:($pw | n), powerLimit:($pl | n), clock:($clk | n), clockMax:($clkmax | n),
+                 load:($util | n), pstate:$ps, limits:$why}' ;;
+        amd)
+            local c dev h
+            for c in "$SYSFS"/class/drm/card[0-9]*; do
+                [[ "$(cat "$c/device/vendor" 2>/dev/null)" == 0x1002 && ! "${c##*/}" =~ - ]] && { dev="$c/device"; break; }
+            done
+            h="$(ls -d "$dev"/hwmon/hwmon* 2>/dev/null | head -1)"
+            jq -nc --arg name "$(gpu_name)" --arg mesa "$(pkg_ver mesa)" \
+                --arg busy "$(cat "$dev/gpu_busy_percent" 2>/dev/null)" \
+                --arg mu "$(cat "$dev/mem_info_vram_used" 2>/dev/null)" --arg mt "$(cat "$dev/mem_info_vram_total" 2>/dev/null)" \
+                --arg t "$(hwmon_temp amdgpu edge || true)" \
+                --arg pw "$(cat "$h/power1_average" 2>/dev/null || cat "$h/power1_input" 2>/dev/null)" \
+                --arg pl "$(cat "$h/power1_cap" 2>/dev/null)" --arg clk "$(cat "$h/freq1_input" 2>/dev/null)" '
+                def n: (tonumber? // null);
+                {vendor:"amd", name:$name, driver:("amdgpu · Mesa " + ($mesa | sub("-[^-]*$"; "") | sub("^[0-9]+:"; ""))),
+                 vramUsed:($mu | n), vramTotal:($mt | n), temp:($t | n),
+                 power:(if ($pw | n) then ($pw | n) / 1000000 else null end), powerLimit:(if ($pl | n) then ($pl | n) / 1000000 else null end),
+                 clock:(if ($clk | n) then (($clk | n) / 1000000 | floor) else null end), clockMax:null, load:($busy | n), pstate:null, limits:[]}' ;;
+        *) jq -nc --arg v "$v" --arg n "$(gpu_name)" '{vendor:$v, name:$n}' ;;
+    esac
+}
+
+gs_displays() {
+    have hyprctl || { echo '[]'; return; }
+    hyprctl monitors -j 2>/dev/null | jq -c '[.[] | {name, width, height, hz:(.refreshRate * 100 | round / 100), vrr, focused}]' 2>/dev/null || echo '[]'
+}
+
+# versions change rarely: cached for a day
+gs_tools() {
+    local f="$FX_CACHE/tools.json"; mkdir -p "$FX_CACHE"
+    if [[ ! -s "$f" ]] || (( $(date +%s) - $(stat -c %Y "$f") > 86400 )); then
+        jq -nc --arg gm "$(gamemoded --version 2>/dev/null | grep -oE 'v?[0-9][0-9.]+' | head -1)" \
+            --arg mh "$(mangohud --version 2>/dev/null | head -1)" \
+            --arg gs "$(gamescope --version 2>&1 | grep -oE 'version [0-9][0-9.]*' | head -1 | cut -d' ' -f2)" \
+            '{gamemode:$gm, mangohud:$mh, gamescope:$gs}' > "$f"
+    fi
+    jq -c --argjson steam "$(steam_running && echo true || echo false)" --argjson ntsync "$([[ -e "$NTSYNC_DEV" ]] && echo true || echo false)" \
+        --arg rs "$(reshade_version | sed 's/^ReShade-//')" --arg vkb "$(pkg_ver vkbasalt)" \
+        --argjson protons "$(cmd_compattools 2>/dev/null | jq length 2>/dev/null || echo 0)" \
+        '. + {steam:$steam, ntsync:$ntsync, reshade:$rs, vkbasalt:$vkb, protons:$protons}' "$f"
+}
+
+# a running game's details: uptime, Proton build, shaders in use
+gs_running_detail() {   # key pid → JSON
+    local key="$1" pid="$2" id="${1#*:}" up proton="" fx="" p env
+    up="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
+    if [[ "$key" == steam:* ]]; then
+        for p in "${PROC_ROOT:-/proc}"/[0-9]*; do
+            grep -qa "waitforexitandrun" "$p/cmdline" 2>/dev/null || continue
+            grep -qa "SteamAppId=$id" "$p/environ" 2>/dev/null || continue
+            proton="$(tr '\0' '\n' < "$p/cmdline" | grep -m1 -E '/proton$' | xargs -r -d '\n' dirname | xargs -r -d '\n' basename)"
+            [[ -n "$proton" ]] && break
+        done
+    fi
+    env="$(tr '\0' '\n' < "${PROC_ROOT:-/proc}/$pid/environ" 2>/dev/null)"
+    grep -qx 'ENABLE_VKBASALT=1' <<<"$env" && fx="vkBasalt"
+    grep -qE '^WINEDLLOVERRIDES=.*d3dcompiler_47=n;(dxgi|d3d9|opengl32)=n,b' <<<"$env" && fx="ReShade"
+    jq -nc --arg up "$up" --arg proton "$proton" --arg fx "$fx" \
+        '{uptime:($up | tonumber? // null), proton:(if $proton == "" then null else $proton end), fx:(if $fx == "" then null else $fx end)}'
 }
 
 main() {

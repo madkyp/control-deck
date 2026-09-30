@@ -486,6 +486,28 @@ It can be hidden. When everything is done it collapses to "all set — press
   row. BALL x PIT and Rogue Trader (co-op → amber) are eligible, and Deadlock
   (VAC) is excluded.
 
+### STATUS dashboard
+`gstatus` (about 0.25 s here) is polled every 3 s while the tab is open. It
+reports:
+- **System:** `/proc/cpuinfo` (model, average MHz), hwmon CPU temperature,
+  `/proc/loadavg`, `/proc/meminfo` (RAM used = total − available; swap), zram
+  from `swapon`, and `/sys/kernel/sched_ext/{state,root/ops}` plus
+  `scx_loader`. Here: "disabled", loader active, no scheduler loaded.
+- **GPU:**
+  - NVIDIA: `nvidia-smi --query-gpu=…,clocks_throttle_reasons.active`. The
+    bitmask is decoded with NVML's reasons (idle, app clocks, power cap, hw
+    slowdown, sync boost, sw/hw thermal, power brake, display clock).
+  - AMD: `gpu_busy_percent`, `mem_info_vram_used/total`, and hwmon
+    `power1_average` (or `power1_input`), `power1_cap`, `freq1_input` and the
+    edge temperature. Not verified on real AMD hardware yet.
+- **Displays:** `hyprctl monitors -j` (size, refresh, VRR).
+- **Tools:** versions cached for a day, plus Steam running, ntsync, the
+  number of Proton builds, ReShade and vkBasalt.
+- **Running game:** uptime from `ps etimes`. The Proton build comes from the
+  `…/proton waitforexitandrun` process with the same SteamAppId. Shaders
+  come from the game's environment (`ENABLE_VKBASALT=1`, or ReShade's DLL
+  overrides).
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

@@ -453,6 +453,16 @@ ShellRoot {
             else if (x.token === "mangohud") { gpSet("mangohud", true); }
             else { gPrefix.text = (gPrefix.text.trim() + " " + (x.token === "gamescope" ? "gamescope -f --" : x.token)).trim(); }
         }
+        function durationText(sec) {
+            var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+            return h > 0 ? h + " h " + m + " min" : (m > 0 ? m + " min" : sec + " s");
+        }
+        // STATUS is live while it's on screen
+        Timer {
+            interval: 3000; repeat: true
+            running: win.visible && win.view === "gaming" && win.gameView === "status"
+            onTriggered: if (!gstatProc.running) gstatProc.running = true
+        }
         function playtimeText(sec) {
             if (!sec) return "never played";
             var h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
@@ -4233,78 +4243,235 @@ ShellRoot {
                 }
 
                 // ---- STATUS ----
-                Rectangle {
+                ScrollView {
+                    id: stScroll
                     Layout.fillWidth: true; Layout.fillHeight: true
                     visible: win.gameView === "status"
-                    radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
-                    ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 14; spacing: 12
-                        visible: win.gstat.gamemode !== undefined
+                    contentWidth: availableWidth
+                    clip: true
 
-                        component StatLine: RowLayout {
-                            property string label
-                            property string value
-                            property bool good: true
-                            property string note: ""
-                            Layout.fillWidth: true; spacing: 10
-                            Text { text: good ? "✓" : "!"; color: good ? pal.ok : pal.amber; font.family: win.mono; font.pixelSize: 12; font.bold: true }
-                            Text { text: label; Layout.preferredWidth: 150; color: pal.text; font.family: win.mono; font.pixelSize: 11; font.bold: true }
-                            Text { text: value; color: good ? pal.dim : pal.amber; font.family: win.mono; font.pixelSize: 11 }
-                            Text { Layout.fillWidth: true; text: note; color: pal.dim; font.family: win.mono; font.pixelSize: 9; wrapMode: Text.WordWrap }
-                        }
-
-                        StatLine {
-                            label: "GameMode"
-                            good: !!win.gstat.gamemode && win.gstat.gamemode.installed
-                            value: !win.gstat.gamemode ? "" : (!win.gstat.gamemode.installed ? "not installed"
-                                   : (win.gstat.gamemode.active ? "active now" : "installed, idle"))
-                            note: "raises the CPU governor while a game runs and puts it back when the game exits"
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 10
-                            StatLine {
-                                label: "gamemode group"
-                                good: !!win.gstat.gamemode && win.gstat.gamemode.ingroup
-                                value: !win.gstat.gamemode ? "" : (win.gstat.gamemode.ingroup ? "member"
-                                       : (win.gstat.gamemode.pending ? "added · not active yet" : "not a member"))
-                                note: !win.gstat.gamemode || win.gstat.gamemode.ingroup ? ""
-                                      : (win.gstat.gamemode.pending
-                                         ? "log out of your desktop session (back to the login screen) or reboot: groups are only read at login"
-                                         : "without it gamemode can't switch the governor (no password prompt during games) and nice < 0 is refused")
+                    component StatRow: RowLayout {
+                        property string label
+                        property string value
+                        property color tone: pal.text
+                        property string note: ""
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: label; Layout.preferredWidth: 96; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Text { text: value; color: tone; font.family: win.mono; font.pixelSize: 11; elide: Text.ElideRight; Layout.maximumWidth: 260 }
+                        Text { Layout.fillWidth: true; text: note; color: pal.dim; font.family: win.mono; font.pixelSize: 9; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
+                    }
+                    component Meter: RowLayout {
+                        property string label
+                        property real value: 0
+                        property real max: 1
+                        property string text: ""
+                        property real warnAt: 0.85
+                        Layout.fillWidth: true; spacing: 8
+                        Text { text: label; Layout.preferredWidth: 96; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Rectangle {
+                            Layout.fillWidth: true; height: 8; radius: 4; color: pal.logBg; border.color: pal.border; border.width: 1
+                            Rectangle {
+                                height: parent.height; radius: 4
+                                width: parent.width * Math.max(0, Math.min(1, max > 0 ? value / max : 0))
+                                color: max > 0 && value / max >= warnAt ? pal.amber : pal.accent
                             }
-                            MiniBtn {
-                                visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup && !win.gstat.gamemode.pending
-                                width: 96; label: win.confirmJoin ? "CONFIRM?" : "JOIN GROUP"
-                                on: !win.gameBusy
-                                onClicked: {
-                                    if (!win.confirmJoin) { win.confirmJoin = true; return; }
-                                    win.confirmJoin = false;
-                                    win.runGame(["gamejoin"], "JOINING…");
+                        }
+                        Text { text: parent.text; Layout.preferredWidth: 150; horizontalAlignment: Text.AlignRight; color: pal.text; font.family: win.mono; font.pixelSize: 10 }
+                    }
+                    component Card: Rectangle {
+                        property string title
+                        property string sub: ""
+                        default property alias content: cardCol.data
+                        Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                        implicitHeight: cardCol.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        ColumnLayout {
+                            id: cardCol
+                            anchors.fill: parent; anchors.margins: 10; spacing: 6
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 8
+                                Text { text: title; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                Text { Layout.fillWidth: true; text: sub; color: pal.dim; font.family: win.mono; font.pixelSize: 10; elide: Text.ElideRight }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        width: stScroll.availableWidth
+                        spacing: 8
+
+                        // running now
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: runCol.implicitHeight + 20
+                            radius: 8; color: pal.card; border.width: 1
+                            border.color: (win.gstat.running || []).length ? pal.ok : pal.border
+                            ColumnLayout {
+                                id: runCol
+                                anchors.fill: parent; anchors.margins: 10; spacing: 6
+                                RowLayout {
+                                    spacing: 8
+                                    Text { text: "RUNNING NOW"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                    Text {
+                                        text: (win.gstat.running || []).length ? "" : "no game  ·  Steam " + ((win.gstat.tools || {}).steam ? "open" : "closed")
+                                        color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                    }
+                                }
+                                Repeater {
+                                    model: win.gstat.running || []
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true; spacing: 10
+                                        Text { text: "●"; color: pal.ok; font.pixelSize: 10 }
+                                        Text { text: win.gameName(modelData.id); color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                            text: [modelData.uptime != null ? win.durationText(modelData.uptime) : "",
+                                                   modelData.proton ? modelData.proton : "",
+                                                   modelData.fx ? modelData.fx + " on" : "",
+                                                   win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode active" : "",
+                                                   "pid " + modelData.pid].filter(function (x) { return x; }).join("  ·  ")
+                                        }
+                                    }
                                 }
                             }
                         }
-                        StatLine {
-                            label: "CPU governor"
-                            good: true
-                            value: (win.gstat.governor || "?") + "  (" + (win.gstat.cpufreq_driver || "?") + ")"
-                            note: "switched to performance by gamemode during a game"
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: stScroll.availableWidth > 780 ? 2 : 1
+                            columnSpacing: 8; rowSpacing: 8
+
+                            Card {
+                                title: "GPU"; sub: (win.gstat.gpu || {}).name || ""
+                                StatRow { label: "DRIVER"; value: (win.gstat.gpu || {}).driver || "?" }
+                                Meter {
+                                    label: "LOAD"; value: (win.gstat.gpu || {}).load || 0; max: 100; warnAt: 2
+                                    text: (win.gstat.gpu || {}).load != null ? win.gstat.gpu.load + " %" : "—"
+                                }
+                                Meter {
+                                    label: "VRAM"; value: (win.gstat.gpu || {}).vramUsed || 0; max: (win.gstat.gpu || {}).vramTotal || 0
+                                    text: (win.gstat.gpu || {}).vramTotal ? win.human(win.gstat.gpu.vramUsed) + " / " + win.human(win.gstat.gpu.vramTotal) : "—"
+                                }
+                                Meter {
+                                    label: "POWER"; value: (win.gstat.gpu || {}).power || 0; max: (win.gstat.gpu || {}).powerLimit || 0
+                                    text: (win.gstat.gpu || {}).power != null ? Math.round(win.gstat.gpu.power) + " W"
+                                          + ((win.gstat.gpu || {}).powerLimit ? " / " + Math.round(win.gstat.gpu.powerLimit) + " W" : "") : "—"
+                                }
+                                StatRow {
+                                    label: "TEMPERATURE"; value: (win.gstat.gpu || {}).temp != null ? win.gstat.gpu.temp + " °C" : "—"
+                                    tone: (win.gstat.gpu || {}).temp >= 85 ? pal.bad : ((win.gstat.gpu || {}).temp >= 75 ? pal.amber : pal.text)
+                                }
+                                StatRow {
+                                    label: "CLOCK"
+                                    value: (win.gstat.gpu || {}).clock != null ? win.gstat.gpu.clock + " MHz"
+                                           + ((win.gstat.gpu || {}).clockMax ? " / " + win.gstat.gpu.clockMax : "") : "—"
+                                    note: (win.gstat.gpu || {}).pstate ? "state " + win.gstat.gpu.pstate : ""
+                                }
+                                StatRow {
+                                    visible: ((win.gstat.gpu || {}).limits || []).length > 0
+                                    label: "HELD BACK BY"
+                                    value: ((win.gstat.gpu || {}).limits || []).join(", ")
+                                    tone: ((win.gstat.gpu || {}).limits || []).some(function (x) { return /thermal|power|slowdown/.test(x); }) ? pal.amber : pal.text
+                                    note: ((win.gstat.gpu || {}).limits || []).length === 1 && win.gstat.gpu.limits[0] === "idle" ? "nothing heavy to render right now" : ""
+                                }
+                            }
+
+                            Card {
+                                title: "CPU · MEMORY"; sub: (win.gstat.system || {}).cpu || ""
+                                StatRow {
+                                    label: "CPU"
+                                    value: ((win.gstat.system || {}).threads || "?") + " threads · " + ((win.gstat.system || {}).mhz || "?") + " MHz"
+                                           + ((win.gstat.system || {}).temp != null ? " · " + win.gstat.system.temp + " °C" : "")
+                                    note: (win.gstat.system || {}).load != null ? "load " + win.gstat.system.load : ""
+                                    tone: (win.gstat.system || {}).temp >= 85 ? pal.bad : ((win.gstat.system || {}).temp >= 75 ? pal.amber : pal.text)
+                                }
+                                StatRow {
+                                    label: "GOVERNOR"
+                                    value: (win.gstat.governor || "?") + " (" + (win.gstat.cpufreq_driver || "?") + ")"
+                                    note: win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode has it on performance" : "GameMode switches it to performance while you play"
+                                }
+                                Meter {
+                                    label: "RAM"; value: (win.gstat.system || {}).memUsed || 0; max: (win.gstat.system || {}).memTotal || 0
+                                    text: (win.gstat.system || {}).memTotal ? win.human(win.gstat.system.memUsed) + " / " + win.human(win.gstat.system.memTotal) : "—"
+                                }
+                                Meter {
+                                    label: (win.gstat.system || {}).zram ? "SWAP (ZRAM)" : "SWAP"
+                                    value: (win.gstat.system || {}).swapUsed || 0; max: (win.gstat.system || {}).swapTotal || 0
+                                    text: (win.gstat.system || {}).swapTotal ? win.human(win.gstat.system.swapUsed) + " / " + win.human(win.gstat.system.swapTotal) : "none"
+                                }
+                                StatRow { label: "KERNEL"; value: (win.gstat.system || {}).kernel || "?" }
+                                StatRow {
+                                    property var scx: (win.gstat.system || {}).scx || {}
+                                    label: "SCHEDULER"
+                                    value: scx.state === "enabled" && scx.ops ? "sched-ext: " + scx.ops : "kernel default (EEVDF)"
+                                    note: scx.state !== "enabled" && scx.loader ? "scx_loader is running without a scheduler — CachyOS Kernel Manager picks one" : ""
+                                }
+                                StatRow {
+                                    label: "MAX_MAP_COUNT"; value: String(win.gstat.max_map_count || "?")
+                                    tone: win.gstat.max_map_count_ok ? pal.text : pal.amber
+                                    note: win.gstat.max_map_count_ok ? "≥ 1048576: enough for any game" : "below 1048576: some games crash (see HEALTH)"
+                                }
+                            }
+
+                            Card {
+                                title: "DISPLAY"
+                                Repeater {
+                                    model: win.gstat.displays || []
+                                    delegate: StatRow {
+                                        required property var modelData
+                                        label: modelData.name + (modelData.focused ? " ●" : "")
+                                        value: modelData.width + "×" + modelData.height + " @ " + modelData.hz + " Hz"
+                                        note: modelData.vrr ? "VRR on (FreeSync / G-Sync)" : "VRR off — Hyprland's misc:vrr turns it on for fullscreen games"
+                                    }
+                                }
+                                Text {
+                                    visible: (win.gstat.displays || []).length === 0
+                                    text: "Monitor details need Hyprland (hyprctl)."; color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                }
+                            }
+
+                            Card {
+                                title: "GAMING TOOLS"
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 8
+                                    StatRow {
+                                        label: "GAMEMODE"
+                                        value: !win.gstat.gamemode ? "" : (!win.gstat.gamemode.installed ? "not installed"
+                                               : ((win.gstat.tools || {}).gamemode || "") + (win.gstat.gamemode.active ? " · active" : " · idle"))
+                                        tone: win.gstat.gamemode && win.gstat.gamemode.installed ? pal.text : pal.amber
+                                        note: !win.gstat.gamemode ? "" : (win.gstat.gamemode.ingroup ? "in the gamemode group"
+                                              : (win.gstat.gamemode.pending ? "group added: log out and back in" : "not in the gamemode group: it can't switch the governor"))
+                                    }
+                                    MiniBtn {
+                                        visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup && !win.gstat.gamemode.pending
+                                        width: 96; height: 26; label: win.confirmJoin ? "CONFIRM?" : "JOIN GROUP"
+                                        on: !win.gameBusy
+                                        onClicked: {
+                                            if (!win.confirmJoin) { win.confirmJoin = true; return; }
+                                            win.confirmJoin = false;
+                                            win.runGame(["gamejoin"], "JOINING…");
+                                        }
+                                    }
+                                }
+                                StatRow { label: "MANGOHUD"; value: win.gstat.mangohud ? ((win.gstat.tools || {}).mangohud || "installed") : "not installed"; tone: win.gstat.mangohud ? pal.text : pal.amber }
+                                StatRow { label: "GAMESCOPE"; value: win.gstat.gamescope ? ((win.gstat.tools || {}).gamescope || "installed") : "not installed (optional)" }
+                                StatRow { label: "STEAM"; value: (win.gstat.tools || {}).steam ? "running" : "closed"; note: ((win.gstat.tools || {}).protons || 0) + " Proton builds available" }
+                                StatRow { label: "NTSYNC"; value: (win.gstat.tools || {}).ntsync ? "available" : "not available"; note: "kernel sync for Wine/Proton" }
+                                StatRow {
+                                    label: "SHADERS"
+                                    value: [(win.gstat.tools || {}).reshade ? "ReShade " + win.gstat.tools.reshade : "",
+                                            (win.gstat.tools || {}).vkbasalt ? "vkBasalt " + win.gstat.tools.vkbasalt.replace(/-[^-]*$/, "") : ""]
+                                           .filter(function (x) { return x; }).join(" · ") || "none installed"
+                                    note: "GAMING → FX"
+                                }
+                                RowLayout {
+                                    spacing: 6
+                                    Chip { label: "HEALTH CHECKS →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                                }
+                            }
                         }
-                        StatLine {
-                            label: "vm.max_map_count"
-                            good: win.gstat.max_map_count_ok === true
-                            value: String(win.gstat.max_map_count || "?")
-                            note: win.gstat.max_map_count_ok ? "already ≥ 1048576 (Arch default), enough for games like Star Citizen or DayZ"
-                                                             : "below 1048576: some games crash; Arch's filesystem package sets 1048576"
-                        }
-                        StatLine { label: "MangoHud"; good: win.gstat.mangohud === true; value: win.gstat.mangohud ? "installed" : "missing (pacman -S mangohud lib32-mangohud)" }
-                        StatLine { label: "gamescope"; good: win.gstat.gamescope === true; value: win.gstat.gamescope ? "installed" : "missing (optional)" }
-                        StatLine {
-                            label: "Running now"
-                            good: true
-                            value: !win.gstat.running || win.gstat.running.length === 0 ? "no game"
-                                   : win.gstat.running.map(function (r) { return win.gameName(r.id) + " (pid " + r.pid + ")"; }).join(", ")
-                        }
-                        Item { Layout.fillHeight: true }
                     }
                 }
 

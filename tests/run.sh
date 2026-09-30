@@ -1258,6 +1258,19 @@ echo 'nothing' > "$T/nexus/readme.txt"
 "$CD" fx set steam:5000 off >/dev/null
 unset CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32 \
       CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_FX_PACKAGES_URL CONTROL_DECK_SFX_URL CONTROL_DECK_AWACY_URL CONTROL_DECK_STEAM_STORE_API
+section "STATUS: live details"
+GS="$(CONTROL_DECK_GPU_VENDOR=intel "$CD" gstatus)"
+eq "system block (kernel, threads, RAM)" "$(jq -c '[(.system.kernel | length > 0), (.system.threads > 0), (.system.memTotal > 0)]' <<<"$GS")" '[true,true,true]'
+eq "GPU block even without vendor tools" "$(jq -r .gpu.vendor <<<"$GS")" intel
+eq "displays list (no hyprctl → empty)" "$(jq -c '.displays | type' <<<"$GS")" '"array"'
+eq "tools block" "$(jq -c '.tools | has("steam") and has("ntsync") and has("protons")' <<<"$GS")" true
+eq "NVIDIA clock reasons decoded" "$(bash -c 'source "$1"; nv_reasons 0x0000000000000044' _ "$CD")" '["power cap","thermal (hw)"]'
+mkdir -p "$T/proc3/7100" "$T/proc3/7101"
+printf 'SteamAppId=300\0WINEDLLOVERRIDES=d3dcompiler_47=n;dxgi=n,b\0' > "$T/proc3/7100/environ"; printf 'game.exe\0' > "$T/proc3/7100/cmdline"
+printf 'SteamAppId=300\0' > "$T/proc3/7101/environ"
+printf '/usr/bin/python3\0%s\0waitforexitandrun\0game.exe\0' "$HOME/.steam/compatibilitytools.d/GE-Proton10-3/proton" > "$T/proc3/7101/cmdline"
+D="$(PROC_ROOT="$T/proc3" bash -c 'source "$1"; gs_running_detail steam:300 7100' _ "$CD")"
+eq "running game: Proton build and shaders in use" "$(jq -c '[.proton, .fx]' <<<"$D")" '["GE-Proton10-3","ReShade"]'
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
