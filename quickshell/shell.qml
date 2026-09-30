@@ -1028,6 +1028,19 @@ ShellRoot {
         }
 
         // ---- reusable bits ----------------------------------------------
+        // hover hint in the deck's colours (Qt's default tooltip is a white box)
+        component Tip: ToolTip {
+            id: tipc
+            delay: 450
+            padding: 7
+            width: Math.min(380, tipText.implicitWidth + leftPadding + rightPadding)
+            contentItem: Text {
+                id: tipText
+                text: tipc.text; wrapMode: Text.WordWrap
+                color: pal.text; font.family: win.mono; font.pixelSize: 10
+            }
+            background: Rectangle { color: pal.cardHi; border.color: pal.accent; border.width: 1; radius: 6 }
+        }
         // a fix command, shown and copied, never run
         component FixLine: RowLayout {
             property string cmd
@@ -1221,9 +1234,7 @@ ShellRoot {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: chip.clicked()
             }
-            ToolTip.visible: chip.tip !== "" && chipMa.containsMouse
-            ToolTip.delay: 500
-            ToolTip.text: chip.tip
+            Tip { visible: chip.tip !== "" && chipMa.containsMouse; text: chip.tip }
         }
 
         // source badge
@@ -2785,8 +2796,7 @@ ShellRoot {
                                     visible: !!r && !!r.sfx && r.sfx.count > 0 && !r.current && r.eligible
                                     text: "FX " + (r && r.sfx ? r.sfx.count : ""); color: pal.pink
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
-                                    ToolTip.visible: fxBadgeMa.containsMouse; ToolTip.delay: 300
-                                    ToolTip.text: "ReShade presets for this game on SweetFX DB — see GAMING → FX"
+                                    Tip { visible: fxBadgeMa.containsMouse; text: "ReShade presets for this game on SweetFX DB — see GAMING → FX" }
                                     MouseArea { id: fxBadgeMa; anchors.fill: parent; hoverEnabled: true }
                                 }
                                 Text {
@@ -2844,9 +2854,8 @@ ShellRoot {
                                 anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: Qt.openUrlExternally("https://www.protondb.com/app/" + win.selGameId)
                             }
-                            ToolTip.visible: pdbMa.containsMouse; ToolTip.delay: 400
-                            ToolTip.text: "ProtonDB: score " + pdbTxt.d.score + " · trending " + pdbTxt.d.trendingTier
-                                          + " · confidence " + pdbTxt.d.confidence + ". Click to open."
+                            Tip { visible: pdbMa.containsMouse; text: "ProtonDB: score " + pdbTxt.d.score + " · trending " + pdbTxt.d.trendingTier
+                                          + " · confidence " + pdbTxt.d.confidence + ". Click to open." }
                         }
                     }
 
@@ -3028,9 +3037,8 @@ ShellRoot {
                             text: win.selGameSource !== "steam" ? ""
                                   : (win.selGameWrapped ? "● Launched through Control Deck"
                                      : "○ Steam options: " + (win.selGameLaunch || "none"))
-                            ToolTip.visible: stMa.containsMouse && text !== ""; ToolTip.delay: 400
-                            ToolTip.text: win.selGameWrapped ? "The profile applies on every launch from Steam."
-                                          : "USE IN STEAM moves these options into the profile (Steam must be closed)."
+                            Tip { visible: stMa.containsMouse && parent.text !== ""; text: win.selGameWrapped ? "The profile applies on every launch from Steam."
+                                          : "USE IN STEAM moves these options into the profile (Steam must be closed)." }
                             MouseArea { id: stMa; anchors.fill: parent; hoverEnabled: true }
                         }
                         MiniBtn {
