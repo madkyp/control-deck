@@ -1264,6 +1264,7 @@ eq "system block (kernel, threads, RAM)" "$(jq -c '[(.system.kernel | length > 0
 eq "GPU block even without vendor tools" "$(jq -r .gpu.vendor <<<"$GS")" intel
 eq "displays list (no hyprctl → empty)" "$(jq -c '.displays | type' <<<"$GS")" '"array"'
 eq "tools block" "$(jq -c '.tools | has("steam") and has("ntsync") and has("protons")' <<<"$GS")" true
+eq "library block (games, disks, caches, health)" "$(jq -c '.library | [has("games"), (.disks | type), has("shaders"), has("prefixes"), has("health"), (.recent | type)]' <<<"$GS")" '[true,"array",true,true,true,"array"]'
 eq "NVIDIA clock reasons decoded" "$(bash -c 'source "$1"; nv_reasons 0x0000000000000044' _ "$CD")" '["power cap","thermal (hw)"]'
 mkdir -p "$T/proc3/7100" "$T/proc3/7101"
 printf 'SteamAppId=300\0WINEDLLOVERRIDES=d3dcompiler_47=n;dxgi=n,b\0' > "$T/proc3/7100/environ"; printf 'game.exe\0' > "$T/proc3/7100/cmdline"

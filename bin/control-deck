@@ -3177,11 +3177,12 @@ cmd_gstatus() {
     jq -n --argjson gi "$gm_inst" --argjson ga "$gm_active" --argjson grp "$ingroup" --argjson add "$added" \
           --arg gov "$gov" --arg drv "$drv" --argjson mmc "${mmc:-0}" --argjson run "$run" \
           --argjson sys "$(gs_system)" --argjson gpu "$(gs_gpu)" --argjson displays "$(gs_displays)" --argjson tools "$(gs_tools)" \
+          --argjson library "$(gs_library)" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
         '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
           max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run,
-          system:$sys, gpu:$gpu, displays:$displays, tools:$tools}'
+          system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library}'
 }
 
 # join the gamemode group: lets gamemode switch the CPU governor without a
@@ -5293,6 +5294,44 @@ gs_running_detail() {   # key pid → JSON
     grep -qE '^WINEDLLOVERRIDES=.*d3dcompiler_47=n;(dxgi|d3d9|opengl32)=n,b' <<<"$env" && fx="ReShade"
     jq -nc --arg up "$up" --arg proton "$proton" --arg fx "$fx" \
         '{uptime:($up | tonumber? // null), proton:(if $proton == "" then null else $proton end), fx:(if $fx == "" then null else $fx end)}'
+}
+
+# STATUS → library & storage. Disks are live; the rest (du of caches and
+# prefixes, HEALTH, the games list) is cached for 10 minutes.
+gs_library() {
+    local f="$FX_CACHE/status-library.json" disks
+    mkdir -p "$FX_CACHE"
+    disks="$({ steam_libs; echo "$HOME"; } | while IFS= read -r d; do
+                 [[ -d "$d" ]] && df -B1 --output=target,size,avail "$d" 2>/dev/null | tail -1
+             done | awk '!seen[$1]++ { print $1 "\t" $2 "\t" $3 }' \
+             | jq -Rsc '[split("\n")[] | select(. != "") | split("\t") | {mount:.[0], size:(.[1] | tonumber), free:(.[2] | tonumber)}]')"
+    if [[ ! -s "$f" ]] || (( $(date +%s) - $(stat -c %Y "$f") > 600 )); then
+        local games lc recent=() id name lp pt sc pf hl
+        games="$(cmd_games 2>/dev/null)"; [[ -n "$games" ]] || games="[]"
+        lc="$(steam_localconfig)"
+        while IFS=$'\t' read -r id name; do
+            [[ -n "$id" && -f "$lc" ]] || continue
+            lp="$(vdf_get "$lc" "$LOCALCONFIG_APPS/$id" LastPlayed)"; pt="$(vdf_get "$lc" "$LOCALCONFIG_APPS/$id" Playtime)"
+            [[ "$lp" =~ ^[0-9]+$ ]] && recent+=("$(jq -nc --arg n "$name" --argjson lp "$lp" --argjson pt "${pt:-0}" '{name:$n, last:$lp, minutes:$pt, source:"steam"}')")
+        done < <(jq -r '.[] | select(.source == "steam") | [.id, .name] | @tsv' <<<"$games")
+        while IFS=$'\t' read -r name lp pt; do
+            [[ -n "$lp" ]] || continue
+            recent+=("$(jq -nc --arg n "$name" --arg lp "$lp" --argjson pt "${pt:-0}" \
+                '{name:$n, last:(($lp | sub("\\.[0-9]+"; "") | strptime("%Y-%m-%dT%H:%M:%S") | mktime) // null), minutes:(($pt / 60) | floor), source:"umbral"}' 2>/dev/null)")
+        done < <(jq -r '.[] | select(.source == "umbral" and (.lastPlayed // "") != "") | [.name, .lastPlayed, (.playtime // 0 | tostring)] | @tsv' <<<"$games")
+        sc="$(cmd_shadercache 2>/dev/null | jq -c '{total:(([.games[].total] + [.global[].size]) | add // 0), stale:(.staleBytes // 0), orphan:(.orphanBytes // 0)}')"
+        pf="$(cmd_prefixes 2>/dev/null | jq -c '{total:([.prefixes[].size] | add // 0), count:(.prefixes | length), orphans:([.prefixes[] | select(.orphan)] | length)}')"
+        hl="$(cmd_health 2>/dev/null | jq -c '{fail, warn}')"
+        jq -nc --argjson g "$games" --argjson recent "$(printf '%s\n' "${recent[@]}" | jq -sc 'map(select(. != null and .last != null)) | sort_by(-.last) | .[0:4]')" \
+            --argjson sc "${sc:-null}" --argjson pf "${pf:-null}" --argjson hl "${hl:-null}" \
+            --argjson fx "$(ls -d "$FX_PROFILES"/*/report.json 2>/dev/null | wc -l)" \
+            --arg drv "$(last_driver_update 2>/dev/null)" --arg drvPkgs "$(driver_pkgs 2>/dev/null | cut -d' ' -f1 | paste -sd ' ')" '
+            {games:{steam:([$g[] | select(.source == "steam")] | length), umbral:([$g[] | select(.source == "umbral")] | length),
+                    wrapped:([$g[] | select(.wrapped)] | length), fx:$fx},
+             recent:$recent, shaders:$sc, prefixes:$pf, health:$hl,
+             driverUpdate:($drv | tonumber? // null), driverPkgs:$drvPkgs}' > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+    jq -c --argjson disks "$disks" '. + {disks:$disks}' "$f"
 }
 
 main() {

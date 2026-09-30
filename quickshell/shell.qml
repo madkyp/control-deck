@@ -4316,7 +4316,8 @@ ShellRoot {
                         property real max: 100
                         property string current: ""
                         property color tint: pal.accent
-                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 2
+                        // equal columns: same small preferred width, then fill
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 10; spacing: 2
                         RowLayout {
                             Layout.fillWidth: true
                             Text { text: spark.label; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
@@ -4502,14 +4503,18 @@ ShellRoot {
                             }
                         }
 
-                        // row 2: tools | live history (fills the rest of the tab)
+                        // row 2: tools + library (left) | live history (fills the rest of the tab)
                         GridLayout {
+                            id: stRow2
                             Layout.fillWidth: true; Layout.fillHeight: true
                             columns: stScroll.availableWidth > 780 ? 2 : 1
                             columnSpacing: 8; rowSpacing: 8
 
+                            ColumnLayout {
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                            Layout.fillHeight: stRow2.columns === 2
+                            spacing: 8
                             Card {
-                                Layout.fillHeight: true; Layout.alignment: Qt.AlignTop
                                 title: "GAMING TOOLS"
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 8
@@ -4543,8 +4548,63 @@ ShellRoot {
                                            .filter(function (x) { return x; }).join(" · ") || "none installed"
                                     note: "GAMING → FX"
                                 }
+                            }
+
+                            Card {
+                                Layout.fillHeight: stRow2.columns === 2
+                                property var lib: win.gstat.library || {}
+                                title: "LIBRARY · STORAGE"
+                                sub: lib.games ? lib.games.steam + " Steam · " + lib.games.umbral + " Umbral · " + lib.games.wrapped + " through the deck · " + lib.games.fx + " with shaders" : ""
+                                Repeater {
+                                    model: (win.gstat.library || {}).disks || []
+                                    delegate: Meter {
+                                        required property var modelData
+                                        label: "DISK " + modelData.mount
+                                        value: modelData.size - modelData.free; max: modelData.size; warnAt: 0.9
+                                        text: win.human(modelData.free) + " free of " + win.human(modelData.size)
+                                    }
+                                }
+                                StatRow {
+                                    label: "SHADER CACHES"
+                                    value: (win.gstat.library || {}).shaders ? win.human(win.gstat.library.shaders.total) : "—"
+                                    note: (win.gstat.library || {}).shaders && (win.gstat.library.shaders.stale + win.gstat.library.shaders.orphan) > 0
+                                          ? win.human(win.gstat.library.shaders.stale + win.gstat.library.shaders.orphan) + " can be cleaned (SHADERS)" : "nothing to clean"
+                                }
+                                StatRow {
+                                    label: "PREFIXES"
+                                    value: (win.gstat.library || {}).prefixes ? win.human(win.gstat.library.prefixes.total) + " · " + win.gstat.library.prefixes.count : "—"
+                                    note: (win.gstat.library || {}).prefixes && win.gstat.library.prefixes.orphans > 0
+                                          ? win.gstat.library.prefixes.orphans + " orphan(s) (PREFIXES)" : "no orphans"
+                                }
+                                StatRow {
+                                    label: "GPU DRIVER"
+                                    value: (win.gstat.library || {}).driverUpdate ? "updated " + win.dateOfEpoch(win.gstat.library.driverUpdate) : "—"
+                                    note: (win.gstat.library || {}).driverPkgs || ""
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 8
+                                    StatRow {
+                                        label: "HEALTH"
+                                        property var h: (win.gstat.library || {}).health || {}
+                                        value: h.fail === undefined ? "—" : (h.fail === 0 && h.warn === 0 ? "all good"
+                                               : [h.fail ? h.fail + " problem(s)" : "", h.warn ? h.warn + " warning(s)" : ""].filter(function (x) { return x; }).join(" · "))
+                                        tone: h.fail > 0 ? pal.bad : (h.warn > 0 ? pal.amber : pal.ok)
+                                    }
+                                    Chip { label: "HEALTH →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                                }
+                                Text { text: "RECENTLY PLAYED"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1; Layout.topMargin: 4 }
+                                Repeater {
+                                    model: (win.gstat.library || {}).recent || []
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true; spacing: 8
+                                        Text { text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Text { text: win.playtimeText(modelData.minutes * 60); color: pal.dim; font.family: win.mono; font.pixelSize: 10 }
+                                        Text { text: win.dateOfEpoch(modelData.last); color: pal.dim; font.family: win.mono; font.pixelSize: 10; Layout.preferredWidth: 90; horizontalAlignment: Text.AlignRight }
+                                    }
+                                }
                                 Item { Layout.fillHeight: true }
-                                Chip { label: "HEALTH CHECKS →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                            }
                             }
 
                             Card {
