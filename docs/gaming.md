@@ -123,6 +123,40 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 - Needs: `mangohud` (+`lib32-mangohud`), the game launched through the deck.
 - CLI: `bench get|set|run|restore|clear steam:<appid> …`.
 
+### 2.4 GPU tuner — `GAMING → GPU` (requires LACT)
+> **Requires [LACT](https://github.com/ilya-zlobintsev/LACT)** (`sudo pacman -S lact && sudo systemctl enable --now lactd`).
+> Your user must be in LACT's `admin_group` (`wheel` by default) to use its socket. Without LACT the tab only shows how to install it.
+
+- **Why LACT instead of `nvidia-settings`/sysfs**: it supports NVIDIA (NVML/NvAPI —
+  `nvidia-settings` can't control fans on Wayland) and AMD with one API, reports
+  each card's limits, and — the key safety property — its **profiles with a
+  process rule** are applied by the LACT daemon only while that process runs and
+  reverted when it exits, independently of Control Deck. Config changes through
+  its API must also be confirmed within 5 s or LACT reverts them.
+- The deck creates one LACT profile per game, `control-deck:<game>`
+  (`create_profile` with a provided config + `{type: process, filter: {name}}`
+  rule) and turns LACT's automatic profile switching on with the first one. The
+  default (non-profile) GPU settings are never modified.
+- Settings: power limit (W), core and memory clock offsets (NVIDIA, per power
+  state; AMD RDNA4 too), NVIDIA thermal target, AMD voltage offset (undervolt),
+  fan curve presets (quiet / balanced / performance, all reaching 100 % by 85 °C)
+  or the driver's fan control.
+- Limits: power and target temperature are checked against the card's own range;
+  clock/voltage offsets against LACT's limits **and** a conservative band
+  (NVIDIA core −300…+100 MHz, memory −1000…+500 MHz; AMD voltage −80…0 mV) —
+  a heuristic, not a vendor guarantee. Leaving the band needs **UNLOCK FULL
+  RANGE** on purpose; applying always needs a second click ("I accept the risk").
+- The game's process name (LACT matches the executable name, resolving Wine
+  games from their command line) is found with **DETECT** while the game runs:
+  the GPU processes LACT reports (`process_list`) whose environment carries the
+  game's `SteamAppId`, largest VRAM user first.
+- Verified here (RTX 2070, LACT 0.10.1): status, limits (112.5–250 W, offsets
+  ±1000 / −2000…+6000 MHz, target 65–88 °C), process list. Profile creation is
+  covered by tests against a simulated daemon; **not applied to the real GPU
+  yet**. AMD: follows LACT's documented config (`voltage_offset`, `power_cap`,
+  offsets on RDNA4) — the AMD clock-table format is **not verified**.
+- CLI: `gpu status`, `gpu profile get|set|delete <key> …`, `gpu detect <key>`.
+
 ### 2.5 Compatibility manager (Steam + ProtonDB)
 - ProtonDB **summary** per game: tier, score, report count, trending tier,
   confidence. Only the public summary endpoint is used
@@ -194,8 +228,7 @@ group yet. Everything else in Control Deck already goes through `pkexec`.
 
 ## Not implemented yet
 
-2.4 GPU tuner (plan: LACT
-backend, which supports NVIDIA and AMD) · 2.6 prefixes · 2.7 save backups ·
+2.6 prefixes · 2.7 save backups ·
 2.8 unified launcher · 2.9 Arch gamer health panel · 2.10 update guardian (the
 UPDATES/SNAPSHOTS tabs already cover Arch news and snapshots) · 2.11 space
 cleaner · 2.12 session monitor · 2.13 bottleneck detector · 2.14 vkBasalt /

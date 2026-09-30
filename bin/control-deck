@@ -3500,6 +3500,206 @@ cmd_bench() {
     esac
 }
 
+# --- GPU tuner (2.4) — backend: LACT ------------------------------------------------
+# Requires LACT (`pacman -S lact`, `systemctl enable --now lactd`). The deck never
+# writes driver/sysfs knobs itself: it creates LACT profiles "control-deck:<game>"
+# with a process rule, and LACT's daemon applies them only while that game's
+# process runs and reverts them when it exits (also if the deck is closed or
+# crashes). The default (non-profile) GPU settings are never changed.
+# API: docs/API.md + CONFIG.md of LACT 0.10 (get/set config, profiles, rules).
+LACT_SOCK="${CONTROL_DECK_LACT_SOCK:-/run/lactd.sock}"
+
+# one request (JSON on stdin) → response JSON on stdout
+lact_call() {
+    if [[ -n "${CONTROL_DECK_LACT_CMD:-}" ]]; then "$CONTROL_DECK_LACT_CMD"; return; fi   # tests
+    python3 -c '
+import json, socket, sys
+req = sys.stdin.read().strip()
+s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1])
+s.sendall((req + "\n").encode()); buf = b""
+while not buf.endswith(b"\n"):
+    d = s.recv(65536)
+    if not d: break
+    buf += d
+sys.stdout.write(buf.decode())' "$LACT_SOCK"
+}
+lact_q() {   # lact_q <command> [args-json] → .data (exit 1 on error, message on stderr)
+    local r
+    r="$(jq -cn --arg c "$1" --argjson a "${2:-null}" 'if $a == null then {command:$c} else {command:$c, args:$a} end' | lact_call 2>/dev/null)" \
+        || { echo "LACT daemon unreachable" >&2; return 1; }
+    if [[ "$(jq -r '.status' <<<"$r" 2>/dev/null)" == ok ]]; then jq -c '.data' <<<"$r"
+    else jq -r '.data.description // .data // "LACT error"' <<<"$r" >&2; return 1; fi
+}
+
+lact_ready() {
+    [[ -n "${CONTROL_DECK_LACT_CMD:-}" ]] && return 0
+    have lact && [[ -S "$LACT_SOCK" && -r "$LACT_SOCK" && -w "$LACT_SOCK" ]]
+}
+
+GPU_PROFILES="$GAMING_DIR/gpu-profiles.json"
+gpu_profiles_json() { if [[ -s "$GPU_PROFILES" ]]; then cat "$GPU_PROFILES"; else echo '{}'; fi; }
+
+# conservative bands shown by default (heuristics, NOT vendor guarantees);
+# anything outside needs unlock=true. Hard limits always come from LACT.
+GPU_SAFE='{"nvidia":{"core":[-300,100],"mem":[-1000,500]},"amd":{"core":[-300,100],"mem":[-500,300],"voltage":[-80,0]}}'
+
+gpu_device() { lact_q list_devices | jq -c '.[0] // empty'; }
+
+cmd_gpu_status() {
+    if ! have lact && [[ -z "${CONTROL_DECK_LACT_CMD:-}" ]]; then
+        jq -n '{lact:{installed:false}, note:"GPU tuning requires LACT: sudo pacman -S lact && sudo systemctl enable --now lactd"}'; return 0
+    fi
+    if ! lact_ready; then
+        jq -n --arg s "$LACT_SOCK" '{lact:{installed:true, running:false},
+            note:"LACT is installed but its daemon socket (\($s)) is not usable: sudo systemctl enable --now lactd (your user must be in LACT admin_group, wheel by default)"}'; return 0
+    fi
+    local dev id stats clocks sys profs vendor
+    dev="$(gpu_device)" || return 4
+    [[ -z "$dev" ]] && { jq -n '{lact:{installed:true, running:true}, note:"LACT sees no GPU"}'; return 0; }
+    id="$(jq -r .id <<<"$dev")"
+    case "${id:0:4}" in 10DE) vendor=nvidia ;; 1002) vendor=amd ;; 8086) vendor=intel ;; *) vendor=unknown ;; esac
+    stats="$(lact_q device_stats "$(jq -cn --arg i "$id" '{id:$i}')" || echo null)"
+    clocks="$(lact_q device_clocks_info "$(jq -cn --arg i "$id" '{id:$i}')" || echo null)"
+    sys="$(lact_q system_info || echo null)"
+    profs="$(lact_q list_profiles '{"include_state":false}' || echo null)"
+    jq -n --argjson dev "$dev" --arg vendor "$vendor" --argjson st "$stats" --argjson ck "$clocks" \
+          --argjson sys "$sys" --argjson pr "$profs" --argjson safe "$GPU_SAFE" --argjson mine "$(gpu_profiles_json)" '
+        ($ck.table.type // "") as $tt | ($ck.table.value // {}) as $tv
+        | {lact:{installed:true, running:true, version:($sys.version // "")},
+           device:{id:$dev.id, name:$dev.name, vendor:$vendor},
+           stats:{power:($st.power // null), temps:(($st.temps // {}) | map_values(.current)),
+                  fan:{percent:(if ($st.fan.pwm_max // 0) > 0 then (($st.fan.pwm_current // 0) * 100 / $st.fan.pwm_max | round) else null end),
+                       rpm:($st.fan.speed_current // null), custom:($st.fan.control_enabled // false)},
+                  clock:($st.clockspeed.gpu_clockspeed // null), vramClock:($st.clockspeed.vram_clockspeed // null),
+                  targetTemp:($st.nvidia_thermal_info.target_temp // null)},
+           limits:{power:(if $st.power then [$st.power.cap_min, $st.power.cap_max] else null end),
+                   powerDefault:($st.power.cap_default // null),
+                   core:(if $tt == "nvidia" and ($tv.gpu_offsets | length) > 0 then [($tv.gpu_offsets | map(.min) | max), ($tv.gpu_offsets | map(.max) | min)] else null end),
+                   mem:(if $tt == "nvidia" and ($tv.mem_offsets | length) > 0 then [($tv.mem_offsets | map(.min) | max), ($tv.mem_offsets | map(.max) | min)] else null end),
+                   voltage:(if $tt == "amd" and $tv.voltage_offset then [$tv.voltage_offset.min, $tv.voltage_offset.max] else null end),
+                   targetTemp:($st.nvidia_thermal_info.target_temp.allowed_range // null)},
+           clockTable:$tt, safe:($safe[$vendor] // {}),
+           autoSwitch:($pr.auto_switch // false), currentProfile:($pr.current_profile // null),
+           lactProfiles:(($pr.profiles // {}) | keys),
+           games:$mine}'
+}
+
+# fan presets (temperature °C → speed 0-1); every one reaches 100 % at 85 °C
+gpu_fan_curve() {
+    case "$1" in
+        quiet)       echo '{"40":0.2,"60":0.35,"70":0.5,"80":0.8,"85":1.0}' ;;
+        balanced)    echo '{"40":0.3,"55":0.45,"65":0.6,"75":0.8,"85":1.0}' ;;
+        performance) echo '{"35":0.4,"50":0.55,"60":0.7,"70":0.9,"80":1.0}' ;;
+        *) return 1 ;;
+    esac
+}
+
+within() {   # value min max
+    awk -v v="$1" -v a="$2" -v b="$3" 'BEGIN { exit !(v >= a && v <= b) }'
+}
+
+# gpu profile get|set|delete <key> … · gpu detect <key>
+cmd_gpu() {
+    local sub="$1"; shift
+    case "$sub" in
+        status) cmd_gpu_status; return ;;
+        profile) ;;
+        detect) gpu_detect "$@"; return ;;
+        *) err "use: gpu status | gpu profile get|set|delete <key> … | gpu detect <key>"; return 2 ;;
+    esac
+    local op="$1" key="$2"; shift 2
+    valid_game_key "$key" && [[ "$key" != default ]] || { err "not a game key: $key"; return 2; }
+    lact_ready || { err "GPU tuning requires LACT: sudo pacman -S lact && sudo systemctl enable --now lactd"; return 4; }
+    local pname="control-deck:$key"
+    case "$op" in
+        get) gpu_profiles_json | jq -c --arg k "$key" '.[$k] // {}' ;;
+        delete)
+            lact_q delete_profile "$(jq -cn --arg n "$pname" '{name:$n}')" >/dev/null 2>&1
+            local tmp; tmp="$(mktemp)"; gpu_profiles_json | jq --arg k "$key" 'del(.[$k])' > "$tmp" && mv "$tmp" "$GPU_PROFILES"
+            log "✔ GPU profile of $key removed; the game runs with your default GPU settings."
+            history_add "gpu profile delete" gaming "$key" 0 ;;
+        set)
+            local st kv f v unlock=false power="" core="" mem="" fan="" temp="" volt="" proc=""
+            for kv in "$@"; do
+                f="${kv%%=*}"; v="${kv#*=}"
+                case "$f" in
+                    power|core|mem|temp|voltage) [[ -z "$v" || "$v" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { err "$f must be a number"; return 2; } ;;&
+                    power) power="$v" ;; core) core="$v" ;; mem) mem="$v" ;; temp) temp="$v" ;; voltage) volt="$v" ;;
+                    fan) [[ -z "$v" || "$v" == auto ]] || gpu_fan_curve "$v" >/dev/null || { err "fan: auto, quiet, balanced or performance"; return 2; }; fan="$v" ;;
+                    process) [[ "$v" =~ ^[A-Za-z0-9._+-]{1,64}$ ]] || { err "process name looks wrong: $v"; return 2; }; proc="$v" ;;
+                    unlock) [[ "$v" == true ]] && unlock=true ;;
+                    *) err "unknown GPU field: $f"; return 2 ;;
+                esac
+            done
+            [[ -n "$proc" ]] || { err "which process is the game? (launch it and use DETECT, or give process=<name.exe>)"; return 2; }
+            st="$(cmd_gpu_status)"
+            local id vendor; id="$(jq -r .device.id <<<"$st")"; vendor="$(jq -r .device.vendor <<<"$st")"
+            # hard limits from the card/driver, then the conservative band unless unlocked
+            chk() {   # name value limits-json safe-json
+                [[ -z "$2" ]] && return 0
+                if [[ "$3" == null ]]; then err "$1 can't be set on this GPU"; return 2; fi
+                within "$2" "$(jq -r '.[0]' <<<"$3")" "$(jq -r '.[1]' <<<"$3")" || { err "$1 $2 is outside what the GPU allows $(jq -c . <<<"$3")"; return 2; }
+                if [[ "$4" != null && $unlock != true ]] && ! within "$2" "$(jq -r '.[0]' <<<"$4")" "$(jq -r '.[1]' <<<"$4")"; then
+                    err "$1 $2 is outside the conservative range $(jq -c . <<<"$4"): unlock it on purpose to use it"; return 3; fi
+            }
+            chk power "$power" "$(jq -c .limits.power <<<"$st")" null || return $?
+            chk core "$core" "$(jq -c .limits.core <<<"$st")" "$(jq -c '.safe.core // null' <<<"$st")" || return $?
+            chk mem "$mem" "$(jq -c .limits.mem <<<"$st")" "$(jq -c '.safe.mem // null' <<<"$st")" || return $?
+            chk "target temp" "$temp" "$(jq -c .limits.targetTemp <<<"$st")" null || return $?
+            chk voltage "$volt" "$(jq -c .limits.voltage <<<"$st")" "$(jq -c '.safe.voltage // null' <<<"$st")" || return $?
+            # LACT GpuConfig: only the fields the user set
+            local clocks pstates cfg
+            clocks="$(lact_q device_clocks_info "$(jq -cn --arg i "$id" '{id:$i}')" || echo '{}')"
+            pstates="$(jq -c '.table.value.gpu_offsets // {} | keys' <<<"$clocks")"
+            cfg="$(jq -cn --arg power "$power" --arg core "$core" --arg mem "$mem" --arg temp "$temp" --arg volt "$volt" \
+                         --arg fan "$fan" --argjson curve "$(gpu_fan_curve "${fan:-x}" 2>/dev/null || echo null)" --argjson ps "$pstates" '
+                {} + (if $power != "" then {power_cap:($power|tonumber)} else {} end)
+                   + (if $core != "" then {gpu_clock_offsets:($ps | map({key:., value:($core|tonumber)}) | from_entries)} else {} end)
+                   + (if $mem != "" then {mem_clock_offsets:($ps | map({key:., value:($mem|tonumber)}) | from_entries)} else {} end)
+                   + (if $temp != "" then {nvidia_thermal_options:{target_temperature:($temp|tonumber)}} else {} end)
+                   + (if $volt != "" then {voltage_offset:($volt|tonumber)} else {} end)
+                   + (if $curve != null then {fan_control_enabled:true, fan_control_settings:{mode:"curve", static_speed:0.5,
+                        temperature_key:"edge", interval_ms:500, curve:$curve, spindown_delay_ms:3000, change_threshold:2}} else {} end)')"
+            [[ "$cfg" == "{}" ]] && { err "nothing to set"; return 2; }
+            [[ "$vendor" != nvidia ]] && cfg="$(jq -c 'del(.nvidia_thermal_options)' <<<"$cfg")"
+            # replace the LACT profile: settings + process rule
+            lact_q delete_profile "$(jq -cn --arg n "$pname" '{name:$n}')" >/dev/null 2>&1
+            lact_q create_profile "$(jq -cn --arg n "$pname" --arg id "$id" --argjson c "$cfg" --arg p "$proc" \
+                '{name:$n, base:{provided:{gpus:{($id):$c}, rule:{type:"process", filter:{name:$p}}}}}')" >/dev/null \
+                || { err "LACT refused the profile"; return 4; }
+            # rules only work with automatic switching (keeps the default profile otherwise)
+            if [[ "$(jq -r .autoSwitch <<<"$st")" != true ]]; then
+                lact_q set_profile '{"name":null,"auto_switch":true}' >/dev/null || { err "could not enable LACT's automatic profile switching"; return 4; }
+                log "→ Enabled LACT's automatic profile switching (needed for per-game profiles)."
+            fi
+            mkdir -p "$GAMING_DIR"
+            local tmp; tmp="$(mktemp)"
+            gpu_profiles_json | jq --arg k "$key" --arg p "$proc" --argjson c "$cfg" \
+                --argjson in "$(jq -cn --arg power "$power" --arg core "$core" --arg mem "$mem" --arg temp "$temp" --arg volt "$volt" --arg fan "$fan" \
+                    '{power:$power, core:$core, mem:$mem, temp:$temp, voltage:$volt, fan:$fan}')" \
+                '.[$k] = {process:$p, config:$c, input:$in}' > "$tmp" && mv "$tmp" "$GPU_PROFILES"
+            log "✔ GPU profile saved in LACT as \"$pname\": applied while $proc runs, reverted when it exits."
+            history_add "gpu profile" "$vendor" "$key" 0 ;;
+        *) err "use: gpu profile get|set|delete <key> …"; return 2 ;;
+    esac
+}
+
+# the game's GPU process name as LACT sees it (the game must be running)
+gpu_detect() {
+    local key="$1" id pids dev procs
+    [[ "$key" =~ ^steam:([0-9]+)$ ]] || { err "use: gpu detect steam:<appid>"; return 2; }
+    id="${BASH_REMATCH[1]}"
+    lact_ready || { err "GPU tuning requires LACT"; return 4; }
+    # -z: environ entries are NUL-separated, so ^…$ matches one variable exactly
+    pids="$(grep -azlx "SteamAppId=$id" "${PROC_ROOT:-/proc}"/[0-9]*/environ 2>/dev/null | sed -E 's|.*/([0-9]+)/environ|\1|')"
+    [[ -n "$pids" ]] || { err "the game isn't running: launch it, then DETECT"; return 3; }
+    dev="$(gpu_device | jq -r .id)"
+    procs="$(lact_q process_list "$(jq -cn --arg i "$dev" '{id:$i}')")" || return 4
+    jq -r --arg pids "$pids" '($pids | split("\n")) as $p | .processes | to_entries
+        | map(select(.key as $k | $p | index($k))) | sort_by(-.value.memory_used) | .[0].value.name // empty' <<<"$procs" \
+        | grep . || { err "none of the game's processes is using the GPU yet: try again in-game"; return 4; }
+}
+
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
@@ -3567,6 +3767,10 @@ Gaming
   shadercache                   Shader caches per game + driver caches, stale/orphan detection (JSON)
   shaderclean <target> [part]   steam:<appid> [driver|all] · orphans · stale · global:<id>
   bench get|set|run|restore|clear steam:<appid> …   A/B benchmark with MangoHud frame logs
+  gpu status                    GPU, limits and LACT state (requires LACT) (JSON)
+  gpu profile get|set|delete <key> [power= core= mem= temp= voltage= fan= process= unlock=true]
+                                Per-game GPU profile applied by LACT while the game runs
+  gpu detect <key>              The running game's GPU process name, as LACT sees it
 EOF
 }
 
@@ -3654,6 +3858,7 @@ main() {
         gseen)       cmd_gseen "$1" ;;
         shadercache) cmd_shadercache ;;
         bench)       cmd_bench "$@" ;;
+        gpu)         cmd_gpu "$@" ;;
         shaderclean) with_notify "Shader cache cleaned ✓" "Shader cache clean failed ✗" "$1" cmd_shaderclean "$1" "$2" ;;
         selfupdate)  with_notify "Control Deck updated ✓" "Control Deck update failed ✗" "control-deck" cmd_selfupdate ;;
         ""|-h|--help|help) usage ;;

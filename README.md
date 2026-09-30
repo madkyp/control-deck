@@ -92,6 +92,7 @@ The window has six tabs:
 - **Proton version per game**, from the ones you have installed (Steam must be closed; a backup of its config is kept).
 - **SHADERS**: every game's shader cache split into Steam's pipeline recordings and the GPU driver's compiled cache (NVIDIA or Mesa for AMD/Intel), with **stale** caches (not used since the last driver update) and **orphans** (uninstalled games) detected and cleanable. UPDATES warns before an update that changes the GPU driver.
 - **BENCH**: A/B benchmark of two launch variants (env, args, gamemode, Proton) with MangoHud frame logs: average FPS, 1 % / 0.1 % lows, p99 frametime and both frametime curves side by side.
+- **GPU** *(requires [LACT](https://github.com/ilya-zlobintsev/LACT))*: per-game GPU profile — power limit, clock offsets, AMD undervolt, fan curve — stored as a LACT profile that LACT applies only while the game runs and reverts when it exits. Values are checked against the card's limits and a conservative band (unlocking it is explicit), and applying asks you to accept the risk.
 - **STATUS**: gamemode (with a one-click **JOIN GROUP** so it can switch the governor without a password), CPU governor, `vm.max_map_count`, MangoHud/gamescope and the game running now.
 - Design notes, permissions and what's verified: [`docs/gaming.md`](docs/gaming.md).
 
@@ -134,6 +135,8 @@ The window has six tabs:
 - `appimageupdatetool` (AUR) — update AppImages that don't come from GitHub
 - `debtap` (AUR) — install `.deb` files (then run `sudo debtap -u` once)
 - `snapper` (+ `snap-pac`, `grub-btrfs`, `btrfs-assistant`) — SNAPSHOTS tab and snapshots before pacman changes
+- `lact` (running `lactd`, user in `wheel`) — **required** for GAMING → GPU (fan, power, clocks, undervolt)
+- `python3` — talking to LACT's socket
 - `git` — the deck updating itself from your clone
 - `gamemode` (+ `lib32-gamemode`), `mangohud` (+ `lib32-mangohud`), `gamescope` — GAMING profiles
 
