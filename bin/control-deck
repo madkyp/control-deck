@@ -5183,7 +5183,7 @@ cmd_fx() {
 
 # --- STATUS: live system / GPU / display / tools info (polled every few s) ------
 gs_system() {
-    local mi kt kf st ops mhz
+    local mi st ops mhz
     mi="$(cat "${PROCFS}/meminfo" 2>/dev/null)"
     mhz="$(awk -F: '/^cpu MHz/ { s += $2; n++ } END { if (n) printf "%d", s / n }' "${PROCFS}/cpuinfo" 2>/dev/null)"
     st="$(cat "$SYSFS/kernel/sched_ext/state" 2>/dev/null)"; ops="$(cat "$SYSFS/kernel/sched_ext/root/ops" 2>/dev/null)"
@@ -5208,17 +5208,17 @@ gs_system() {
 
 # NVIDIA clock-event reasons (NVML bitmask) → words
 nv_reasons() {
-    local v=$(( ${1:-0} )) out=()
-    (( v & 0x1 ))   && out+=("idle")
-    (( v & 0x2 ))   && out+=("app clocks")
-    (( v & 0x4 ))   && out+=("power cap")
-    (( v & 0x8 ))   && out+=("hw slowdown")
-    (( v & 0x10 ))  && out+=("sync boost")
-    (( v & 0x20 ))  && out+=("thermal (sw)")
-    (( v & 0x40 ))  && out+=("thermal (hw)")
-    (( v & 0x80 ))  && out+=("power brake")
-    (( v & 0x100 )) && out+=("display clock")
-    printf '%s\n' "${out[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))'
+    local v=$(( ${1:-0} )) why=()
+    (( v & 0x1 ))   && why+=("idle")
+    (( v & 0x2 ))   && why+=("app clocks")
+    (( v & 0x4 ))   && why+=("power cap")
+    (( v & 0x8 ))   && why+=("hw slowdown")
+    (( v & 0x10 ))  && why+=("sync boost")
+    (( v & 0x20 ))  && why+=("thermal (sw)")
+    (( v & 0x40 ))  && why+=("thermal (hw)")
+    (( v & 0x80 ))  && why+=("power brake")
+    (( v & 0x100 )) && why+=("display clock")
+    printf '%s\n' "${why[@]}" | jq -Rsc 'split("\n") | map(select(. != ""))'
 }
 
 gs_gpu() {
