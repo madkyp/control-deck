@@ -317,6 +317,7 @@ ShellRoot {
         property string fxConfirm: ""       // anti-cheat games: second click applies
         property bool   fxActive: !!fx.current && !!win.gp.fx
         property bool   fxAnticheat: !!fx.online && fx.online.level === "anticheat"
+        property var    fxCur: fx.current || ({})   // the applied look, never undefined while fx reloads
         property bool   fxReshade: fx.mode === "reshade"
         property bool   fxGame: selGameSource === "steam" || selGameSource === "umbral"
         property bool   fxUmbral: selGameSource === "umbral"
@@ -352,7 +353,7 @@ ShellRoot {
                  fx.wrapped ? "Its Steam launch options go through the deck, which loads the shaders."
                             : (fx.steamRunning ? "Close Steam, then USE IN STEAM." : "USE IN STEAM puts the deck in its launch options.")],
                 [fxActive, "Pick a look",
-                 fxActive ? "Active: " + fx.current.name + ". Change it any time below."
+                 fxActive ? "Active: " + fxCur.name + ". Change it any time below."
                           : ((fx.links || []).length
                              ? "Your saved preset: " + fx.links[0].label + " — open it, download the file, then IMPORT…"
                                + (fx.links[0].notes ? " Its guide, mapped to the deck, is under SAVED below." : "")
@@ -3888,13 +3889,13 @@ ShellRoot {
                                             font.family: win.mono; font.pixelSize: 11; font.bold: true
                                             color: win.fxActive ? pal.ok : pal.dim
                                             text: win.fxActive
-                                                  ? "● ACTIVE: " + win.fx.current.name + "  ·  " + win.fx.current.applied + " effect" + (win.fx.current.applied > 1 ? "s" : "")
-                                                    + ((win.fx.current.skipped || []).length ? "  ·  " + win.fx.current.skipped.length + " skipped" : "")
+                                                  ? "● ACTIVE: " + win.fxCur.name + "  ·  " + win.fxCur.applied + " effect" + (win.fxCur.applied > 1 ? "s" : "")
+                                                    + ((win.fxCur.skipped || []).length ? "  ·  " + win.fxCur.skipped.length + " skipped" : "")
                                                   : "○ No shaders on this game"
                                         }
                                         Chip {
-                                            visible: win.fxActive && win.fx.current.source === "sfx"
-                                            label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fx.current.url)
+                                            visible: win.fxActive && win.fxCur.source === "sfx"
+                                            label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fxCur.url)
                                         }
                                         MiniBtn {
                                             visible: win.fxActive
@@ -3904,7 +3905,7 @@ ShellRoot {
                                         }
                                     }
                                     Repeater {
-                                        model: win.fxActive ? (win.fx.current.skipped || []) : []
+                                        model: win.fxActive ? (win.fxCur.skipped || []) : []
                                         delegate: Text {
                                             required property var modelData
                                             Layout.fillWidth: true; elide: Text.ElideRight
@@ -3941,7 +3942,7 @@ ShellRoot {
                                                 property string k: "builtin:" + modelData[0]
                                                 label: win.fxConfirm === k ? "CONFIRM?" : modelData[1]
                                                 tint: pal.ok; tip: modelData[2]
-                                                active: win.fxActive && win.fx.current.source === "builtin" && win.fx.current.name === modelData[0]
+                                                active: win.fxActive && win.fxCur.source === "builtin" && win.fxCur.name === modelData[0]
                                                 on: !win.gameBusy && win.fxReady
                                                 onClicked: win.fxApply(k, "APPLYING…")
                                             }
@@ -4061,7 +4062,7 @@ ShellRoot {
                                             property string k: "sfx:" + modelData.id
                                             width: fxList.width - 10; height: 34; radius: 6
                                             color: pal.panel; border.width: 1
-                                            border.color: win.fxActive && win.fx.current.id === modelData.id ? pal.ok : pal.border
+                                            border.color: win.fxActive && win.fxCur.id === modelData.id ? pal.ok : pal.border
                                             RowLayout {
                                                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 6
                                                 Text {
@@ -4070,7 +4071,7 @@ ShellRoot {
                                                 }
                                                 Chip { label: "↗"; tip: "Open the preset's page"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
                                                 Chip {
-                                                    label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fx.current.id === modelData.id ? "ACTIVE ✓" : "APPLY")
+                                                    label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fxCur.id === modelData.id ? "ACTIVE ✓" : "APPLY")
                                                     tint: pal.ok; on: !win.gameBusy && win.fxReady
                                                     tip: !win.fxReady ? "Run INSTALL above first"
                                                          : (win.fxReshade ? "Download it and fetch the shaders it needs; ReShade runs it as it is" : "Download, fetch the shaders it needs and convert it for vkBasalt")
