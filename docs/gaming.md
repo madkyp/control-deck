@@ -590,6 +590,21 @@ reads ini paths as UTF-8 (`std::filesystem::u8path` in `ini_file.hpp`), so
 the accent is fine. It's set when ReShade is installed in a game, and
 `fx screenshots` updates the games already set up.
 
+### Which route for which game (★ in FX, MY LIBRARY)
+`fx_advice` picks per game and says why:
+- native Linux build: an ELF file that mentions `libvulkan.so` → vkBasalt;
+  OpenGL → none (vkBasalt is Vulkan-only, ReShade's DLL Windows-only);
+- GDI (RPG Maker) → none; a Vulkan `.exe` → vkBasalt;
+- anti-cheat → vkBasalt as the lighter touch (a Vulkan layer, nothing in the
+  game folder), saying that neither is safe;
+- otherwise (D3D9–12/OpenGL under Proton) → ReShade, mentioning the depth
+  effects of the current preset that vkBasalt would skip, and that vkBasalt is
+  the alternative.
+The FX route card lists the reasons, step 1 offers USE RESHADE ★ or USE
+VKBASALT ★, MY LIBRARY rows show the ★ pick (reasons on hover), and SET UP
+ALL follows it. It skips games with no possible route, and vkBasalt games
+until vkBasalt is installed.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

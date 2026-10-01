@@ -338,10 +338,9 @@ ShellRoot {
         property var    fxSteps: {
             var key = (fx.key || "Home").toUpperCase(), rs = fxReshade;
             return [
-                [rs || fx.recommended === "vkbasalt", "Route: " + (rs ? "ReShade" : "vkBasalt"),
-                 rs ? "ReShade itself runs presets exactly as made. vkBasalt (ROUTE below) only for Vulkan games."
-                    : (fx.recommended === "vkbasalt" ? "This game renders with Vulkan: vkBasalt is the one that works."
-                       : "ReShade is recommended here: presets run exactly as made (depth effects too), with its in-game menu.")],
+                [(rs ? "reshade" : "vkbasalt") === fx.recommended, "Route: " + (rs ? "ReShade" : "vkBasalt"),
+                 ((rs ? "reshade" : "vkbasalt") === fx.recommended ? "The recommended one for this game. " : "Recommended here: " + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt") + ". ")
+                 + ((fx.advice || {}).reasons || [""])[0]],
                 [fxReady, "Install " + (rs ? "ReShade" : "vkBasalt + shaders"),
                  rs ? "Downloaded from reshade.me into your user folder, no password." : "From chaotic-aur (asks for your password) plus the standard shaders."],
                 fxUmbral
@@ -3557,8 +3556,11 @@ ShellRoot {
                                             // the pending step's own button
                                             MiniBtn {
                                                 visible: next && index === 0
-                                                width: 130; height: 28; label: "USE RESHADE ★"; on: !win.gameBusy
-                                                onClicked: win.fxApply("mode:reshade", "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
+                                                width: 140; height: 28; label: win.fx.recommended === "vkbasalt" ? "USE VKBASALT ★" : "USE RESHADE ★"
+                                                on: !win.gameBusy
+                                                onClicked: win.fx.recommended === "vkbasalt"
+                                                           ? win.fxApply("mode:vkbasalt", "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
+                                                           : win.fxApply("mode:reshade", "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
                                             }
                                             MiniBtn {
                                                 visible: next && index === 1
@@ -3616,12 +3618,17 @@ ShellRoot {
                                             tip: "A Vulkan layer: simplest, no files in the game folder; presets are converted and effects that need depth are skipped."
                                             onClicked: if (win.fxReshade) win.fxApply(k, "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
                                         }
-                                        Text {
-                                            Layout.fillWidth: true; elide: Text.ElideRight
-                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "★ recommended: " + (win.fx.recommended === "vkbasalt"
-                                                  ? "this game renders with Vulkan, ReShade's DLL can't hook it"
-                                                  : "full presets (depth effects included) and ReShade's in-game menu")
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                    // why the ★ one, for this game
+                                    Repeater {
+                                        model: (win.fx.advice || {}).reasons || []
+                                        delegate: Text {
+                                            required property var modelData
+                                            required property int index
+                                            Layout.fillWidth: true; Layout.leftMargin: 86; wrapMode: Text.WordWrap
+                                            color: index === 0 ? pal.text : pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: (index === 0 ? "★ " : "· ") + modelData
                                         }
                                     }
                                     // ReShade: which .exe, which API
@@ -4048,6 +4055,15 @@ ShellRoot {
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 8
                                             Text { Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
+                                            Text {
+                                                visible: !!modelData.advice
+                                                text: !modelData.advice ? "" : (modelData.advice.pick === "none" ? "no shaders possible"
+                                                      : "★ " + (modelData.advice.pick === "reshade" ? "ReShade" : "vkBasalt"))
+                                                color: modelData.advice && modelData.advice.pick === "none" ? pal.dim : pal.amber
+                                                font.family: win.mono; font.pixelSize: 10
+                                                MouseArea { id: advMa; anchors.fill: parent; hoverEnabled: true }
+                                                Tip { visible: advMa.containsMouse && !!modelData.advice; text: modelData.advice ? modelData.advice.reasons.join("\n") : "" }
+                                            }
                                             Text {
                                                 visible: !!modelData.current
                                                 text: modelData.current ? "● " + (modelData.current.mode === "reshade" ? "ReShade" : "vkBasalt") + " · " + modelData.current.name : ""

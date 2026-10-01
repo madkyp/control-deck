@@ -1371,6 +1371,18 @@ eq "fix drops only what does nothing on this GPU" "$("$CD" gprofile get steam:60
 "$CD" gaming-import "$BK" >/dev/null 2>&1
 eq "import adds what's missing here" "$("$CD" gprofile get steam:600 | jq -r '.env.__GL_SHADER_DISK_CACHE_SIZE')" 1000
 eq "…and keeps what's already here" "$("$CD" gprofile get steam:601 | jq -r '.env.A')" 1
+section "FX: which route for which game"
+ADV() { bash -c 'source "$1"; fx_advice "$2" "$3" "$4" "$5"' _ "$CD" "$@"; }
+eq "DirectX single-player → ReShade" "$(ADV steam:1 '[{"api":"dxgi"}]' '{"level":"none"}' null | jq -r .pick)" reshade
+eq "Vulkan → vkBasalt" "$(ADV steam:1 '[{"api":"vulkan"}]' '{"level":"none"}' null | jq -r .pick)" vkbasalt
+eq "GDI → none" "$(ADV steam:1 '[{"api":"gdi"}]' null null | jq -r .pick)" none
+eq "anti-cheat → vkBasalt, saying neither is safe" "$(ADV steam:1 '[{"api":"dxgi"}]' '{"level":"anticheat","anticheats":["EAC"]}' null | jq -r '.pick + " | " + .reasons[0]')" "vkbasalt | Online game with anti-cheat (EAC): neither is safe there."
+has "a preset with depth effects is a reason for ReShade" "$(ADV steam:1 '[{"api":"dxgi"}]' '{"level":"none"}' '{"skipped":[{"why":"uses the depth buffer"}]}' | jq -r '.reasons | join(" ")')" "1 depth effect(s)"
+NG="$ST/steamapps/common/NativeGame"; mkdir -p "$NG"; man 7000 "Native Game" NativeGame 1
+{ printf '\x7fELF'; head -c 600000 /dev/zero; printf 'libvulkan.so.1'; } > "$NG/game.x86_64"; chmod +x "$NG/game.x86_64"
+eq "native Linux + Vulkan → vkBasalt" "$(CONTROL_DECK_STEAM_ROOT="$ST" ADV steam:7000 '[]' null null | jq -r .pick)" vkbasalt
+{ printf '\x7fELF'; head -c 600000 /dev/zero; printf 'libGL.so.1'; } > "$NG/game.x86_64"
+eq "native Linux + OpenGL → none" "$(CONTROL_DECK_STEAM_ROOT="$ST" ADV steam:7000 '[]' null null | jq -r .pick)" none
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

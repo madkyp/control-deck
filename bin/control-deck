@@ -4463,6 +4463,39 @@ fx_route() {
 }
 
 # fx status [key] → install state, GPU, and (with a key) route, online risk, current preset
+# which route suits a game, and why: {pick: reshade|vkbasalt|none, reasons:[…]}
+fx_advice() {   # key exes-json online-json report-json
+    local key="$1" exes="$2" online="$3" cur="$4" native=""
+    if [[ "$(jq length <<<"$exes")" == 0 && "$key" == steam:* ]]; then
+        # no .exe: a native Linux build — Vulkan or OpenGL decides
+        local dir f; dir="$(steam_game_dir "${key#steam:}")"
+        if [[ -d "$dir" ]]; then
+            native=opengl
+            while IFS= read -r f; do
+                [[ "$(head -c 4 "$f" 2>/dev/null)" == $'\x7fELF' ]] || continue
+                grep -qa 'libvulkan\.so' "$f" && { native=vulkan; break; }
+            done < <(find "$dir" -maxdepth 3 -type f -size +500k \( -perm -u+x -o -name '*.so*' \) 2>/dev/null | head -40)
+        fi
+    fi
+    jq -nc --argjson exes "$exes" --argjson online "${online:-null}" --argjson cur "${cur:-null}" --arg native "$native" '
+        ($exes[0].api // "unknown") as $api
+        | (($online // {}).level // "none") as $risk
+        | ([($cur // {}).skipped[]? | select(.why | test("depth"))] | length) as $depth
+        | if $native == "vulkan" then {pick:"vkbasalt", reasons:["Native Linux build that draws with Vulkan: vkBasalt is the only one that can hook it (ReShade needs a Windows game)."]}
+          elif $native == "opengl" then {pick:"none", reasons:["Native Linux build that draws with OpenGL: neither vkBasalt (Vulkan only) nor ReShade (Windows only) can hook it."]}
+          elif $api == "gdi" then {pick:"none", reasons:["2D game drawn with GDI (RPG Maker style): no shader tool can hook it."]}
+          elif $api == "vulkan" then {pick:"vkbasalt", reasons:["The game renders with Vulkan: ReShade'"'"'s DLL can'"'"'t hook it here, vkBasalt can."]}
+          elif $risk == "anticheat" then {pick:"vkbasalt", reasons:[
+                "Online game with anti-cheat (\(($online.anticheats // []) | join(", "))): neither is safe there.",
+                "If you use one anyway, vkBasalt is the lighter touch: a Vulkan layer, no DLL or files in the game folder."]}
+          else {pick:"reshade", reasons:(
+                ["\(if $api == "dxgi" then "DirectX 10–12" elif $api == "d3d9" then "DirectX 9" elif $api == "opengl32" then "OpenGL" else "A Windows game" end) under Proton: ReShade itself runs presets exactly as made, depth effects included, with its in-game menu to tweak them."]
+                + (if $depth > 0 then ["Your current preset has \($depth) depth effect(s) vkBasalt has to skip."] else [] end)
+                + (if $risk == "online" then ["Has online modes without anti-cheat: fine for single-player; check the game'"'"'s rules online."] else [] end)
+                + ["vkBasalt also works (via DXVK/VKD3D) if you prefer nothing in the game folder; presets get converted and lose depth effects."])}
+          end'
+}
+
 cmd_fx_status() {
     local key="${1:-}" v64 v32 n cur="null" route="null" online="null" d rs="null" exes="[]" mode="vkbasalt" wrapped=false
     v64="$(pkg_ver vkbasalt)"; v32="$(pkg_ver lib32-vkbasalt)"
@@ -4487,6 +4520,7 @@ cmd_fx_status() {
         --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" --arg wrappedKey "${key%%:*}" \
         --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" \
         --arg shots "$(if [[ -n "$key" ]]; then reshade_shots_dir "$key" | sed "s|^$HOME|~|"; fi)" \
+        --argjson advice "$(if [[ -n "$key" ]]; then fx_advice "$key" "$exes" "$online" "$cur"; else echo null; fi)" \
         --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" '.[$k] // []'; else echo '[]'; fi)" \
         --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
         --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
@@ -4497,9 +4531,7 @@ cmd_fx_status() {
         mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, links:$links, shotsDir:$shots,
         reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
                  update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
-        recommended:(($exes[0].api // "unknown") as $a
-                     | if ($a == "dxgi" or $a == "d3d9" or $a == "opengl32") then "reshade"
-                       elif $a == "vulkan" then "vkbasalt" elif $a == "gdi" then "none" else "reshade" end),
+        recommended:(($advice // {}).pick // "reshade"), advice:$advice,
         source:(if $wrappedKey == "umbral" then "umbral" else "steam" end)}'
 }
 
@@ -5150,14 +5182,16 @@ cmd_fx_scan() {
         fi
         online="$(fx_online "$id")"
         d="$(fx_key_dir "steam:$id")"; cur="null"; [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
+        local adv; adv="$(fx_advice "steam:$id" "$(cmd_fx_exes "steam:$id" 2>/dev/null || echo '[]')" "${online:-null}" "$cur" 2>/dev/null)"
         scan_rows+=("$(jq -nc --arg id "$id" --arg name "$name" --argjson sfx "$sfx" --argjson online "${online:-null}" \
-                 --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" --argjson links "$(fx_links_json)" '
+                 --argjson cur "$cur" --argjson pcgw "$pcgw" --arg n "$(fx_norm "$name")" --argjson links "$(fx_links_json)" \
+                 --argjson advice "${adv:-null}" '
             def norm: ascii_downcase | gsub("[™®©]"; "") | gsub("[^a-z0-9]+"; "");
             ([$pcgw[] | select(any(.names[]; norm == $n))] | first // null) as $pc
-            | {key:("steam:" + $id), id:$id, name:$name, sfx:$sfx, pcgw:$pc, online:$online, current:$cur, links:($links[("steam:" + $id)] // []),
+            | {key:("steam:" + $id), id:$id, name:$name, sfx:$sfx, pcgw:$pc, online:$online, current:$cur, links:($links[("steam:" + $id)] // []), advice:$advice,
                nexus:("https://duckduckgo.com/?q=" + ("site:nexusmods.com \($name) reshade preset" | @uri))}
             | .blocked = (($pc // {}).avoid == true)
-            | .eligible = ((.blocked | not) and ((.online // {}).level // "none") != "anticheat")')")
+            | .eligible = ((.blocked | not) and ((.online // {}).level // "none") != "anticheat" and (($advice // {}).pick // "reshade") != "none")')")
     done < <(steam_games)
     mkdir -p "$FX_CACHE"
     printf '%s\n' "${scan_rows[@]}" | jq -sc '
@@ -5207,7 +5241,11 @@ cmd_fx_autoinstall() {
             skip=$((skip + 1)); continue
         fi
         log "── $name"
-        if ! cmd_reshade_on "$k" >/dev/null 2>"$FX_CACHE/auto.err"; then
+        local pick; pick="$(jq -r '(.advice // {}).pick // "reshade"' <<<"$row")"
+        if [[ "$pick" == vkbasalt ]]; then
+            if [[ -z "$(pkg_ver vkbasalt)" ]]; then log "  ✗ vkBasalt is the one for this game: install it first (FX → INSTALL)"; skip=$((skip + 1)); continue; fi
+            profile_write "$k" '{"fxMode":"vkbasalt"}'
+        elif ! cmd_reshade_on "$k" >/dev/null 2>"$FX_CACHE/auto.err"; then
             log "  ✗ ReShade: $(sed 's/^ERROR: //' "$FX_CACHE/auto.err" | head -1)"; fail=$((fail + 1)); continue
         fi
         local look; look="$(jq -r 'if .sfx.best then "sfx:\(.sfx.best.id)" else "builtin:sharpen-aa" end' <<<"$row")"
