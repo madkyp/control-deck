@@ -1437,6 +1437,35 @@ eq "…and nothing added" "$("$CD" sessions | jq length)" 1
 CONTROL_DECK_SESSION_MIN=60 SteamAppId=100 "$CD" run "$T/fake/sgame" >/dev/null 2>&1
 eq "short runs (< 1 min) aren't kept" "$("$CD" sessions | jq length)" 1
 unset CONTROL_DECK_SESSION_MIN CONTROL_DECK_SESSION_EVERY CONTROL_DECK_GPU_VENDOR CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
+section "While playing: quiet notifications + lighter Hyprland"
+HY="$T/hypr"; mkdir -p "$HY"; for o in animations:enabled decoration:blur:enabled decoration:shadow:enabled; do echo true > "$HY/$o"; done
+echo false > "$HY/decoration:shadow:enabled"
+stub dunstctl 'f="'"$T"'/dunst.paused"; case "$1" in is-paused) cat "$f" 2>/dev/null || echo false;; set-paused) echo "$2" > "$f"; echo "set-paused $2" >> "'"$T"'/dunst.log";; esac'
+stub hyprctl 'd="'"$HY"'"; case "$1" in version) echo Hyprland;; getoption) echo "{\"option\": \"$3\", \"bool\": $(cat "$d/$3"), \"set\": false }";;
+  eval) k="$(sed -E "s/^hl.config\(\{ ([a-z]+) = (\{ ([a-z]+) = )?(\{ ([a-z]+) = )?(true|false).*/\1:\3:\5 \6/" <<<"$2")"; v="${k##* }"; k="${k% *}"; k="${k%%:}"; k="${k%%:}"
+        echo "$v" > "$d/$k"; echo "eval $k $v" >> "'"$T"'/hypr.log"; echo ok;; esac'
+eq "status: both off, dunst and Hyprland found" "$("$CD" playing | jq -c '[.quiet, .lite, .notifier, .hyprland]')" '[false,false,"dunst",true]'
+"$CD" playing quiet on >/dev/null; "$CD" playing lite on >/dev/null
+eq "settings saved" "$("$CD" playing | jq -c '[.quiet, .lite]')" '[true,true]'
+"$CD" playing loud on >/dev/null 2>&1; eq "unknown setting refused" "$?" 2
+eq "gstatus carries them" "$(CONTROL_DECK_GPU_VENDOR=intel "$CD" gstatus | jq -c '.playing | [.quiet, .lite]')" '[true,true]'
+printf '#!/bin/sh\necho "$(dunstctl is-paused) $(cat %s/animations:enabled) $(cat %s/decoration:blur:enabled)" > %s/during\n' "$HY" "$HY" "$T" > "$T/fake/pgame"; chmod +x "$T/fake/pgame"
+rm -f "$T/dunst.log" "$T/hypr.log"; SteamAppId=100 "$CD" run "$T/fake/pgame" >/dev/null 2>&1
+eq "during the game: notifications paused, animations and blur off" "$(cat "$T/during")" "true false false"
+eq "after: notifications back" "$(cat "$T/dunst.paused")" false
+eq "after: animations and blur back" "$(cat "$HY/animations:enabled") $(cat "$HY/decoration:blur:enabled")" "true true"
+yes "shadows were already off: never touched" "! grep -q shadow '$T/hypr.log'"
+eq "Hyprland options set through eval (Lua config)" "$(head -1 "$T/hypr.log")" "eval animations:enabled false"
+echo true > "$T/dunst.paused"; rm -f "$T/dunst.log"; SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+yes "notifications you paused yourself stay paused" "[[ ! -s '$T/dunst.log' && \$(cat '$T/dunst.paused') == true ]]"
+echo false > "$T/dunst.paused"; mkdir -p "$HOME/.local/share/control-deck/sessions"; echo steam:9 > "$HOME/.local/share/control-deck/sessions/999999"
+rm -f "$T/dunst.log"; SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+eq "a dead game's leftover marker doesn't keep things paused" "$(cat "$T/dunst.paused") $(paste -sd, "$T/dunst.log")" "false set-paused true,set-paused false"
+eq "hook asks Umbral for a session when they're on" "$("$CD" hook umbral:x 2>/dev/null | jq .session)" true
+"$CD" playing quiet off >/dev/null; "$CD" playing lite off >/dev/null
+rm -f "$T/dunst.log" "$T/hypr.log"; SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
+yes "both off → nothing touched" "[[ ! -s '$T/dunst.log' && ! -s '$T/hypr.log' ]]"
+rm -f "$T/bin/dunstctl" "$T/bin/hyprctl"
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
 eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es

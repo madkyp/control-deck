@@ -4549,7 +4549,7 @@ ShellRoot {
                         property color tone: pal.text
                         property string note: ""
                         Layout.fillWidth: true; spacing: 8
-                        Text { text: label; Layout.preferredWidth: 96; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Text { text: label; Layout.preferredWidth: 112; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                         Text { text: value; color: tone; font.family: win.mono; font.pixelSize: 11; elide: Text.ElideRight; Layout.maximumWidth: 260 }
                         Text { Layout.fillWidth: true; text: note; color: pal.dim; font.family: win.mono; font.pixelSize: 9; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
                     }
@@ -4560,7 +4560,7 @@ ShellRoot {
                         property string text: ""
                         property real warnAt: 0.85
                         Layout.fillWidth: true; spacing: 8
-                        Text { text: label; Layout.preferredWidth: 96; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                        Text { text: label; Layout.preferredWidth: 112; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                         Rectangle {
                             Layout.fillWidth: true; height: 8; radius: 4; color: pal.logBg; border.color: pal.border; border.width: 1
                             Rectangle {
@@ -4650,7 +4650,7 @@ ShellRoot {
                                         Text { text: win.t("RUNNING NOW"); color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
                                         Text {
                                             visible: !(win.gstat.running || []).length
-                                            text: win.t("no game  ·  Steam ") + ((win.gstat.tools || {}).steam ? "open" : "closed")
+                                            text: win.t("no game  ·  Steam ") + ((win.gstat.tools || {}).steam ? win.t("open") : win.t("closed"))
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 10
                                         }
                                     }
@@ -4827,6 +4827,35 @@ ShellRoot {
                             }
                         }
 
+                        // while playing: notifications held, Hyprland without effects
+                        Card {
+                            Layout.fillWidth: true
+                            title: win.t("WHILE PLAYING")
+                            sub: win.t("from the first game that starts until the last one closes")
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                property var pl: win.gstat.playing || ({})
+                                Chip {
+                                    label: (parent.pl.quiet ? "✓ " : "") + win.t("HOLD NOTIFICATIONS")
+                                    tint: pal.ok; active: !!parent.pl.quiet; on: !win.gameBusy && (!!parent.pl.notifier || !!parent.pl.quiet)
+                                    tip: parent.pl.notifier === "swaync" ? win.t("Do Not Disturb in swaync while you play; notifications wait in its panel")
+                                       : parent.pl.notifier === "dunst" ? win.t("Pauses dunst while you play; what arrived shows when the game closes")
+                                       : win.t("Needs dunst or swaync running")
+                                    onClicked: win.runGame(["playing", "quiet", parent.pl.quiet ? "off" : "on"], win.t("SAVING…"))
+                                }
+                                Chip {
+                                    label: (parent.pl.lite ? "✓ " : "") + win.t("NO ANIMATIONS / BLUR")
+                                    tint: pal.ok; active: !!parent.pl.lite; on: !win.gameBusy && (!!parent.pl.hyprland || !!parent.pl.lite)
+                                    tip: parent.pl.hyprland ? win.t("Hyprland animations, blur and shadows off while you play, back as they were after")
+                                                            : win.t("Only on Hyprland")
+                                    onClicked: win.runGame(["playing", "lite", parent.pl.lite ? "off" : "on"], win.t("SAVING…"))
+                                }
+                                Text {
+                                    Layout.fillWidth: true; color: pal.dim; font.family: win.mono; font.pixelSize: 9; elide: Text.ElideRight
+                                    text: win.t("Games launched through the deck (Steam) or Umbral 0.10+.")
+                                }
+                            }
+                        }
                         // last game sessions (recorded while each game ran)
                         Card {
                             Layout.fillWidth: true
@@ -4923,8 +4952,8 @@ ShellRoot {
                                 }
                                 StatRow { label: win.t("MANGOHUD"); value: win.gstat.mangohud ? ((win.gstat.tools || {}).mangohud || "installed") : win.t("not installed"); tone: win.gstat.mangohud ? pal.text : pal.amber }
                                 StatRow { label: "GAMESCOPE"; value: win.gstat.gamescope ? ((win.gstat.tools || {}).gamescope || "installed") : win.t("not installed (optional)") }
-                                StatRow { label: "STEAM"; value: (win.gstat.tools || {}).steam ? "running" : "closed"; note: ((win.gstat.tools || {}).protons || 0) + win.t(" Proton builds available") }
-                                StatRow { label: "NTSYNC"; value: (win.gstat.tools || {}).ntsync ? "available" : win.t("not available"); note: win.t("kernel sync for Wine/Proton") }
+                                StatRow { label: "STEAM"; value: (win.gstat.tools || {}).steam ? win.t("running") : win.t("closed"); note: ((win.gstat.tools || {}).protons || 0) + win.t(" Proton builds available") }
+                                StatRow { label: "NTSYNC"; value: (win.gstat.tools || {}).ntsync ? win.t("available") : win.t("not available"); note: win.t("kernel sync for Wine/Proton") }
                                 StatRow {
                                     label: "SHADERS"
                                     value: [(win.gstat.tools || {}).reshade ? "ReShade " + win.gstat.tools.reshade : "",

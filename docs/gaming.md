@@ -646,6 +646,25 @@ until vkBasalt is installed.
 - STATUS lists the last 8 sessions with a small temperature graph.
   `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
 
+### While playing: notifications and Hyprland (STATUS → WHILE PLAYING)
+- `playing quiet|lite on|off`, saved in `gaming/playing.json`. Both act on the
+  game session (Steam wrapper, Umbral `session`): the first game that starts
+  applies them, the last one to end undoes them. Each game leaves a pid marker
+  in `sessions/`; markers of pids that are gone are dropped, so a killed
+  wrapper can't keep things paused.
+- **HOLD NOTIFICATIONS**: dunst → `dunstctl set-paused true` (what arrives
+  waits and shows on `set-paused false`, before the session summary); swaync →
+  `swaync-client -dn` / `-df` (they wait in its panel). Notifications you had
+  paused yourself are left paused.
+- **NO ANIMATIONS / BLUR**: `animations:enabled`, `decoration:blur:enabled`,
+  `decoration:shadow:enabled` set to false, and only the ones that were on are
+  restored. Hyprland 0.55+ with a Lua config rejects `hyprctl keyword` ("can't
+  work with non-legacy parsers"), so it goes through
+  `hyprctl eval 'hl.config({ animations = { enabled = false } })'` (answers
+  `ok`; checked on 0.56.2), falling back to `keyword` on older builds. A game
+  started by Steam may lack `HYPRLAND_INSTANCE_SIGNATURE`; it is taken from
+  `$XDG_RUNTIME_DIR/hypr/`.
+
 #### FSR 4 via OptiScaler (UPSCALE → "FSR 4 via OptiScaler")
 - For games without FSR 3.1 but with DLSS, XeSS or FSR 2/3.1 (DLL), on RX 9000.
   GE-Proton / Proton-CachyOS install OptiScaler themselves

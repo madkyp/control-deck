@@ -3261,12 +3261,13 @@ cmd_gstatus() {
           --argjson library "$(gs_library)" \
           --argjson sched "$(if have scxctl; then cmd_sched_status; else echo null; fi)" \
           --argjson sessions "$(cmd_sessions 8)" --argjson summary "$(session_summary_on && echo true || echo false)" \
+          --argjson playing "$(cmd_playing)" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
         '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
           max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run,
           system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library, sched:$sched,
-          sessions:$sessions, sessionSummary:$summary}'
+          sessions:$sessions, sessionSummary:$summary, playing:$playing}'
 }
 
 # join the gamemode group: lets gamemode switch the CPU governor without a
@@ -4045,6 +4046,7 @@ Gaming
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   uilang [en|es]                The GUI's language (default: the system's)
+  playing [quiet|lite on|off]   While playing: hold notifications · Hyprland without animations/blur/shadows
   sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
   upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
@@ -5005,7 +5007,7 @@ cmd_hook() {
         fi
     fi
     jq -nc --argjson env "$env" --argjson overlay "$(jq '.overlay == true' <<<"$p")" \
-        --argjson session "$({ [[ "$(jq -r .overlay <<<"$p")" == true ]] || [[ -n "$(sched_setting whilePlaying)" ]] || session_summary_on; } && echo true || echo false)" \
+        --argjson session "$({ [[ "$(jq -r .overlay <<<"$p")" == true ]] || [[ -n "$(sched_setting whilePlaying)" ]] || session_summary_on || playing_on quiet || playing_on lite; } && echo true || echo false)" \
         '{env:$env, overlay:$overlay, session:$session}'
 }
 
@@ -5482,7 +5484,8 @@ gs_gpu() {
 
 gs_displays() {
     have hyprctl || { echo '[]'; return; }
-    hyprctl monitors -j 2>/dev/null | jq -c '[.[] | {name, width, height, hz:(.refreshRate * 100 | round / 100), vrr, focused}]' 2>/dev/null || echo '[]'
+    local m; m="$(hypr monitors -j 2>/dev/null | jq -c '[.[] | {name, width, height, hz:(.refreshRate * 100 | round / 100), vrr, focused}]' 2>/dev/null)"
+    echo "${m:-[]}"     # no answer (no Hyprland) → no JSON from jq: still valid
 }
 
 # versions change rarely: cached for a day
@@ -5689,24 +5692,110 @@ cmd_sched() {
     esac
 }
 
-# --- game session: things that start with a game and end with it ---------------
-# The scheduler "while playing" only if none runs yet (we stop what we started;
-# a marker per game handles two games at once).
-session_begin() {   # key pid
-    local want; want="$(sched_setting whilePlaying)"
-    [[ -n "$want" ]] && have scxctl || return 0
-    mkdir -p "$STATE_DIR/sessions"
-    if ! sched_running; then
-        scxctl start --sched "${want%%:*}" --mode "${want#*:}" >/dev/null 2>&1 && touch "$STATE_DIR/sessions/sched-owner"
+# --- while playing: quiet notifications, a lighter Hyprland ---------------------
+# playing.json {quiet, lite}. Both apply when the first game starts and are
+# undone when the last one ends; only what the deck changed is undone.
+PLAYING_SETTINGS="$GAMING_DIR/playing.json"
+playing_on() { [[ "$(jq -r --arg k "$1" '.[$k] == true' "$PLAYING_SETTINGS" 2>/dev/null)" == true ]]; }
+notifier() {   # the notification daemon that can be paused: dunst | swaync | ""
+    if have dunstctl && dunstctl is-paused >/dev/null 2>&1; then echo dunst
+    elif have swaync-client && swaync-client -D >/dev/null 2>&1; then echo swaync; fi
+}
+# hyprctl from a game launched by Steam: find the instance if the env lacks it
+hypr() {
+    if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        local s; s="$(ls -t "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr" 2>/dev/null | head -1)"
+        [[ -n "$s" ]] && export HYPRLAND_INSTANCE_SIGNATURE="$s"
     fi
-    [[ -f "$STATE_DIR/sessions/sched-owner" ]] && echo "$1" > "$STATE_DIR/sessions/$2"
+    hyprctl "$@"
+}
+hypr_ok() { have hyprctl && hypr version >/dev/null 2>&1; }
+LITE_OPTIONS=(animations:enabled decoration:blur:enabled decoration:shadow:enabled)
+quiet_begin() {   # pause notifications (they wait and show when the game ends)
+    local n; n="$(notifier)"
+    case "$n" in
+        dunst)  [[ "$(dunstctl is-paused)" == false ]] && dunstctl set-paused true && echo dunst > "$1" ;;
+        swaync) [[ "$(swaync-client -D)" == false ]] && swaync-client -dn >/dev/null && echo swaync > "$1" ;;
+    esac
+}
+quiet_end() {
+    case "$(cat "$1")" in
+        dunst)  dunstctl set-paused false ;;
+        swaync) swaync-client -df >/dev/null ;;
+    esac
+}
+# set a Hyprland option: Lua config (0.55+, `eval`), else the legacy `keyword`
+hypr_set() {   # a:b:c true|false
+    local o lua="$2" k; IFS=: read -ra o <<<"$1"
+    for (( k = ${#o[@]} - 1; k >= 1; k-- )); do lua="{ ${o[k]} = $lua }"; done
+    [[ "$(hypr eval "hl.config({ ${o[0]} = $lua })" 2>/dev/null)" == ok ]] && return 0
+    [[ "$(hypr keyword "$1" "$([[ "$2" == true ]] && echo 1 || echo 0)" 2>/dev/null)" == ok ]]
+}
+lite_begin() {   # animations, blur and shadows off; the ones we turned off are kept to restore
+    hypr_ok || return 0
+    local o v off=()
+    for o in "${LITE_OPTIONS[@]}"; do
+        v="$(hypr getoption -j "$o" 2>/dev/null | jq -r 'if has("bool") then .bool elif has("int") then (.int != 0) else empty end' 2>/dev/null)"
+        [[ "$v" == true ]] && hypr_set "$o" false && off+=("$o")
+    done
+    (( ${#off[@]} )) && printf '%s\n' "${off[@]}" > "$1"
+    return 0
+}
+lite_end() {
+    local o
+    while IFS= read -r o; do [[ -n "$o" ]] && hypr_set "$o" true; done < "$1"
+}
+
+# --- game session: things that start with a game and end with it ---------------
+# The first game starts them, the last one to end undoes them (a marker per game
+# pid; markers of dead pids are dropped). The scheduler only if none runs yet:
+# we stop what we started.
+session_begin() {   # key pid
+    local d="$STATE_DIR/sessions" want f
+    mkdir -p "$d"
+    for f in "$d"/[0-9]*; do [[ -e "$f" && ! -d "${PROC_ROOT:-/proc}/${f##*/}" ]] && rm -f "$f"; done
+    if ! compgen -G "$d/[0-9]*" >/dev/null; then
+        want="$(sched_setting whilePlaying)"
+        if [[ -n "$want" ]] && have scxctl && ! sched_running; then
+            scxctl start --sched "${want%%:*}" --mode "${want#*:}" >/dev/null 2>&1 && touch "$d/sched-owner"
+        fi
+        playing_on quiet && [[ ! -f "$d/quiet-owner" ]] && quiet_begin "$d/quiet-owner"
+        playing_on lite && [[ ! -f "$d/lite-owner" ]] && lite_begin "$d/lite-owner"
+    fi
+    echo "$1" > "$d/$2"
 }
 session_end() {   # pid
-    rm -f "$STATE_DIR/sessions/$1"
-    [[ -f "$STATE_DIR/sessions/sched-owner" ]] || return 0
-    compgen -G "$STATE_DIR/sessions/[0-9]*" >/dev/null && return 0     # another game still running
-    rm -f "$STATE_DIR/sessions/sched-owner"
-    scxctl stop >/dev/null 2>&1 || true
+    local d="$STATE_DIR/sessions" f
+    rm -f "$d/$1"
+    for f in "$d"/[0-9]*; do [[ -e "$f" && ! -d "${PROC_ROOT:-/proc}/${f##*/}" ]] && rm -f "$f"; done
+    compgen -G "$d/[0-9]*" >/dev/null && return 0     # another game still running
+    if [[ -f "$d/sched-owner" ]]; then rm -f "$d/sched-owner"; scxctl stop >/dev/null 2>&1 || true; fi
+    if [[ -f "$d/quiet-owner" ]]; then quiet_end "$d/quiet-owner"; rm -f "$d/quiet-owner"; fi
+    if [[ -f "$d/lite-owner" ]]; then lite_end "$d/lite-owner"; rm -f "$d/lite-owner"; fi
+    return 0
+}
+
+# playing — status · playing quiet|lite on|off
+cmd_playing() {
+    case "${1:-}" in
+        "")
+            jq -nc --argjson q "$(playing_on quiet && echo true || echo false)" --argjson l "$(playing_on lite && echo true || echo false)" \
+                --arg n "$(notifier)" --argjson h "$(hypr_ok && echo true || echo false)" \
+                '{quiet:$q, lite:$l, notifier:$n, hyprland:$h}' ;;
+        quiet|lite)
+            [[ "${2:-}" == on || "${2:-}" == off ]] || { err "use: playing quiet|lite on|off"; return 2; }
+            mkdir -p "$GAMING_DIR"
+            local cur; cur="$(jq -c 'objects' "$PLAYING_SETTINGS" 2>/dev/null)"; [[ -n "$cur" ]] || cur='{}'
+            jq -n --argjson c "$cur" --arg k "$1" --argjson v "$([[ "$2" == on ]] && echo true || echo false)" \
+                '$c + {($k): $v}' > "$PLAYING_SETTINGS" || { err "couldn't save $PLAYING_SETTINGS"; return 4; }
+            case "$1:$2" in
+                quiet:on)  log "✔ While playing: notifications wait until the game ends." ;;
+                quiet:off) log "✔ While playing: notifications show as usual." ;;
+                lite:on)   log "✔ While playing: Hyprland animations, blur and shadows off." ;;
+                lite:off)  log "✔ While playing: Hyprland left as it is." ;;
+            esac ;;
+        *) err "use: playing [quiet|lite on|off]"; return 2 ;;
+    esac
 }
 
 # session <pid> <key> — for launchers that start the game themselves (Umbral):
@@ -5715,7 +5804,7 @@ cmd_session() {
     local pid="$1" key="$2"
     [[ "$pid" =~ ^[0-9]+$ ]] && valid_game_key "$key" || { err "use: session <pid> <key>"; return 2; }
     [[ "$(profile_get "$key" | jq -r .overlay)" == true ]] && cmd_overlay "$pid"
-    [[ -n "$(sched_setting whilePlaying)" ]] && session_begin "$key" "$pid"
+    session_begin "$key" "$pid"
     local rec t0; t0="$(date +%s)"; rec="$(session_record_start "$key" "$pid")"
     ( while [[ -d "${PROC_ROOT:-/proc}/$pid" ]]; do sleep 5; done
       session_end "$pid"; session_record_end "$key" "$rec" "$t0" ) </dev/null >/dev/null 2>&1 &
@@ -6056,6 +6145,7 @@ main() {
         session)     cmd_session "$1" "$2" ;;
         sched)       cmd_sched "$@" ;;
         uilang)      cmd_uilang "${1:-}" ;;
+        playing)     cmd_playing "$@" ;;
         sessions)    cmd_sessions "${1:-}" ;;
         upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;
         gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;
