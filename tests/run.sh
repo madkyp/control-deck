@@ -1439,8 +1439,8 @@ eq "short runs (< 1 min) aren't kept" "$("$CD" sessions | jq length)" 1
 unset CONTROL_DECK_SESSION_MIN CONTROL_DECK_SESSION_EVERY CONTROL_DECK_GPU_VENDOR CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
-eq "default follows the locale (es_ES)" "$(LC_ALL= LC_MESSAGES= LANG=es_ES.UTF-8 "$CD" uilang)" es
-eq "default follows the locale (en_US)" "$(LC_ALL= LC_MESSAGES= LANG=en_US.UTF-8 "$CD" uilang)" en
+eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es
+eq "default follows the locale (en_US)" "$(LC_ALL='' LC_MESSAGES='' LANG=en_US.UTF-8 "$CD" uilang)" en
 "$CD" uilang es >/dev/null
 eq "saved choice wins over the locale" "$(LANG=en_US.UTF-8 "$CD" uilang)" es
 "$CD" uilang fr >/dev/null 2>&1; eq "unknown language refused" "$?" 2
@@ -1451,8 +1451,7 @@ dead=0
 while IFS= read -r k; do [[ "$src" == *"$k"* ]] || { dead=$((dead + 1)); echo "    dead key: $k"; }
 done < <(sed -n 's/^    "\(\([^"\\]\|\\.\)*\)": .*/\1/p' "$ROOT/quickshell/es.js")
 eq "no dead Spanish keys" "$dead" 0
-nkeys="$(grep -c '^    "' "$ROOT/quickshell/es.js")"
-yes "es.js has the keys" "(( nkeys > 600 ))"
+if (( $(grep -c '^    "' "$ROOT/quickshell/es.js") > 600 )); then ok "es.js has the keys"; else bad "es.js has the keys" "fewer than 600"; fi
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
