@@ -333,14 +333,18 @@ ShellRoot {
         property string fxLastGame: ""
         property string fxScope: "game"     // game | library
         property string fxImportFile: ""    // archive picked for IMPORT
-        property bool   fxGuideOpen: true   // FX steps card (per session)
+        property bool   fxGuideOpen: false  // FX: all steps listed (otherwise only the pending ones / a summary)
+        property bool   fxDetails: false    // FX: executable, API and keys (advanced)
+        property bool   fxAddLink: false    // FX: the "save a preset page" field is open
         property string fxTopFor: ""
         function fxToTop() { fxScroll.contentItem.contentY = 0; }
         // the FX steps, from the game's real state: [done, title, how]
         property var    fxSteps: {
             var key = (fx.key || "Home").toUpperCase(), rs = fxReshade;
             return [
-                [(rs ? "reshade" : "vkbasalt") === fx.recommended, "Route: " + (rs ? "ReShade" : "vkBasalt"),
+                [(rs ? "reshade" : "vkbasalt") === fx.recommended,
+                 (rs ? "reshade" : "vkbasalt") === fx.recommended ? "Route: " + (rs ? "ReShade" : "vkBasalt")
+                                                                  : "Switch to " + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt"),
                  ((rs ? "reshade" : "vkbasalt") === fx.recommended ? "The recommended one for this game. " : "Recommended here: " + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt") + ". ")
                  + ((fx.advice || {}).reasons || [""])[0]],
                 [fxReady, "Install " + (rs ? "ReShade" : "vkBasalt + shaders"),
@@ -3586,38 +3590,67 @@ ShellRoot {
                                     anchors.fill: parent; anchors.margins: 8; spacing: 5
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 8
-                                        Text { text: "STEPS"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                        Text {
+                                            text: win.fxStepsDone === 5 ? "● READY" : "STEPS"
+                                            color: win.fxStepsDone === 5 ? pal.ok : pal.text
+                                            font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2
+                                        }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             font.family: win.mono; font.pixelSize: 10
-                                            color: win.fxStepsDone === 5 ? pal.ok : pal.dim
-                                            text: win.fxStepsDone === 5 ? "✓ all set — launch the game and press " + (win.fx.key || "Home").toUpperCase()
-                                                                        : win.fxStepsDone + " / 5 done"
+                                            color: win.fxStepsDone === 5 ? pal.text : pal.dim
+                                            text: win.fxStepsDone === 5
+                                                  ? (win.fxReshade ? "ReShade" : "vkBasalt") + "  ·  " + (win.fxCur.name || "") + " (" + (win.fxCur.applied || 0) + " effects)"
+                                                    + "  ·  menu " + (win.fx.key || "Home").toUpperCase()
+                                                    + (win.fxReshade && (win.fx.effectsKey || "End") !== "None" ? "  ·  on/off " + (win.fx.effectsKey || "End").toUpperCase() : "")
+                                                  : win.fxStepsDone + " of 5 done — next: " + ((win.fxSteps.filter(function (s) { return !s[0]; })[0] || ["", ""])[1])
                                         }
-                                        Chip { label: win.fxGuideOpen ? "HIDE ▴" : "SHOW ▾"; onClicked: win.fxGuideOpen = !win.fxGuideOpen }
+                                        Text {
+                                            visible: win.fxStepsDone === 5 && (win.fxCur.skipped || []).length > 0
+                                            text: "⚠ " + (win.fxCur.skipped || []).length + " skipped"; color: pal.amber
+                                            font.family: win.mono; font.pixelSize: 10
+                                            MouseArea { id: skipMa; anchors.fill: parent; hoverEnabled: true }
+                                            Tip { visible: skipMa.containsMouse; text: (win.fxCur.skipped || []).map(function (x) { return x.effect + " — " + x.why; }).join("\n") }
+                                        }
+                                        Chip {
+                                            visible: win.fxStepsDone === 5 && win.fxCur.source === "sfx"
+                                            label: "PRESET ↗"; onClicked: Qt.openUrlExternally(win.fxCur.url)
+                                        }
+                                        Chip {
+                                            visible: win.fxStepsDone === 5; label: "OFF"; on: !win.gameBusy
+                                            tip: "Remove the shaders from this game"
+                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                        }
+                                        Chip { label: win.fxGuideOpen ? "GUIDE ▴" : "GUIDE ▾"; tip: "Every step, with what each one does"; onClicked: win.fxGuideOpen = !win.fxGuideOpen }
                                     }
                                     Repeater {
-                                        model: win.fxGuideOpen ? win.fxSteps : []
+                                        // all steps when opened; otherwise just the next one (none when all is done)
+                                        model: win.fxSteps.map(function (s, i) { return { s: s, i: i }; })
+                                                   .filter(function (x, n, all) {
+                                                       return win.fxGuideOpen
+                                                           || (!x.s[0] && all.slice(0, n).every(function (y) { return y.s[0]; }));
+                                                   })
                                         delegate: RowLayout {
                                             required property var modelData
-                                            required property int index
+                                            property int index: modelData.i
+                                            property var step: modelData.s
                                             Layout.fillWidth: true; spacing: 8
-                                            property bool next: !modelData[0] && win.fxSteps.slice(0, index).every(function (s) { return s[0]; })
+                                            property bool next: !step[0] && win.fxSteps.slice(0, index).every(function (s) { return s[0]; })
                                             Text {
-                                                text: modelData[0] ? "✓" : String(index + 1)
+                                                text: step[0] ? "✓" : String(index + 1)
                                                 Layout.preferredWidth: 14; horizontalAlignment: Text.AlignHCenter; Layout.alignment: Qt.AlignTop
-                                                color: modelData[0] ? pal.ok : (next ? pal.amber : pal.dim)
+                                                color: step[0] ? pal.ok : (next ? pal.amber : pal.dim)
                                                 font.family: win.mono; font.pixelSize: 11; font.bold: true
                                             }
                                             ColumnLayout {
                                                 Layout.fillWidth: true; spacing: 1
                                                 Text {
-                                                    text: modelData[1]; font.family: win.mono; font.pixelSize: 11; font.bold: next
-                                                    color: modelData[0] ? pal.dim : (next ? pal.text : pal.dim)
+                                                    text: step[1]; font.family: win.mono; font.pixelSize: 11; font.bold: next
+                                                    color: step[0] ? pal.dim : (next ? pal.text : pal.dim)
                                                 }
                                                 Text {
                                                     Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                                    text: modelData[2]; color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                                    text: step[2]; color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                                 }
                                             }
                                             // the pending step's own button
@@ -3685,23 +3718,24 @@ ShellRoot {
                                             tip: "A Vulkan layer: simplest, no files in the game folder; presets are converted and effects that need depth are skipped."
                                             onClicked: if (win.fxReshade) win.fxApply(k, "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
                                         }
-                                        Item { Layout.fillWidth: true }
-                                    }
-                                    // why the ★ one, for this game
-                                    Repeater {
-                                        model: (win.fx.advice || {}).reasons || []
-                                        delegate: Text {
-                                            required property var modelData
-                                            required property int index
-                                            Layout.fillWidth: true; Layout.leftMargin: 86; wrapMode: Text.WordWrap
-                                            color: index === 0 ? pal.text : pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: (index === 0 ? "★ " : "· ") + modelData
+                                        // why the ★ one: one line, the full reasons on hover
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "★ " + (((win.fx.advice || {}).reasons || [""])[0] || "")
+                                            MouseArea { id: whyMa; anchors.fill: parent; hoverEnabled: true }
+                                            Tip { visible: whyMa.containsMouse; text: ((win.fx.advice || {}).reasons || []).join("\n\n") }
+                                        }
+                                        Chip {
+                                            label: win.fxDetails ? "SETTINGS ▴" : "SETTINGS ▾"
+                                            tip: "Executable, graphics API and the in-game keys"
+                                            onClicked: win.fxDetails = !win.fxDetails
                                         }
                                     }
                                     // ReShade: which .exe, which API
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        visible: win.fxReshade
+                                        visible: win.fxReshade && win.fxDetails
                                         Text { text: "EXECUTABLE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Flow {
                                             Layout.fillWidth: true; spacing: 6
@@ -3720,7 +3754,7 @@ ShellRoot {
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        visible: win.fxReshade && !!win.fxRsGame
+                                        visible: win.fxReshade && !!win.fxRsGame && win.fxDetails
                                         Text { text: "HOOKS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: [["dxgi", "DXGI · DX10–12"], ["d3d9", "D3D9"], ["opengl32", "OPENGL"]]
@@ -3741,6 +3775,7 @@ ShellRoot {
                                     // the in-game key (ReShade's menu / vkBasalt on-off), one for all games
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxDetails
                                         Text { text: "MENU KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: [["Home", "HOME", ""], ["Insert", "INSERT", ""], ["F10", "F10", ""], ["F11", "F11", ""],
@@ -3761,7 +3796,7 @@ ShellRoot {
                                     // ReShade: one key that switches every effect on/off (the mod guides' "END")
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        visible: win.fxReshade
+                                        visible: win.fxReshade && win.fxDetails
                                         Text { text: "ON/OFF KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: [["End", "END", "The key most preset guides suggest"], ["F9", "F9", "Some games quick-load with F9"], ["None", "NONE", "No key: effects stay on"]]
@@ -3801,7 +3836,7 @@ ShellRoot {
                             // one-time setup (ReShade: no password, all user files)
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.fxGame && win.fxReshade && !!win.fx.reshade && (!win.fx.reshade.ready || win.fx.reshade.update)
+                                visible: win.fxGame && win.fxReshade && !!win.fx.reshade && win.fx.reshade.ready && win.fx.reshade.update
                                 implicitHeight: fxRsSetup.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
                                 RowLayout {
@@ -3825,7 +3860,9 @@ ShellRoot {
                             // one-time setup
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.fxGame && !win.fxReshade && !!win.fx.gpu && (!win.fx.vkbasalt || !win.fx.vkbasalt32 || !win.fx.shadersInstalled)
+                                // only when it says something the steps don't: chaotic-aur missing, or half installed
+                                visible: win.fxGame && !win.fxReshade && !!win.fx.gpu
+                                         && ((win.fx.chaotic === false && !win.fx.vkbasalt) || (win.fx.vkbasalt && (!win.fx.vkbasalt32 || !win.fx.shadersInstalled)))
                                 implicitHeight: fxSetup.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.accent; border.width: 1
                                 RowLayout {
@@ -3869,11 +3906,11 @@ ShellRoot {
                             // route + what's active
                             Rectangle {
                                 Layout.fillWidth: true
-                                visible: win.fxGame && !!win.fx.route
-                                implicitHeight: fxCur.implicitHeight + 20
+                                visible: false   // shown in the READY strip now
+                                implicitHeight: fxActCol.implicitHeight + 20
                                 radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                                 ColumnLayout {
-                                    id: fxCur
+                                    id: fxActCol
                                     anchors.fill: parent; anchors.margins: 10; spacing: 6
                                     Text {
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
@@ -3924,10 +3961,13 @@ ShellRoot {
 
                             // quick looks (vkBasalt's own effects) + presets from the internet
                             Rectangle {
-                                Layout.fillWidth: true; Layout.preferredHeight: 380
+                                // grows only when there is a preset list to show
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: win.fxPresets.length > 0 ? 400 : fxLooksCol.implicitHeight + 20
                                 visible: win.fxGame && !!win.fx.route && (win.fx.route.ok || win.fxReshade) && win.fx.recommended !== "none"
                                 radius: 8; color: pal.card; border.color: pal.border; border.width: 1
                                 ColumnLayout {
+                                    id: fxLooksCol
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
@@ -3983,14 +4023,23 @@ ShellRoot {
                                                 }
                                             }
                                         }
+                                        Text {
+                                            visible: (win.fx.links || []).length === 0 && !win.fxAddLink
+                                            Layout.fillWidth: true; color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: "preset pages you keep for this game (e.g. from Nexus)"
+                                        }
+                                        Item { Layout.fillWidth: true; visible: (win.fx.links || []).length > 0 && !win.fxAddLink }
+                                        Chip { visible: !win.fxAddLink; label: "+ LINK"; tip: "Keep a preset page for this game"; onClicked: win.fxAddLink = true }
                                         Field {
                                             id: fxLinkField; Layout.fillWidth: true; font.pixelSize: 10
+                                            visible: win.fxAddLink
                                             placeholderText: "paste a preset page (Nexus…) to keep it here"
                                             onAccepted: if (text.trim()) { win.runGame(["fx", "link", "add", win.selGame, text.trim()], "SAVING LINK…"); text = ""; }
                                         }
                                         Chip {
+                                            visible: win.fxAddLink
                                             label: "SAVE"; on: fxLinkField.text.trim().indexOf("https://") === 0 && !win.gameBusy
-                                            onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], "SAVING LINK…"); fxLinkField.text = ""; }
+                                            onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], "SAVING LINK…"); fxLinkField.text = ""; win.fxAddLink = false; }
                                         }
                                     }
                                     // notes of a saved page (e.g. the preset author's install guide, mapped to the deck)
@@ -4026,7 +4075,11 @@ ShellRoot {
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        Text { text: "PRESETS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text {
+                                            text: "PRESETS ⓘ"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                            MouseArea { id: presetsMa; anchors.fill: parent; hoverEnabled: true }
+                                            Tip { visible: presetsMa.containsMouse; text: "From SweetFX Settings DB (sfx.thelazy.net), made for ReShade" + (win.fxReshade ? "." : "; in vkBasalt, effects that need the depth buffer are skipped.") + " Shaders come from the packages the official ReShade installer lists." }
+                                        }
                                         Field {
                                             id: fxQuery; Layout.fillWidth: true; font.pixelSize: 11
                                             placeholderText: "game name on SweetFX Settings DB"
@@ -4081,6 +4134,7 @@ ShellRoot {
                                         }
                                     }
                                     Text {
+                                        visible: false   // source details are in the PRESETS tooltip
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
                                         text: "Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade" + (win.fxReshade ? "" : " — in vkBasalt, effects that need the depth buffer are skipped") + ". Shaders: the packages the official ReShade installer lists."
                                         color: pal.dim; font.family: win.mono; font.pixelSize: 9
