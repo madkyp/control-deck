@@ -628,6 +628,24 @@ until vkBasalt is installed.
   it. ON-SCREEN CHECK turns the watermark on to confirm the upgrade in game.
   CHECK FOR THIS PC flags `PROTON_FSR4_*` on NVIDIA and `PROTON_DLSS_*` on AMD.
 
+### Game session summary (STATUS → LAST SESSIONS)
+- While a game runs, one sample every 5 s goes to
+  `~/.local/state/control-deck/sessions/rec/`. A sample is CPU °C (hwmon),
+  GPU °C / load / W / VRAM (`nvidia-smi`, or amdgpu sysfs) and RAM in use
+  (`/proc/meminfo`). Fields a GPU doesn't report are written as `-`, so the
+  columns stay aligned.
+- Steam: the wrapper records next to its child process. Umbral: `session`,
+  called by Umbral 0.10+ with the game's pid; the hook now asks for it
+  whenever summaries are on.
+- At the end, sessions under 1 minute are dropped. Otherwise the max/avg of
+  each value and a downsampled GPU-temperature line are stored in
+  `gaming/sessions.json` (last 50), with the summary built by jq so names with
+  quotes stay valid JSON. A notification reads "<game> · 1 h 12 min · GPU
+  76 °C max · CPU 82 °C max · GPU load 64 % avg · 160 W peak" and adds "ran
+  hot" at ≥ 85 °C GPU / 90 °C CPU.
+- STATUS lists the last 8 sessions with a small temperature graph.
+  `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

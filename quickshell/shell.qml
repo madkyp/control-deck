@@ -4703,6 +4703,66 @@ ShellRoot {
                             }
                         }
 
+                        // last game sessions (recorded while each game ran)
+                        Card {
+                            Layout.fillWidth: true
+                            title: "LAST SESSIONS"
+                            sub: (win.gstat.sessions || []).length ? "" : "play a game: a summary appears here when it closes"
+                            RowLayout {
+                                Layout.fillWidth: true; spacing: 6
+                                Text {
+                                    Layout.fillWidth: true; color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    text: "Temperatures, load and power are sampled every 5 s while a game runs (Steam through the deck, Umbral 0.10+)."
+                                }
+                                Chip {
+                                    label: win.gstat.sessionSummary === false ? "SUMMARY OFF" : "✓ SUMMARY"
+                                    tint: pal.ok; active: win.gstat.sessionSummary !== false; on: !win.gameBusy
+                                    tip: "Record each game session and notify a summary when it ends"
+                                    onClicked: win.runGame(["sessions", win.gstat.sessionSummary === false ? "on" : "off"], "SAVING…")
+                                }
+                            }
+                            Repeater {
+                                model: win.gstat.sessions || []
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true; spacing: 10
+                                    Text { text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11; elide: Text.ElideRight; Layout.preferredWidth: 190 }
+                                    Text {
+                                        text: new Date(modelData.start * 1000).toLocaleString(Qt.locale(), "dd/MM HH:mm") + " · " + win.durationText(modelData.duration)
+                                        color: pal.dim; font.family: win.mono; font.pixelSize: 10; Layout.preferredWidth: 150
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                        font.family: win.mono; font.pixelSize: 10
+                                        color: (modelData.gpuTempMax || 0) >= 85 || (modelData.cpuTempMax || 0) >= 90 ? pal.amber : pal.text
+                                        text: [modelData.gpuTempMax != null ? "GPU " + modelData.gpuTempMax + "°" : "",
+                                               modelData.cpuTempMax != null ? "CPU " + modelData.cpuTempMax + "°" : "",
+                                               modelData.gpuLoadAvg != null ? "load " + Math.round(modelData.gpuLoadAvg) + "%" : "",
+                                               modelData.gpuPowerMax != null ? Math.round(modelData.gpuPowerMax) + " W" : "",
+                                               modelData.vramMax != null ? "VRAM " + (modelData.vramMax / 1024).toFixed(1) + " GB" : ""]
+                                              .filter(function (x) { return x; }).join("  ·  ")
+                                    }
+                                    // GPU temperature over the session
+                                    Canvas {
+                                        width: 90; height: 18
+                                        property var pts: modelData.gpuTempLine || []
+                                        onPaint: {
+                                            var c = getContext("2d"); c.reset();
+                                            var v = pts.filter(function (x) { return x != null; });
+                                            if (v.length < 2) return;
+                                            var lo = Math.min.apply(null, v) - 2, hi = Math.max.apply(null, v) + 2;
+                                            c.strokeStyle = pal.amber; c.lineWidth = 1.2; c.beginPath();
+                                            for (var i = 0; i < v.length; i++) {
+                                                var x = i * (width - 1) / (v.length - 1), y = height - 1 - (height - 2) * (v[i] - lo) / (hi - lo);
+                                                if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+                                            }
+                                            c.stroke();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // row 2: tools + library (left) | live history (fills the rest of the tab)
                         GridLayout {
                             id: stRow2

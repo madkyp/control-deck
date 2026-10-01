@@ -1323,7 +1323,7 @@ eq "ReShade next to the Umbral game's exe" "$(readlink "$UG/dxgi.dll")" "$HOME/.
 "$CD" fx set umbral:story builtin:sharpen >/dev/null 2>&1
 "$CD" gprofile set umbral:story overlay=true >/dev/null
 eq "hook: DLL overrides + TEMPS for Umbral" "$("$CD" hook umbral:story)" '{"env":{"WINEDLLOVERRIDES":"d3dcompiler_47=n;dxgi=n,b"},"overlay":true,"session":true}'
-eq "hook: nothing set → empty" "$("$CD" hook umbral:rpg)" '{"env":{},"overlay":false,"session":false}'
+eq "hook: nothing set → no env, no TEMPS (session on for the summary)" "$("$CD" hook umbral:rpg)" '{"env":{},"overlay":false,"session":true}'
 "$CD" fx set umbral:story off >/dev/null
 yes "OFF cleans the Umbral game's folder" "[[ ! -e '$UG/dxgi.dll' ]]"
 unset CONTROL_DECK_UMBRAL_CONFIG CONTROL_DECK_AWACY_URL CONTROL_DECK_RESHADE_URL CONTROL_DECK_FF_D3DC_URL CONTROL_DECK_FF_D3DC_SHA64 CONTROL_DECK_FF_D3DC_SHA32
@@ -1402,6 +1402,23 @@ eq "XeSS: game doesn't ship it" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.opt
 CONTROL_DECK_STEAM_ROOT="$UP" "$CD" gprofile set steam:8000 'env=PROTON_FSR4_UPGRADE=1' >/dev/null
 eq "turned on → reported on" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .on')" true
 eq "FSR 4 flagged when the profile moves to an NVIDIA PC" "$(CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit | jq -c '[.issues[] | select(.key == "steam:8000") | .var]')" '["PROTON_FSR4_UPGRADE"]'
+section "Game session summary"
+export CONTROL_DECK_SESSION_MIN=0 CONTROL_DECK_SESSION_EVERY=1 CONTROL_DECK_GPU_VENDOR=intel CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
+rm -f "$T/notify.log"; printf '#!/bin/sh\nsleep 2\nexit 0\n' > "$T/fake/sgame"; chmod +x "$T/fake/sgame"
+SteamAppId=100 "$CD" run "$T/fake/sgame" >/dev/null 2>&1
+S1="$("$CD" sessions 1)"
+eq "session saved with the game's name" "$(jq -r '.[0].name' <<<"$S1")" 'Game "Quoted" One'
+yes "samples recorded while it ran" "(( $(jq '.[0].samples' <<<"$S1") >= 1 ))"
+eq "RAM measured" "$(jq '.[0].ramMax > 0' <<<"$S1")" true
+has "summary notification" "$(cat "$T/notify.log")" 'Game "Quoted" One · 0 min'
+"$CD" sessions off >/dev/null; rm -f "$T/notify.log"
+SteamAppId=100 "$CD" run "$T/fake/sgame" >/dev/null 2>&1
+yes "off → no summary" "[[ ! -s '$T/notify.log' ]]"
+eq "…and nothing added" "$("$CD" sessions | jq length)" 1
+"$CD" sessions on >/dev/null
+CONTROL_DECK_SESSION_MIN=60 SteamAppId=100 "$CD" run "$T/fake/sgame" >/dev/null 2>&1
+eq "short runs (< 1 min) aren't kept" "$("$CD" sessions | jq length)" 1
+unset CONTROL_DECK_SESSION_MIN CONTROL_DECK_SESSION_EVERY CONTROL_DECK_GPU_VENDOR CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

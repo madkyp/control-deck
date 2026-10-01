@@ -2987,16 +2987,18 @@ cmd_run() {
     # overlay follows our pid) and see how it ended
     [[ "$(jq -r '.overlay' <<<"$p")" == true ]] && { cmd_overlay $$ || echo "  overlay not started" >> "$rlog"; }
     session_begin "$key" $$
-    local t0 child rc
+    local t0 child rc rec=""
     t0="$(date +%s)"
     "${pre[@]}" "$@" "${extra[@]}" &
     child=$!
+    [[ "$key" != default ]] && rec="$(session_record_start "$key" "$child")"
     trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
     wait "$child"; rc=$?
     # a signal interrupts wait: wait again for the real exit code
     while kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
     trap - TERM INT HUP
     session_end $$
+    session_record_end "$key" "$rec" "$t0"
     printf '%s  %s  exit %s\n' "$(date '+%F %T')" "$key" "$rc" >> "$rlog"
     # 128+n = killed by a signal (Steam's STOP, Ctrl+C): not a crash
     if (( rc != 0 && rc < 128 )) && [[ "$key" == steam:* ]]; then game_crashed "$key" "$rc" "$t0"; fi
@@ -3248,11 +3250,13 @@ cmd_gstatus() {
           --argjson sys "$(gs_system)" --argjson gpu "$(gs_gpu)" --argjson displays "$(gs_displays)" --argjson tools "$(gs_tools)" \
           --argjson library "$(gs_library)" \
           --argjson sched "$(if have scxctl; then cmd_sched_status; else echo null; fi)" \
+          --argjson sessions "$(cmd_sessions 8)" --argjson summary "$(session_summary_on && echo true || echo false)" \
           --argjson mh "$(have mangohud && echo true || echo false)" \
           --argjson gs "$(have gamescope && echo true || echo false)" \
         '{gamemode:{installed:$gi, active:$ga, ingroup:$grp, pending:($add and ($grp | not))}, governor:$gov, cpufreq_driver:$drv,
           max_map_count:$mmc, max_map_count_ok:($mmc >= 1048576), mangohud:$mh, gamescope:$gs, running:$run,
-          system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library, sched:$sched}'
+          system:$sys, gpu:$gpu, displays:$displays, tools:$tools, library:$library, sched:$sched,
+          sessions:$sessions, sessionSummary:$summary}'
 }
 
 # join the gamemode group: lets gamemode switch the CPU governor without a
@@ -4030,6 +4034,7 @@ Gaming
   fx link add|note|rm|get steam:<appid> <url> [label|notes]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
+  sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
   upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
   gaming-import <backup.json>   Add the game profiles, looks and settings of a backup (only what's missing here)
@@ -4989,7 +4994,7 @@ cmd_hook() {
         fi
     fi
     jq -nc --argjson env "$env" --argjson overlay "$(jq '.overlay == true' <<<"$p")" \
-        --argjson session "$({ [[ "$(jq -r .overlay <<<"$p")" == true ]] || [[ -n "$(sched_setting whilePlaying)" ]]; } && echo true || echo false)" \
+        --argjson session "$({ [[ "$(jq -r .overlay <<<"$p")" == true ]] || [[ -n "$(sched_setting whilePlaying)" ]] || session_summary_on; } && echo true || echo false)" \
         '{env:$env, overlay:$overlay, session:$session}'
 }
 
@@ -5699,9 +5704,10 @@ cmd_session() {
     local pid="$1" key="$2"
     [[ "$pid" =~ ^[0-9]+$ ]] && valid_game_key "$key" || { err "use: session <pid> <key>"; return 2; }
     [[ "$(profile_get "$key" | jq -r .overlay)" == true ]] && cmd_overlay "$pid"
-    [[ -n "$(sched_setting whilePlaying)" ]] || return 0
-    session_begin "$key" "$pid"
-    ( while [[ -d "${PROC_ROOT:-/proc}/$pid" ]]; do sleep 5; done; session_end "$pid" ) </dev/null >/dev/null 2>&1 &
+    [[ -n "$(sched_setting whilePlaying)" ]] && session_begin "$key" "$pid"
+    local rec t0; t0="$(date +%s)"; rec="$(session_record_start "$key" "$pid")"
+    ( while [[ -d "${PROC_ROOT:-/proc}/$pid" ]]; do sleep 5; done
+      session_end "$pid"; session_record_end "$key" "$rec" "$t0" ) </dev/null >/dev/null 2>&1 &
     disown
 }
 
@@ -5848,6 +5854,89 @@ cmd_upscale() {
         | .indicators = {fsr4:($v | index("PROTON_FSR4_INDICATOR") != null), dlss:($v | index("PROTON_DLSS_INDICATOR") != null)}'
 }
 
+# --- session recording + summary ------------------------------------------------
+# While a game runs, one line every 5 s: epoch cpu°C gpu°C gpu-load% gpu-W
+# vram-MiB ram-MiB. At the end: a summary (notification + STATUS history).
+SESSIONS_DB="$GAMING_DIR/sessions.json"
+SESSION_SETTINGS="$GAMING_DIR/session.json"
+session_summary_on() { [[ "$(jq -r 'if .summary == false then "off" else "on" end' "$SESSION_SETTINGS" 2>/dev/null)" != off ]]; }
+
+session_sample() {
+    local cpu gpu="" load="" pw="" vram="" ram
+    cpu="$(hwmon_temp coretemp 'Package id 0' || hwmon_temp 'k10temp|zenpower' 'Tctl|Tdie' || echo "")"
+    ram="$(awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 } END { printf "%d", (t - a) / 1024 }' "${PROCFS}/meminfo" 2>/dev/null)"
+    case "$(gpu_vendor)" in
+        nvidia)
+            IFS=',' read -r gpu load pw vram < <(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw,memory.used \
+                --format=csv,noheader,nounits 2>/dev/null | head -1) ;;
+        amd)
+            local c dev h
+            for c in "$SYSFS"/class/drm/card[0-9]*; do
+                [[ "$(cat "$c/device/vendor" 2>/dev/null)" == 0x1002 && ! "${c##*/}" =~ - ]] && { dev="$c/device"; break; }
+            done
+            h="$(ls -d "$dev"/hwmon/hwmon* 2>/dev/null | head -1)"
+            gpu="$(hwmon_temp amdgpu edge || true)"; load="$(cat "$dev/gpu_busy_percent" 2>/dev/null)"
+            pw="$(cat "$h/power1_average" 2>/dev/null || cat "$h/power1_input" 2>/dev/null)"; [[ -n "$pw" ]] && pw=$(( pw / 1000000 ))
+            vram="$(cat "$dev/mem_info_vram_used" 2>/dev/null)"; [[ -n "$vram" ]] && vram=$(( vram / 1048576 )) ;;
+    esac
+    gpu="${gpu// /}"; load="${load// /}"; pw="${pw// /}"; vram="${vram// /}"
+    printf '%s %s %s %s %s %s %s\n' "$(date +%s)" "${cpu:--}" "${gpu:--}" "${load:--}" "${pw:--}" "${vram:--}" "${ram:--}"
+}
+
+# start recording next to <pid>; prints the recording file
+session_record_start() {   # key pid
+    session_summary_on || return 0
+    local d="$STATE_DIR/sessions/rec" f; mkdir -p "$d"
+    f="$d/$(date +%s)-${1//[:\/]/_}.tsv"
+    ( while [[ -d "${PROC_ROOT:-/proc}/$2" ]]; do session_sample >> "$f"; sleep "${CONTROL_DECK_SESSION_EVERY:-5}"; done ) </dev/null >/dev/null 2>&1 &
+    disown
+    echo "$f"
+}
+
+# summarise a recording, keep it in the history, notify
+session_record_end() {   # key file started-epoch [name]
+    local key="$1" f="$2" t0="$3" name="${4:-}" now dur sum
+    [[ -n "$f" && -f "$f" ]] || return 0
+    now="$(date +%s)"; dur=$(( now - t0 ))
+    if (( dur < ${CONTROL_DECK_SESSION_MIN:-60} )); then rm -f "$f"; return 0; fi
+    if [[ -z "$name" ]]; then
+        case "$key" in
+            steam:*)  name="$(steam_games | awk -v i="${key#steam:}" 'NR % 5 == 1 { x = $0 } NR % 5 == 2 && x == i { print; exit }')" ;;
+            umbral:*) name="$(umbral_game_name "$key")" ;;
+        esac
+    fi
+    # numbers from awk, JSON from jq (names may hold quotes)
+    sum="$(awk '
+        function upd(i, v) { if (v == "-" || v == "") return; v += 0; s[i] += v; c[i]++; if (!(i in mx) || v > mx[i]) mx[i] = v }
+        { upd(2, $2); upd(3, $3); upd(4, $4); upd(5, $5); upd(6, $6); upd(7, $7)
+          if (NR % 6 == 1) g = g (g == "" ? "" : ",") ($3 == "-" ? "null" : $3) }
+        END {
+          split("cpuTemp gpuTemp gpuLoad gpuPower vram ram", nm, " ")
+          printf "{\"samples\":%d", NR
+          for (i = 2; i <= 7; i++)
+              printf ",\"%sMax\":%s,\"%sAvg\":%s", nm[i-1], (c[i] ? mx[i] : "null"), nm[i-1], (c[i] ? sprintf("%.1f", s[i] / c[i]) : "null")
+          printf ",\"gpuTempLine\":[%s]}\n", g
+        }' "$f" | jq -c --arg k "$key" --arg n "${name:-$key}" --argjson t0 "$t0" --argjson d "$dur" '. + {key:$k, name:$n, start:$t0, duration:$d}')"
+    jq -e . <<<"$sum" >/dev/null 2>&1 || { rm -f "$f"; return 0; }
+    mkdir -p "$GAMING_DIR"
+    local db; db="$( [[ -s "$SESSIONS_DB" ]] && cat "$SESSIONS_DB" || echo '[]')"
+    jq --argjson s "$sum" '([$s] + .) | .[0:50]' <<<"$db" > "$SESSIONS_DB.tmp" && mv "$SESSIONS_DB.tmp" "$SESSIONS_DB"
+    rm -f "$f"
+    notify "$(jq -r '.name' <<<"$sum") · $(jq -r '.duration | (. / 3600 | floor) as $h | ((. % 3600) / 60 | floor) as $m | if $h > 0 then "\($h) h \($m) min" else "\($m) min" end' <<<"$sum")" \
+        "$(jq -r '[(if .gpuTempMax then "GPU \(.gpuTempMax) °C max" else empty end), (if .cpuTempMax then "CPU \(.cpuTempMax) °C max" else empty end),
+                    (if .gpuLoadAvg then "GPU load \(.gpuLoadAvg | floor) % avg" else empty end), (if .gpuPowerMax then "\(.gpuPowerMax | floor) W peak" else empty end)]
+                   | join(" · ")' <<<"$sum")$(jq -r 'if (.gpuTempMax // 0) >= 85 or (.cpuTempMax // 0) >= 90 then " — ran hot" else "" end' <<<"$sum")"
+}
+
+# sessions [N] → last sessions (JSON) · session-summary on|off
+cmd_sessions() {
+    case "${1:-}" in
+        on|off) mkdir -p "$GAMING_DIR"; jq -n --argjson v "$([[ "$1" == on ]] && echo true || echo false)" '{summary:$v}' > "$SESSION_SETTINGS"
+                log "✔ Session summary $1." ;;
+        *) if [[ -s "$SESSIONS_DB" ]]; then jq -c --argjson n "${1:-10}" '.[0:$n]' "$SESSIONS_DB"; else echo '[]'; fi ;;
+    esac
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5931,6 +6020,7 @@ main() {
         hook)        need "$1" "missing game key"; cmd_hook "$1" ;;
         session)     cmd_session "$1" "$2" ;;
         sched)       cmd_sched "$@" ;;
+        sessions)    cmd_sessions "${1:-}" ;;
         upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;
         gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;
         gaudit)      if [[ "${1:-}" == fix ]]; then cmd_gaudit_fix "${2:-all}"; else cmd_gaudit; fi ;;
