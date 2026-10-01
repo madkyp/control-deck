@@ -2969,6 +2969,16 @@ cmd_run() {
     [[ "$(jq -r '.mangohud' <<<"$p")" == true ]] && { have mangohud && pre+=(mangohud) || echo "  mangohud not installed" >> "$rlog"; }
     read -ra extra <<<"$(jq -r '.prefix' <<<"$p")"; pre+=("${extra[@]}")
     read -ra extra <<<"$(jq -r '.args' <<<"$p")"
+    # OptiScaler loads as dxgi.dll unless told otherwise: with ReShade on dxgi
+    # it goes to winmm.dll; its menu (Insert) moves to Page Down if Insert is ours
+    if [[ "${PROTON_USE_OPTISCALER:-0}" == 1 ]]; then
+        local rst; rst="$(reshade_state "$key")"
+        if [[ -z "${PROTON_OPTISCALER_NAME:-}" && "$(jq -r '.fx' <<<"$p")" == true && "$(jq -r '.fxMode' <<<"$p")" == reshade \
+              && -n "$rst" && "$(jq -r .api <<<"$rst")" == dxgi ]]; then
+            export PROTON_OPTISCALER_NAME=winmm.dll
+        fi
+        [[ "$(fx_key)" == Insert ]] && export PROTON_OPTISCALER_CONFIG="${PROTON_OPTISCALER_CONFIG:+$PROTON_OPTISCALER_CONFIG;}Menu.ShortcutKey=0x22"
+    fi
     # visual shaders: vkBasalt layer with this game's config
     if [[ "$(jq -r '.fx' <<<"$p")" == true ]]; then
         if [[ "$(jq -r '.fxMode // "vkbasalt"' <<<"$p")" == reshade ]]; then
@@ -5727,7 +5737,7 @@ game_crashed() {   # key rc started(epoch)
 env_vendor() {   # VAR → nvidia|amd|mesa|""
     case "$1" in
         __GL_*|__NV*|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX*|DXVK_NVAPI*|PROTON_DLSS_*) echo nvidia ;;
-        RADV_*|AMD_*|ACO_*|RADEONSI*|PROTON_FSR4_*) echo amd ;;
+        RADV_*|AMD_*|ACO_*|RADEONSI*|PROTON_FSR4_*|PROTON_USE_OPTISCALER|PROTON_OPTISCALER_*) echo amd ;;
         MESA_*|ENABLE_LAYER_MESA*) echo mesa ;;
         *) echo "" ;;
     esac
@@ -5815,16 +5825,16 @@ cmd_upscale() {
     tool="$( [[ -f "$cfg" ]] && vdf_get "$cfg" "$COMPAT_MAPPING/$id" name)"
     [[ -z "$tool" && -f "$cfg" ]] && tool="$(vdf_get "$cfg" "$COMPAT_MAPPING/0" name)"
     [[ -n "$tool" ]] && tdir="$(compat_tool_dir "$tool")"
-    [[ -n "$tdir" && -f "$tdir/proton" ]] && vars="$(grep -oE 'PROTON_(FSR4_UPGRADE|FSR4_RDNA3_UPGRADE|DLSS_UPGRADE|XESS_UPGRADE|FSR4_INDICATOR|DLSS_INDICATOR)' "$tdir/proton" | sort -u | paste -sd ' ')"
+    [[ -n "$tdir" && -f "$tdir/proton" ]] && vars="$(grep -oE 'PROTON_(FSR4_UPGRADE|FSR4_RDNA3_UPGRADE|DLSS_UPGRADE|XESS_UPGRADE|FSR4_INDICATOR|DLSS_INDICATOR|USE_OPTISCALER)' "$tdir/proton" | sort -u | paste -sd ' ')"
     name="$(gpu_name)"; gen="$(jq -rn --arg g "$name" "$JQ_GPU_GEN"' $g | gpu_gen')"
     p="$(profile_get "$key")"
     jq -nc --arg tool "$tool" --arg vars "$vars" --arg gpu "$name" --arg gen "$gen" --arg vendor "$(gpu_vendor)" \
-        --argjson env "$(jq -c '.env // {}' <<<"$p")" \
+        --argjson env "$(jq -c '.env // {}' <<<"$p")" --argjson online "$(fx_online "$id" 2>/dev/null || echo null)" \
         --argjson ships "$(
             f() { [[ -d "$dir" ]] && find "$dir" -maxdepth 6 -type f -iname "$1" 2>/dev/null | head -1 | grep -q . && echo true || echo false; }
             jq -nc --argjson fsrdx "$(f amd_fidelityfx_dx12.dll)" --argjson fsrvk "$(f amd_fidelityfx_vk.dll)" \
-                   --argjson dlss "$(f 'nvngx_dlss*.dll')" --argjson xess "$(f 'libxess*.dll')" \
-                   '{fsr31dx12:$fsrdx, fsr31vk:$fsrvk, dlss:$dlss, xess:$xess}')" '
+                   --argjson dlss "$(f 'nvngx_dlss*.dll')" --argjson xess "$(f 'libxess*.dll')" --argjson fsr2 "$(f 'ffx_fsr2_api*.dll')" \
+                   '{fsr31dx12:$fsrdx, fsr31vk:$fsrvk, dlss:$dlss, xess:$xess, fsr2:$fsr2}')" '
         ($vars | split(" ")) as $v
         | ($gpu | ascii_downcase | test("rtx")) as $rtx
         | {proton:{tool:(if $tool == "" then null else $tool end),
@@ -5839,6 +5849,12 @@ cmd_upscale() {
                   elif ($gen != "amd:5" and $gen != "amd:4") then "FSR 4 needs a Radeon RX 9000 (RDNA4) or RX 7000 with GE-Proton."
                   elif ($v | index("PROTON_FSR4_UPGRADE") | not) then "This game'"'"'s Proton can'"'"'t do it: pick GE-Proton or Proton-CachyOS in PROTON."
                   else null end)},
+            {id:"optifsr4", var:"PROTON_USE_OPTISCALER", label:"FSR 4 via OptiScaler",
+             why:(if (.ships | (.dlss or .xess or .fsr31dx12 or .fsr31vk or .fsr2) | not) then "OptiScaler needs the game to offer DLSS, XeSS or FSR 2/3.1 to take over — none found."
+                  elif $vendor != "amd" or $gen != "amd:5" then "FSR 4 through OptiScaler is offered on Radeon RX 9000 (RDNA4)."
+                  elif (($online // {}).level // "none") == "anticheat" then "Online game with anti-cheat: OptiScaler hooks the game, not worth a ban."
+                  elif ($v | index("PROTON_USE_OPTISCALER") | not) or ($v | index("PROTON_FSR4_UPGRADE") | not) then "This game'"'"'s Proton can'"'"'t do it: pick GE-Proton or Proton-CachyOS in PROTON."
+                  else null end)},
             {id:"dlss", var:"PROTON_DLSS_UPGRADE", label:"DLSS (newest)",
              why:(if (.ships.dlss | not) then "The game doesn'"'"'t ship DLSS."
                   elif ($rtx | not) then "DLSS needs an NVIDIA RTX card."
@@ -5850,7 +5866,13 @@ cmd_upscale() {
                   else null end)}]
         | .options |= map(. + {available:(.why == null),
                                var:(if .id == "fsr4" and $gen == "amd:4" then "PROTON_FSR4_RDNA3_UPGRADE" else .var end)}
+                          # what the chip writes to the profile ENV
+                          | . + {set:(if .id == "optifsr4" then
+                                        {PROTON_USE_OPTISCALER:"1", PROTON_FSR4_UPGRADE:"1",
+                                         PROTON_OPTISCALER_CONFIG:"Upscalers.Dx12Upscaler=fsr31;Upscalers.Dx11Upscaler=fsr31_12;Upscalers.VulkanUpscaler=fsr31_12"}
+                                      else {(.var):"1"} end)}
                           | . + {on:($env[.var] == "1")})
+        | .preferDirect = ((.options[] | select(.id == "fsr4") | .available) and (.options[] | select(.id == "optifsr4") | .available))
         | .indicators = {fsr4:($v | index("PROTON_FSR4_INDICATOR") != null), dlss:($v | index("PROTON_DLSS_INDICATOR") != null)}'
 }
 

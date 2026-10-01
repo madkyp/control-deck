@@ -646,6 +646,29 @@ until vkBasalt is installed.
 - STATUS lists the last 8 sessions with a small temperature graph.
   `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
 
+#### FSR 4 via OptiScaler (UPSCALE → "FSR 4 via OptiScaler")
+- For games without FSR 3.1 but with DLSS, XeSS or FSR 2/3.1 (DLL), on RX 9000.
+  GE-Proton / Proton-CachyOS install OptiScaler themselves
+  (`PROTON_USE_OPTISCALER`). It comes from the same manifest
+  (`optiscaler_v0.9.4.tar.xz`) and goes to the prefix's `system32/umu/`. With
+  `PROTON_FSR4_UPGRADE` they add the FidelityFX 4 DLLs, and GE's ntdll
+  (`load_dll_optiscaler_hack`, `WINE_OPTISCALER_NAME`) loads OptiScaler in
+  place of `dxgi.dll` by default. Nothing is installed by hand.
+- The chip writes `PROTON_USE_OPTISCALER=1`, `PROTON_FSR4_UPGRADE=1` and
+  `PROTON_OPTISCALER_CONFIG=Upscalers.Dx12Upscaler=fsr31;Upscalers.Dx11Upscaler=fsr31_12;Upscalers.VulkanUpscaler=fsr31_12`.
+  The option names and values come from the bundle's `OptiScaler.ini`:
+  "fsr31 (also for FSR4)", "fsr31_12 (dx11on12 / VKon12, FSR4)". Proton
+  writes them into the ini, so FSR 4 also reaches DX11 and Vulkan games.
+- Wrapper:
+  - with ReShade on `dxgi.dll` in that game, `PROTON_OPTISCALER_NAME=winmm.dll`
+    (another proxy name OptiScaler ships);
+  - when INSERT (OptiScaler's menu key, VK 0x2D) is the shader key,
+    `Menu.ShortcutKey=0x22` (Page Down) is appended.
+- Not offered with anti-cheat. When the game already ships FSR 3.1 DX12, the
+  tab says the plain FSR 4 chip is simpler. CHECK FOR THIS PC flags OptiScaler
+  variables on non-AMD PCs (the config is FSR-4-specific).
+- Untested in game here (needs an RDNA4 card).
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

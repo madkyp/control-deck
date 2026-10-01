@@ -430,6 +430,13 @@ ShellRoot {
             return (" " + gPrefix.text + " ").indexOf(" " + x.token + " ") >= 0;
         }
         // value this profile already gives to a suggested env var ("" if unset)
+        // add or remove a set of VAR=value in the ENV field (saved with SAVE / PLAY)
+        function toggleEnvSet(set, on) {
+            var names = Object.keys(set || {});
+            var rest = gEnv.text.split(/\s+/).filter(function (e) { return e && names.indexOf(e.split("=")[0]) < 0; });
+            if (!on) names.forEach(function (n) { rest.push(n + "=" + set[n]); });
+            gEnv.text = rest.join(" ");
+        }
         // add/remove VAR=1 in the ENV field (saved with SAVE / PLAY)
         function toggleEnv(name) {
             var rest = gEnv.text.split(/\s+/).filter(function (e) { return e && e.split("=")[0] !== name; });
@@ -3136,9 +3143,13 @@ ShellRoot {
                                             on: modelData.available || isOn
                                             tip: modelData.available
                                                  ? (modelData.id === "fsr4" ? "The game's FSR 3.1 runs as FSR 4 (AMD's ML upscaler). Proton downloads the DLL. SAVE to apply."
+                                                    : modelData.id === "optifsr4"
+                                                      ? "OptiScaler takes over the game's DLSS / XeSS / FSR and renders it with FSR 4 — pick that upscaler in the game's settings. Proton downloads everything; nothing to install."
+                                                        + (win.ups.preferDirect ? " This game has FSR 3.1: the plain FSR 4 chip is simpler." : "")
+                                                        + " Its menu: INSERT (Page Down if INSERT is your shader key)."
                                                     : "Proton swaps in the newest " + modelData.label.replace(" (newest)", "") + " DLL. SAVE to apply.")
                                                  : modelData.why
-                                            onClicked: win.toggleEnv(modelData.var)
+                                            onClicked: win.toggleEnvSet(modelData.set, isOn)
                                         }
                                     }
                                     Chip {

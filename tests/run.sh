@@ -1391,17 +1391,35 @@ touch "$UP/steamapps/common/Up/bin/amd_fidelityfx_dx12.dll" "$UP/steamapps/commo
 printf '"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "GE-Test"\n    {\n    }\n  }\n}\n' > "$UP/compatibilitytools.d/GE-Test/compatibilitytool.vdf"
 printf 'check_environment("PROTON_FSR4_UPGRADE", "fsr4")\ncheck_environment("PROTON_DLSS_UPGRADE", "dlss")\ncheck_environment("PROTON_XESS_UPGRADE", "xess")\ncheck_environment("PROTON_FSR4_INDICATOR", "fsr4hud")\n' > "$UP/compatibilitytools.d/GE-Test/proton"
 UPS() { CONTROL_DECK_STEAM_ROOT="$UP" CONTROL_DECK_GPU_VENDOR="$1" CONTROL_DECK_GPU_NAME="$2" "$CD" upscale steam:8000; }
-eq "detects what the game ships" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c .ships)" '{"fsr31dx12":true,"fsr31vk":false,"dlss":true,"xess":false}'
+eq "detects what the game ships" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c .ships)" '{"fsr31dx12":true,"fsr31vk":false,"dlss":true,"xess":false,"fsr2":false}'
 eq "Steam default Proton → no upgrades" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .why')" "This game's Proton can't do it: pick GE-Proton or Proton-CachyOS in PROTON."
 printf '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t"CompatToolMapping"\n\t\t\t\t{\n\t\t\t\t\t"8000"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t"GE-Test"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n' > "$UP/config/config.vdf"
 eq "RX 9070 XT + GE: FSR 4 available" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c '[.options[] | select(.id == "fsr4") | .available, .var]')" '[true,"PROTON_FSR4_UPGRADE"]'
 eq "…DLSS not (needs RTX)" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "dlss") | .why')" "DLSS needs an NVIDIA RTX card."
-eq "RTX 2070: DLSS yes, FSR 4 no" "$(UPS nvidia 'NVIDIA GeForce RTX 2070' | jq -c '[.options[] | select(.id != "xess") | .available]')" '[false,true]'
+eq "RTX 2070: DLSS yes, FSR 4 no" "$(UPS nvidia 'NVIDIA GeForce RTX 2070' | jq -c '[.options[] | select(.id == "fsr4" or .id == "dlss") | .available]')" '[false,true]'
 eq "RX 7900 without GE's RDNA3 switch → explained" "$(UPS amd 'AMD Radeon RX 7900 XTX' | jq -r '.options[] | select(.id == "fsr4") | .why')" "RX 7000 (RDNA3) needs GE-Proton's RDNA3 variant."
 eq "XeSS: game doesn't ship it" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "xess") | .why')" "The game doesn't ship XeSS."
 CONTROL_DECK_STEAM_ROOT="$UP" "$CD" gprofile set steam:8000 'env=PROTON_FSR4_UPGRADE=1' >/dev/null
 eq "turned on → reported on" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .on')" true
 eq "FSR 4 flagged when the profile moves to an NVIDIA PC" "$(CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit | jq -c '[.issues[] | select(.key == "steam:8000") | .var]')" '["PROTON_FSR4_UPGRADE"]'
+printf 'check_environment("PROTON_USE_OPTISCALER", "optiscaler")\n' >> "$UP/compatibilitytools.d/GE-Test/proton"
+OPT="$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c '.options[] | select(.id == "optifsr4")')"
+eq "OptiScaler FSR 4 available (DLSS in the game, RDNA4, GE)" "$(jq -r .available <<<"$OPT")" true
+eq "…writes everything Proton needs, nothing to install" "$(jq -c '.set | keys' <<<"$OPT")" '["PROTON_FSR4_UPGRADE","PROTON_OPTISCALER_CONFIG","PROTON_USE_OPTISCALER"]'
+has "…FSR 4 for DX12, DX11 and Vulkan games" "$(jq -r '.set.PROTON_OPTISCALER_CONFIG' <<<"$OPT")" "Upscalers.Dx12Upscaler=fsr31;Upscalers.Dx11Upscaler=fsr31_12;Upscalers.VulkanUpscaler=fsr31_12"
+eq "the game has FSR 3.1: the direct chip is simpler" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq .preferDirect)" true
+eq "not on the RTX 2070" "$(UPS nvidia 'NVIDIA GeForce RTX 2070' | jq -r '.options[] | select(.id == "optifsr4") | .available')" false
+printf '#!/bin/sh\necho "name=$PROTON_OPTISCALER_NAME cfg=$PROTON_OPTISCALER_CONFIG"\n' > "$T/fake/optgame"; chmod +x "$T/fake/optgame"
+CONTROL_DECK_STEAM_ROOT="$UP" "$CD" gprofile set steam:8000 'env=PROTON_USE_OPTISCALER=1 PROTON_OPTISCALER_CONFIG=Upscalers.Dx12Upscaler=fsr31' fx=true >/dev/null 2>&1 \
+    || CONTROL_DECK_STEAM_ROOT="$UP" "$CD" gprofile set steam:8000 'env=PROTON_USE_OPTISCALER=1 PROTON_OPTISCALER_CONFIG=Upscalers.Dx12Upscaler=fsr31' >/dev/null
+mkdir -p "$HOME/.local/share/control-deck/gaming/fx/steam_8000"
+echo '{"key":"steam:8000","dir":"/x","api":"dxgi"}' > "$HOME/.local/share/control-deck/gaming/fx/steam_8000/reshade.json"
+bash -c 'source "$1"; profile_write steam:8000 "{\"fx\":true,\"fxMode\":\"reshade\"}"' _ "$CD"
+"$CD" fx key Insert >/dev/null
+O="$(CONTROL_DECK_STEAM_ROOT="$UP" SteamAppId=8000 "$CD" run "$T/fake/optgame" 2>/dev/null)"
+has "OptiScaler moves to winmm.dll next to ReShade's dxgi.dll" "$O" "name=winmm.dll"
+has "…and its menu off INSERT when INSERT is the shader key" "$O" "Menu.ShortcutKey=0x22"
+"$CD" fx key F11 >/dev/null; rm -rf "$HOME/.local/share/control-deck/gaming/fx/steam_8000"
 section "Game session summary"
 export CONTROL_DECK_SESSION_MIN=0 CONTROL_DECK_SESSION_EVERY=1 CONTROL_DECK_GPU_VENDOR=intel CONTROL_DECK_STEAM_ROOT="$ST" CONTROL_DECK_STEAM_RUNNING=0
 rm -f "$T/notify.log"; printf '#!/bin/sh\nsleep 2\nexit 0\n' > "$T/fake/sgame"; chmod +x "$T/fake/sgame"
