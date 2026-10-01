@@ -3,6 +3,7 @@ import Quickshell.Io
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "es.js" as I18n
 
 ShellRoot {
     FloatingWindow {
@@ -41,6 +42,15 @@ ShellRoot {
         property string scriptPath: Quickshell.env("CONTROL_DECK_BIN") || (home + "/.local/bin/control-deck")
         // CONTROL_DECK_VIEW=manage|store|updates|system opens straight on a tab
         property string view: Quickshell.env("CONTROL_DECK_VIEW") || "install"
+        // UI language: "en" or "es" (ESP/ENG in the header); saved by the backend
+        property string lang: "en"
+        function t(s) {
+            if (lang !== "es" || typeof s !== "string") return s;
+            if (I18n.ES[s] !== undefined) return I18n.ES[s];
+            for (var i = 0; i < I18n.PATTERNS.length; i++)
+                if (I18n.PATTERNS[i][0].test(s)) return s.replace(I18n.PATTERNS[i][0], I18n.PATTERNS[i][1]);
+            return s;
+        }
         Component.onCompleted: {
             timerStatusProc.running = true;
             versionProc.running = true;
@@ -82,11 +92,11 @@ ShellRoot {
             { t: "PACMAN",   e: ".pkg.tar.zst  .pkg.tar.xz  .pkg.tar.gz  .pkg.tar" },
             { t: "FLATPAK",  e: ".flatpak" },
             { t: "TAR",      e: ".tar  .tar.gz  .tgz  .tar.xz  .tar.zst  .tar.bz2" },
-            { t: "DEB",      e: ".deb  (with debtap)" },
+            { t: "DEB",      e: win.t(".deb  (with debtap)") },
             { t: "URL",      e: "https://…  ·  github.com/user/repo" }
         ]
         property string logText: ""
-        property string status: "AWAITING FILE"
+        property string status: win.t("AWAITING FILE")
         property color  statusColor: pal.dim
         property bool   busy: installProc.running || detectManyProc.running || fetchProc.running
 
@@ -98,7 +108,7 @@ ShellRoot {
                 case "tar":      return "TAR";
                 case "deb":      return "DEB";
                 case "rpm":      return "RPM";
-                default:         return "FILE";
+                default:         return win.t("FILE");
             }
         }
         function supportedCount() {
@@ -106,7 +116,7 @@ ShellRoot {
         }
         function reset() {
             queue = []; queuePaths = []; installPaths = []; logText = "";
-            status = "AWAITING FILE"; statusColor = pal.dim;
+            status = win.t("AWAITING FILE"); statusColor = pal.dim;
         }
         function pathFromUrl(u) {
             return decodeURIComponent(String(u).replace(/^file:\/\//, ""));
@@ -114,7 +124,7 @@ ShellRoot {
         function loadFiles(paths) {
             if (!paths || paths.length === 0) return;
             logText = ""; queue = []; queuePaths = paths;
-            status = "ANALYZING…"; statusColor = pal.pink;
+            status = win.t("ANALYZING…"); statusColor = pal.pink;
             detectManyProc.running = true;
         }
         function loadFile(p) { if (p) loadFiles([p]); }
@@ -130,7 +140,7 @@ ShellRoot {
                 view = "store"; queryField.text = t; runSearch(t);
             } else if (isUrl) {
                 fetchUrl = t; fetchedPath = ""; logText = ""; queue = [];
-                status = "DOWNLOADING…"; statusColor = pal.pink;
+                status = win.t("DOWNLOADING…"); statusColor = pal.pink;
                 fetchProc.running = true;
             } else {
                 loadFile(expandHome(t));
@@ -166,7 +176,7 @@ ShellRoot {
         property var    editArgs: []
         property var    uninstallArgs: []
         property string manageLog: ""
-        property string manageStatus: "SELECT AN APP"
+        property string manageStatus: win.t("SELECT AN APP")
         property bool confirmUninstall: false
         property bool manageBusy: editProc.running || uninstallProc.running
                                   || listProc.running || infoProc.running
@@ -205,7 +215,7 @@ ShellRoot {
             }
             return false;
         }
-        function applyFix(kind) { fixKind = kind; manageLog = ""; manageStatus = "FIXING…"; fixProc.running = true; }
+        function applyFix(kind) { fixKind = kind; manageLog = ""; manageStatus = win.t("FIXING…"); fixProc.running = true; }
         // Electron/Chromium flags for native Wayland, inserted before field codes
         function withWaylandFlags(e) {
             if (e.indexOf("ozone-platform") >= 0) return e;
@@ -219,7 +229,7 @@ ShellRoot {
         property var    results: []
         property var    installArgs: []
         property string storeLog: ""
-        property string storeStatus: "SEARCH FOR AN APP"
+        property string storeStatus: win.t("SEARCH FOR AN APP")
         property var    review: null        // AUR review shown before building
         property string reviewPkg: ""
         property bool   confirmRisky: false
@@ -228,20 +238,20 @@ ShellRoot {
         function runSearch(q) {
             if (!q || q.trim() === "") return;
             storeQuery = q.trim(); results = []; storeLog = ""; review = null;
-            storeStatus = "SEARCHING…";
+            storeStatus = win.t("SEARCHING…");
             searchProc.running = true;
         }
         function installPkg(src, id, remote) {
             if (src === "aur" && (!review || review.name !== id)) {
                 // AUR packages are reviewed before they are built
                 reviewPkg = id; review = null; confirmRisky = false; storeLog = "";
-                storeStatus = "REVIEWING " + id + "…";
+                storeStatus = win.t("REVIEWING ") + id + "…";
                 reviewProc.running = true;
                 return;
             }
             installArgs = [src, id, remote || ""];
             storeLog = ""; review = null;
-            storeStatus = "INSTALLING " + (src === "github" ? id.split("/").pop() : id) + "…";
+            storeStatus = win.t("INSTALLING ") + (src === "github" ? id.split("/").pop() : id) + "…";
             storeInstallProc.running = true;
         }
         function dateOf(epoch) { return epoch ? new Date(epoch * 1000).toISOString().substring(0, 10) : "?"; }
@@ -251,7 +261,7 @@ ShellRoot {
         property var    updArgs: []
         property var    timerArgs: []
         property string updLog: ""
-        property string updStatus: "NOT CHECKED"
+        property string updStatus: win.t("NOT CHECKED")
         property bool   updChecked: false
         property bool   autoCheck: false
         property bool   updBusy: checkProc.running || updProc.running || timerProc.running
@@ -266,7 +276,7 @@ ShellRoot {
         })
 
         function checkUpdates() {
-            updates = []; updStatus = "CHECKING…"; newsAck = false;
+            updates = []; updStatus = win.t("CHECKING…"); newsAck = false;
             checkProc.running = true; newsProc.running = true;
         }
         function runUpdate(args, label) {
@@ -277,7 +287,7 @@ ShellRoot {
         function guardedUpdate(args, label, touchesRepos) {
             if (touchesRepos && unreadNews.length > 0 && !newsAck) {
                 newsAck = true;
-                updStatus = "READ THE ARCH NEWS FIRST · CLICK AGAIN";
+                updStatus = win.t("READ THE ARCH NEWS FIRST · CLICK AGAIN");
                 return;
             }
             runUpdate(args, label);
@@ -343,7 +353,7 @@ ShellRoot {
         property string fxImportFile: ""    // archive picked for IMPORT
         property bool   fxGuideOpen: false  // FX: all steps listed (otherwise only the pending ones / a summary)
         property bool   fxDetails: false    // FX: executable, API and keys (advanced)
-        property bool   fxAddLink: false    // FX: the "save a preset page" field is open
+        property bool   fxAddLink: false    // FX: the win.t("save a preset page") field is open
         property string fxTopFor: ""
         function fxToTop() { fxScroll.contentItem.contentY = 0; }
         // the FX steps, from the game's real state: [done, title, how]
@@ -351,30 +361,30 @@ ShellRoot {
             var key = (fx.key || "Home").toUpperCase(), rs = fxReshade;
             return [
                 [(rs ? "reshade" : "vkbasalt") === fx.recommended,
-                 (rs ? "reshade" : "vkbasalt") === fx.recommended ? "Route: " + (rs ? "ReShade" : "vkBasalt")
-                                                                  : "Switch to " + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt"),
-                 ((rs ? "reshade" : "vkbasalt") === fx.recommended ? "The recommended one for this game. " : "Recommended here: " + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt") + ". ")
-                 + ((fx.advice || {}).reasons || [""])[0]],
-                [fxReady, "Install " + (rs ? "ReShade" : "vkBasalt + shaders"),
-                 rs ? "Downloaded from reshade.me into your user folder, no password." : "From chaotic-aur (asks for your password) plus the standard shaders."],
+                 (rs ? "reshade" : "vkbasalt") === fx.recommended ? win.t("Route: ") + (rs ? "ReShade" : "vkBasalt")
+                                                                  : win.t("Switch to ") + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt"),
+                 ((rs ? "reshade" : "vkbasalt") === fx.recommended ? win.t("The recommended one for this game. ") : win.t("Recommended here: ") + (fx.recommended === "reshade" ? "ReShade" : "vkBasalt") + ". ")
+                 + win.t(((fx.advice || {}).reasons || [""])[0])],
+                [fxReady, win.t("Install ") + (rs ? "ReShade" : "vkBasalt + shaders"),
+                 rs ? win.t("Downloaded from reshade.me into your user folder, no password.") : win.t("From chaotic-aur (asks for your password) plus the standard shaders.")],
                 fxUmbral
-                ? [fx.wrapped === true, "Launch it from Umbral",
-                   fx.wrapped ? "Umbral asks the deck for the shaders/TEMPS each time it starts the game."
-                              : "Needs Umbral 0.10.0 or newer (it asks the deck before launching): update Umbral."]
-                : [fx.wrapped === true, "Launch it through Control Deck",
-                 fx.wrapped ? "Its Steam launch options go through the deck, which loads the shaders."
-                            : (fx.steamRunning ? "Close Steam, then USE IN STEAM." : "USE IN STEAM puts the deck in its launch options.")],
-                [fxActive, "Pick a look",
-                 fxActive ? "Active: " + fxCur.name + ". Change it any time below."
+                ? [fx.wrapped === true, win.t("Launch it from Umbral"),
+                   fx.wrapped ? win.t("Umbral asks the deck for the shaders/TEMPS each time it starts the game.")
+                              : win.t("Needs Umbral 0.10.0 or newer (it asks the deck before launching): update Umbral.")]
+                : [fx.wrapped === true, win.t("Launch it through Control Deck"),
+                 fx.wrapped ? win.t("Its Steam launch options go through the deck, which loads the shaders.")
+                            : (fx.steamRunning ? win.t("Close Steam, then USE IN STEAM.") : win.t("USE IN STEAM puts the deck in its launch options."))],
+                [fxActive, win.t("Pick a look"),
+                 fxActive ? win.t("Active: ") + fxCur.name + win.t(". Change it any time below.")
                           : ((fx.links || []).length
-                             ? "Your saved preset: " + fx.links[0].label + " — open it, download the file, then IMPORT…"
-                               + (fx.links[0].notes ? " Its guide, mapped to the deck, is under SAVED below." : "")
-                             : "Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…")],
-                [fxActive && fx.wrapped === true && fxReady, "Play and tweak",
-                 rs ? "Launch the game and press " + key + ": ReShade's menu, tick/untick effects and move sliders (saved to this game). "
-                      + ((fx.effectsKey || "End") !== "None" ? (fx.effectsKey || "End").toUpperCase() + " switches all effects on/off. " : "")
-                      + "Turn on Performance Mode once you like it. Screenshots (PRINT SCREEN): " + (fx.shotsDir || "~/Pictures/ReShade") + "."
-                    : "Launch the game; " + key + " turns the effects on/off to compare."]
+                             ? win.t("Your saved preset: ") + fx.links[0].label + win.t(" — open it, download the file, then IMPORT…")
+                               + (fx.links[0].notes ? win.t(" Its guide, mapped to the deck, is under SAVED below.") : "")
+                             : win.t("Below: a QUICK LOOK, a SweetFX DB preset (APPLY), or one from Nexus: SEARCH NEXUS → download it → IMPORT…"))],
+                [fxActive && fx.wrapped === true && fxReady, win.t("Play and tweak"),
+                 rs ? win.t("Launch the game and press ") + key + win.t(": ReShade's menu, tick/untick effects and move sliders (saved to this game). ")
+                      + ((fx.effectsKey || "End") !== "None" ? (fx.effectsKey || "End").toUpperCase() + win.t(" switches all effects on/off. ") : "")
+                      + win.t("Turn on Performance Mode once you like it. Screenshots (PRINT SCREEN): ") + (fx.shotsDir || "~/Pictures/ReShade") + "."
+                    : win.t("Launch the game; ") + key + win.t(" turns the effects on/off to compare.")]
             ];
         }
         property int    fxStepsDone: fxSteps.filter(function (s) { return s[0]; }).length
@@ -388,7 +398,7 @@ ShellRoot {
             fxSearchProc.command = [scriptPath, "fx", "search", q]; fxSearchProc.running = true;
         }
         function fxLoadPresets(id) {
-            fxGameId = id; fxPresets = []; fxMsg = "Loading presets…";
+            fxGameId = id; fxPresets = []; fxMsg = win.t("Loading presets…");
             fxPresetsProc.command = [scriptPath, "fx", "presets", id]; fxPresetsProc.running = true;
         }
         function fxApply(k, label, cmd) {
@@ -465,16 +475,16 @@ ShellRoot {
             var l = (applied ? "✓ " : mark) + x.token + "  " + x.pct + "%";
             if (x.kind === "env" && !applied) {
                 var mine = envValue(x.var);
-                if (mine !== null) l += " · you =" + mine;
+                if (mine !== null) l += win.t(" · you =") + mine;
             }
             return l;
         }
         function sugTip(x, applied) {
-            var t = x.pct + "% of " + (x.basis === "similar" ? "players with a GPU like yours" : (x.basis === "vendor" ? "players with your GPU vendor" : "players"))
-                    + " who say it works use it (" + x.n + " reports)";
-            if (x.kind === "env" && x.unset !== undefined) t += "; " + x.unset + "% leave it at the default";
-            if (x.adapted) t += "; value adapted to this PC";
-            return t + (applied ? ". Already in the profile." : ". Click to add, then SAVE.");
+            var t = x.pct + win.t("% of ") + (x.basis === "similar" ? win.t("players with a GPU like yours") : (x.basis === "vendor" ? win.t("players with your GPU vendor") : "players"))
+                    + win.t(" who say it works use it (") + x.n + win.t(" reports)");
+            if (x.kind === "env" && x.unset !== undefined) t += "; " + x.unset + win.t("% leave it at the default");
+            if (x.adapted) t += win.t("; value adapted to this PC");
+            return t + (applied ? win.t(". Already in the profile.") : win.t(". Click to add, then SAVE."));
         }
         // add a suggestion to the editor (saved with SAVE, never automatically)
         function applySug(x) {
@@ -502,9 +512,9 @@ ShellRoot {
             onTriggered: if (!gstatProc.running) gstatProc.running = true
         }
         function playtimeText(sec) {
-            if (!sec) return "never played";
+            if (!sec) return win.t("never played");
             var h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
-            return (h > 0 ? h + " h " : "") + m + " min played";
+            return (h > 0 ? h + " h " : "") + m + win.t(" min played");
         }
         function gpSet(k, v) { var o = Object.assign({}, gp); o[k] = v; gp = o; }
         function envString(e) {
@@ -529,7 +539,7 @@ ShellRoot {
                 a = a.concat([w.v, "label=" + w.label.trim(), "env=" + w.env.trim(), "args=" + w.args.trim(),
                               "gamemode=" + w.gm, "proton=" + w.proton]);
             });
-            runGame(a.concat(extra || []), "SAVING…");
+            runGame(a.concat(extra || []), win.t("SAVING…"));
         }
         function runBench(v) { pendingRun = v; saveBench([]); }
         function pct(v) { return v === undefined || v === null ? "" : (v > 0 ? "+" : "") + v + "%"; }
@@ -537,14 +547,14 @@ ShellRoot {
         property bool pendingPlay: false
         function playGame() {
             if (selGameSource === "steam") { pendingPlay = true; saveGameProfile(); }
-            else runGame(["gplay", selGame], "LAUNCHING…");
+            else runGame(["gplay", selGame], win.t("LAUNCHING…"));
         }
         function saveGameProfile() {
             runGame(["gprofile", "set", selGame,
                      "gamemode=" + (gp.gamemode === true), "mangohud=" + (gp.mangohud === true),
                      "overlay=" + (gp.overlay === true), "ionice=" + (gp.ionice === true), "nice=" + (gp.nice || 0),
                      "env=" + gEnv.text.trim(), "prefix=" + gPrefix.text.trim(), "args=" + gArgs.text.trim()],
-                    "SAVING…");
+                    win.t("SAVING…"));
         }
 
         // ---- system state (clean · backup · history) --------------------
@@ -572,7 +582,7 @@ ShellRoot {
             sysArgs = args; sysLog = ""; sysStatus = label;
             sysProc.running = true;
         }
-        function scanClean() { cleanItems = []; confirmClean = ""; sysStatus = "SCANNING…"; scanProc.running = true; }
+        function scanClean() { cleanItems = []; confirmClean = ""; sysStatus = win.t("SCANNING…"); scanProc.running = true; }
         function openSystem(sub) {
             sysView = sub;
             if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
@@ -604,9 +614,9 @@ ShellRoot {
                     try { win.queue = JSON.parse(text); }
                     catch (e) { win.queue = []; }
                     var sup = win.supportedCount();
-                    if (win.queue.length === 0) { win.status = "AWAITING FILE"; win.statusColor = pal.dim; }
-                    else if (sup === 0) { win.status = "NONE INSTALLABLE"; win.statusColor = pal.bad; }
-                    else { win.status = sup + "/" + win.queue.length + " READY"; win.statusColor = pal.accent; }
+                    if (win.queue.length === 0) { win.status = win.t("AWAITING FILE"); win.statusColor = pal.dim; }
+                    else if (sup === 0) { win.status = win.t("NONE INSTALLABLE"); win.statusColor = pal.bad; }
+                    else { win.status = sup + "/" + win.queue.length + win.t(" READY"); win.statusColor = pal.accent; }
                 }
             }
         }
@@ -616,8 +626,8 @@ ShellRoot {
             stdout: SplitParser { onRead: (line) => win.logText += line + "\n" }
             stderr: SplitParser { onRead: (line) => win.logText += line + "\n" }
             onExited: (code, st) => {
-                if (code === 0) { win.status = "DONE ✓"; win.statusColor = pal.ok; }
-                else            { win.status = "DONE WITH ERRORS"; win.statusColor = pal.bad; }
+                if (code === 0) { win.status = win.t("DONE ✓"); win.statusColor = pal.ok; }
+                else            { win.status = win.t("DONE WITH ERRORS"); win.statusColor = pal.bad; }
                 win.apps = [];   // MANAGE reloads on next visit
             }
         }
@@ -633,7 +643,7 @@ ShellRoot {
             stderr: SplitParser { onRead: (l) => win.logText += l + "\n" }
             onExited: (c, s) => {
                 if (c === 0 && win.fetchedPath) win.loadFile(win.fetchedPath);
-                else { win.status = "DOWNLOAD FAILED"; win.statusColor = pal.bad; }
+                else { win.status = win.t("DOWNLOAD FAILED"); win.statusColor = pal.bad; }
             }
         }
         Process {
@@ -649,7 +659,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.apps = JSON.parse(text); }
                     catch (e) { win.apps = []; }
-                    win.manageStatus = win.apps.length + " APPS";
+                    win.manageStatus = win.apps.length + win.t(" APPS");
                     sizesProc.running = true;   // slower: fills in afterwards
                 }
             }
@@ -695,18 +705,18 @@ ShellRoot {
             command: [win.scriptPath, "edit"].concat(win.editArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? "SAVED ✓" : "SAVE FAILED"; win.refreshApps(); }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("SAVED ✓") : win.t("SAVE FAILED"); win.refreshApps(); }
         }
         Process {
             id: uninstallProc
             command: [win.scriptPath, "uninstall"].concat(win.uninstallArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? "REMOVED ✓" : "FAILED · " + c; win.confirmUninstall = false; win.refreshApps(); }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("REMOVED ✓") : win.t("FAILED · ") + c; win.confirmUninstall = false; win.refreshApps(); }
         }
         Process {
             id: pickProc
-            command: [win.scriptPath, "pickfile", "Choose an icon"]
+            command: [win.scriptPath, "pickfile", win.t("Choose an icon")]
             stdout: StdioCollector { onStreamFinished: { var p = text.trim(); if (p) iconEdit.text = p; } }
         }
         Process {
@@ -727,8 +737,8 @@ ShellRoot {
             command: [win.scriptPath, "launch", win.selPath]
             stdout: SplitParser { onRead: (l) => { if (!win.takeDiag(l)) win.manageLog += l + "\n"; } }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onStarted: { win.selIssue = ""; win.selFixes = []; win.manageStatus = "LAUNCHING…"; }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? "RUNNING ▶" : "LAUNCH FAILED ✗"; }
+            onStarted: { win.selIssue = ""; win.selFixes = []; win.manageStatus = win.t("LAUNCHING…"); }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("RUNNING ▶") : win.t("LAUNCH FAILED ✗"); }
         }
         Process {
             id: fixProc
@@ -736,7 +746,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             onExited: (c, s) => {
-                win.manageStatus = c === 0 ? "FIXED ✓" : "FIX FAILED";
+                win.manageStatus = c === 0 ? win.t("FIXED ✓") : win.t("FIX FAILED");
                 infoProc.running = true;   // re-check the app
             }
         }
@@ -782,7 +792,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.results = JSON.parse(text); }
                     catch (e) { win.results = []; }
-                    win.storeStatus = win.results.length + " RESULTS";
+                    win.storeStatus = win.results.length + win.t(" RESULTS");
                 }
             }
         }
@@ -792,7 +802,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.review = JSON.parse(text); } catch (e) { win.review = null; }
-                    win.storeStatus = win.review ? "RISK: " + win.review.risk.toUpperCase() : "REVIEW FAILED";
+                    win.storeStatus = win.review ? win.t("RISK: ") + win.review.risk.toUpperCase() : win.t("REVIEW FAILED");
                 }
             }
             stderr: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
@@ -803,8 +813,8 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
             onExited: (c, s) => {
-                if (c === 0) { win.storeStatus = "DONE ✓"; }
-                else { win.storeStatus = "FAILED · " + c; }
+                if (c === 0) { win.storeStatus = win.t("DONE ✓"); }
+                else { win.storeStatus = win.t("FAILED · ") + c; }
                 win.apps = [];
             }
         }
@@ -818,7 +828,7 @@ ShellRoot {
                     try { win.updates = JSON.parse(text); }
                     catch (e) { win.updates = []; }
                     win.updChecked = true;
-                    win.updStatus = win.updates.length === 0 ? "UP TO DATE ✓" : win.updates.length + " PENDING";
+                    win.updStatus = win.updates.length === 0 ? win.t("UP TO DATE ✓") : win.updates.length + win.t(" PENDING");
                 }
             }
         }
@@ -828,7 +838,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.updLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.updLog += l + "\n" }
             onExited: (c, s) => {
-                win.updStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
+                win.updStatus = c === 0 ? win.t("DONE ✓") : win.t("FAILED · ") + c;
                 // AUR builds keep going in their terminal; everything else is re-checked
                 if (!(win.updArgs[0] === "update" && win.updArgs[1] === "aur")) win.checkUpdates();
             }
@@ -872,7 +882,7 @@ ShellRoot {
                     try { win.cleanItems = JSON.parse(text); }
                     catch (e) { win.cleanItems = []; }
                     var n = win.cleanItems.filter(function (i) { return i.count > 0; }).length;
-                    win.sysStatus = n === 0 ? "ALL CLEAN ✓" : n + " TO CLEAN";
+                    win.sysStatus = n === 0 ? win.t("ALL CLEAN ✓") : n + win.t(" TO CLEAN");
                 }
             }
         }
@@ -882,7 +892,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
             onExited: (c, s) => {
-                win.sysStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
+                win.sysStatus = c === 0 ? win.t("DONE ✓") : win.t("FAILED · ") + c;
                 win.confirmRestore = false;
                 if (win.sysArgs[0] === "clean") scanProc.running = true;
                 if (win.sysArgs[0] === "restore") win.apps = [];
@@ -923,7 +933,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.snapshots = JSON.parse(text); } catch (e) { win.snapshots = []; }
                     win.selSnaps = [];
-                    if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + " SNAPSHOTS";
+                    if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + win.t(" SNAPSHOTS");
                 }
             }
             stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
@@ -953,7 +963,7 @@ ShellRoot {
                     try { win.games = JSON.parse(text); } catch (e) { win.games = []; }
                     if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = true; fxScanProc.running = true; }
                     if (!gauditProc.running) gauditProc.running = true;
-                    win.gameStatus = win.games.length + " GAMES";
+                    win.gameStatus = win.games.length + win.t(" GAMES");
                     // keep the selection in sync (launch options / Proton may have changed)
                     var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
                     if (cur) { win.selGameLaunch = cur.launch; win.selGameCompat = cur.compat; win.selGameWrapped = cur.wrapped; }
@@ -1007,19 +1017,19 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
             onExited: (c, s) => {
-                win.gameStatus = c === 0 ? "DONE ✓" : (c === 3 ? "CLOSE STEAM FIRST" : "FAILED · " + c);
+                win.gameStatus = c === 0 ? win.t("DONE ✓") : (c === 3 ? win.t("CLOSE STEAM FIRST") : win.t("FAILED · ") + c);
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
                 // PLAY on a Steam game saves the editor first, then launches
                 if (win.gameArgs[0] === "gprofile" && win.gameArgs[1] === "set" && win.pendingPlay) {
                     win.pendingPlay = false;
-                    if (c === 0) { Qt.callLater(function () { win.runGame(["gplay", win.selGame], "LAUNCHING…"); }); return; }
+                    if (c === 0) { Qt.callLater(function () { win.runGame(["gplay", win.selGame], win.t("LAUNCHING…")); }); return; }
                 }
                 if (win.gameArgs[0] === "bench" && win.gameArgs[1] === "set" && win.pendingRun !== "") {
                     var v = win.pendingRun; win.pendingRun = "";
                     // started after this handler returns (restarting a Process from its own onExited is unsafe)
-                    if (c === 0) { Qt.callLater(function () { win.runGame(["bench", "run", win.selGame, v], "RUN " + v + "…"); }); return; }
+                    if (c === 0) { Qt.callLater(function () { win.runGame(["bench", "run", win.selGame, v], win.t("RUN ") + v + "…"); }); return; }
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
@@ -1086,6 +1096,13 @@ ShellRoot {
         }
         Process { id: fixCopyProc }
         Process {
+            id: langProc
+            running: true
+            command: [win.scriptPath, "uilang"]
+            stdout: StdioCollector { onStreamFinished: { var l = text.trim(); if (l === "es" || l === "en") win.lang = l; } }
+        }
+        Process { id: langSaveProc }
+        Process {
             id: fxStatProc
             command: [win.scriptPath, "fx", "status", win.selGame]
             stdout: StdioCollector {
@@ -1098,12 +1115,12 @@ ShellRoot {
         }
         Process {
             id: fxPickProc
-            command: [win.scriptPath, "pickfile", "Choose a downloaded ReShade preset", "@downloads",
+            command: [win.scriptPath, "pickfile", win.t("Choose a downloaded ReShade preset"), "@downloads",
                       "ReShade preset (zip, 7z, rar, ini) | *.zip *.7z *.rar *.ini *.txt"]
             stdout: StdioCollector {
                 onStreamFinished: {
                     var f = text.trim(); if (!f) return;
-                    win.fxImportFile = f; win.fxImportList = []; win.fxMsg = "Reading " + f.replace(/^.*\//, "") + "…";
+                    win.fxImportFile = f; win.fxImportList = []; win.fxMsg = win.t("Reading ") + f.replace(/^.*\//, "") + "…";
                     fxImpListProc.command = [win.scriptPath, "fx", "importlist", f]; fxImpListProc.running = true;
                 }
             }
@@ -1113,11 +1130,11 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     var l = []; try { l = JSON.parse(text); } catch (e) { }
-                    if (l.length === 0) { win.fxMsg = "No ReShade preset in that file (it needs a Techniques= line)."; return; }
+                    if (l.length === 0) { win.fxMsg = win.t("No ReShade preset in that file (it needs a Techniques= line)."); return; }
                     if (l.length === 1) {
                         win.fxMsg = "";
-                        win.fxApply("file:" + win.fxImportFile, "IMPORTING PRESET…", ["fx", "import", win.selGame, win.fxImportFile]);
-                    } else { win.fxImportList = l; win.fxMsg = l.length + " presets in this file: pick one"; }
+                        win.fxApply("file:" + win.fxImportFile, win.t("IMPORTING PRESET…"), ["fx", "import", win.selGame, win.fxImportFile]);
+                    } else { win.fxImportList = l; win.fxMsg = l.length + win.t(" presets in this file: pick one"); }
                 }
             }
         }
@@ -1132,7 +1149,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.fxGames = JSON.parse(text); } catch (e) { win.fxGames = []; }
-                    if (win.fxGames.length === 0) win.fxMsg = "No game with that name on SweetFX Settings DB: try another name, or use a quick look.";
+                    if (win.fxGames.length === 0) win.fxMsg = win.t("No game with that name on SweetFX Settings DB: try another name, or use a quick look.");
                     else win.fxLoadPresets(win.fxGames[0].id);
                 }
             }
@@ -1142,7 +1159,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.fxPresets = JSON.parse(text); } catch (e) { win.fxPresets = []; }
-                    win.fxMsg = win.fxPresets.length === 0 ? "This game has no presets yet." : win.fxPresets.length + " presets — newest first";
+                    win.fxMsg = win.fxPresets.length === 0 ? win.t("This game has no presets yet.") : win.fxPresets.length + win.t(" presets — newest first");
                     Qt.callLater(win.fxToTop);
                 }
             }
@@ -1159,7 +1176,7 @@ ShellRoot {
         }
         Process {
             id: pickRestoreProc
-            command: [win.scriptPath, "pickfile", "Choose a Control Deck backup (.json)"]
+            command: [win.scriptPath, "pickfile", win.t("Choose a Control Deck backup (.json)")]
             stdout: StdioCollector { onStreamFinished: { var p = text.trim(); if (p) restoreField.text = p; } }
         }
 
@@ -1188,14 +1205,14 @@ ShellRoot {
                 Text {
                     id: fixTxt
                     anchors.fill: parent; anchors.margins: 5
-                    text: cmd === "reboot" ? "Restart the PC" : "$ " + cmd
+                    text: cmd === "reboot" ? win.t("Restart the PC") : "$ " + cmd
                     wrapMode: Text.WrapAnywhere
                     color: pal.sky; font.family: win.mono; font.pixelSize: 10
                 }
             }
             Chip {
                 visible: cmd !== "reboot"
-                label: win.copiedFix === cmd ? "COPIED ✓" : "COPY"
+                label: win.copiedFix === cmd ? win.t("COPIED ✓") : win.t("COPY")
                 tint: pal.ok; active: win.copiedFix === cmd
                 onClicked: {
                     fixCopyProc.command = ["wl-copy", "--", cmd];
@@ -1286,15 +1303,15 @@ ShellRoot {
                 RowLayout {
                     spacing: 6
                     Text { text: bv.v; color: bv.tint; font.family: win.mono; font.pixelSize: 13; font.bold: true }
-                    Field { id: bvLabel; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "name" }
+                    Field { id: bvLabel; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: win.t("name") }
                 }
-                Field { id: bvEnv; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: "extra env: VAR=1 VAR2=x" }
-                Field { id: bvArgs; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: "args (replace the profile's)" }
+                Field { id: bvEnv; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: win.t("extra env: VAR=1 VAR2=x") }
+                Field { id: bvArgs; Layout.fillWidth: true; font.pixelSize: 10; placeholderText: win.t("args (replace the profile's)") }
                 Flow {
                     Layout.fillWidth: true; spacing: 4
                     Text { text: "GAMEMODE"; color: pal.dim; font.family: win.mono; font.pixelSize: 8; height: 22; verticalAlignment: Text.AlignVCenter }
                     Repeater {
-                        model: [["", "PROFILE"], ["true", "ON"], ["false", "OFF"]]
+                        model: [["", win.t("PROFILE")], ["true", "ON"], ["false", "OFF"]]
                         delegate: Chip { required property var modelData; label: modelData[1]; implicitHeight: 22
                                          active: bv.gm === modelData[0]; onClicked: bv.gm = modelData[0] }
                     }
@@ -1303,7 +1320,7 @@ ShellRoot {
                     Layout.fillWidth: true; spacing: 4
                     Text { text: "PROTON"; color: pal.dim; font.family: win.mono; font.pixelSize: 8; height: 22; verticalAlignment: Text.AlignVCenter }
                     Repeater {
-                        model: [{ name: "", display: "AS IS" }].concat(win.tools)
+                        model: [{ name: "", display: win.t("AS IS") }].concat(win.tools)
                         delegate: Chip { required property var modelData; label: modelData.display; implicitHeight: 22
                                          active: bv.proton === modelData.name; onClicked: bv.proton = modelData.name }
                     }
@@ -1503,10 +1520,33 @@ ShellRoot {
                     text: "CONTROL DECK"; color: pal.text; font.family: win.mono
                     font.pixelSize: 16; font.letterSpacing: 6; font.bold: true
                 }
+                // ESP | ENG
+                Row {
+                    spacing: 0
+                    Repeater {
+                        model: [["es", "ESP"], ["en", "ENG"]]
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            width: langTxt.implicitWidth + 14; height: 20; radius: 4
+                            color: win.lang === modelData[0] ? pal.accent : "transparent"
+                            border.color: pal.border; border.width: win.lang === modelData[0] ? 0 : 1
+                            Text {
+                                id: langTxt; anchors.centerIn: parent; text: modelData[1]
+                                color: win.lang === modelData[0] ? pal.bg : pal.dim
+                                font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
+                            }
+                            MouseArea {
+                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                onClicked: if (win.lang !== modelData[0]) { win.lang = modelData[0]; langSaveProc.command = [win.scriptPath, "uilang", modelData[0]]; langSaveProc.running = true; }
+                            }
+                        }
+                    }
+                }
                 Item { Layout.fillWidth: true }
                 Text {
                     visible: win.deckUpdate
-                    text: "● NEW VERSION"; color: pal.amber; font.family: win.mono
+                    text: win.t("● NEW VERSION"); color: pal.amber; font.family: win.mono
                     font.pixelSize: 10; font.letterSpacing: 2; font.bold: true
                     MouseArea {
                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -1523,11 +1563,11 @@ ShellRoot {
             // nav
             RowLayout {
                 spacing: 18
-                NavTab { label: "INSTALL"; key: "install" }
-                NavTab { label: "MANAGE";  key: "manage" }
-                NavTab { label: "STORE";   key: "store" }
-                NavTab { label: "UPDATES"; key: "updates" }
-                NavTab { label: "SYSTEM";  key: "system" }
+                NavTab { label: win.t("INSTALL"); key: "install" }
+                NavTab { label: win.t("MANAGE");  key: "manage" }
+                NavTab { label: win.t("STORE");   key: "store" }
+                NavTab { label: win.t("UPDATES"); key: "updates" }
+                NavTab { label: win.t("SYSTEM");  key: "system" }
                 NavTab { label: "GAMING";  key: "gaming" }
             }
 
@@ -1539,10 +1579,10 @@ ShellRoot {
                 spacing: 16
 
             Section {
-                Layout.fillWidth: true; label: "STASH"
+                Layout.fillWidth: true; label: win.t("STASH")
                 info: win.queue.length > 0
-                      ? win.queue.length + (win.queue.length === 1 ? " FILE" : " FILES")
-                      : "NO FILE"
+                      ? win.queue.length + (win.queue.length === 1 ? win.t(" FILE") : win.t(" FILES"))
+                      : win.t("NO FILE")
             }
 
             // drop zone
@@ -1585,7 +1625,7 @@ ShellRoot {
                     anchors.centerIn: parent
                     visible: win.queue.length === 0
                     y: parent.height / 2 + 40
-                    text: "DROP PACKAGE(S) HERE"; color: pal.dim; font.family: win.mono
+                    text: win.t("DROP PACKAGE(S) HERE"); color: pal.dim; font.family: win.mono
                     font.pixelSize: 12; font.letterSpacing: 3
                 }
 
@@ -1598,7 +1638,7 @@ ShellRoot {
                     spacing: 3
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: "SUPPORTED FORMATS"; color: pal.dim; font.family: win.mono
+                        text: win.t("SUPPORTED FORMATS"); color: pal.dim; font.family: win.mono
                         font.pixelSize: 9; font.letterSpacing: 3; bottomPadding: 4
                     }
                     Repeater {
@@ -1702,18 +1742,18 @@ ShellRoot {
                 Field {
                     id: pathField
                     Layout.fillWidth: true
-                    placeholderText: "path, download URL or github.com/user/repo…"
+                    placeholderText: win.t("path, download URL or github.com/user/repo…")
                     enabled: !win.busy
                     onAccepted: win.submitInput(text)
                 }
             }
 
             // status
-            Section { Layout.fillWidth: true; label: "STATUS"; info: win.status }
+            Section { Layout.fillWidth: true; label: win.t("STATUS"); info: win.status }
             Text {
                 Layout.fillWidth: true
                 visible: win.queue.length > 0 && win.supportedCount() < win.queue.length
-                text: (win.queue.length - win.supportedCount()) + " file(s) can't be installed and will be skipped (rpm / deb without debtap / unknown)."
+                text: (win.queue.length - win.supportedCount()) + win.t(" file(s) can't be installed and will be skipped (rpm / deb without debtap / unknown).")
                 color: pal.bad; font.family: win.mono; font.pixelSize: 11
                 wrapMode: Text.WordWrap
             }
@@ -1727,19 +1767,19 @@ ShellRoot {
                 Layout.fillWidth: true
                 spacing: 0
                 ActBtn {
-                    glyph: ""; label: "CLEAR"
+                    glyph: ""; label: win.t("CLEAR")
                     on: win.queue.length > 0 && !win.busy
                     onClicked: { win.reset(); pathField.text = ""; }
                 }
                 BarSep {}
                 ActBtn {
-                    glyph: ""; label: "FOLDER"
+                    glyph: ""; label: win.t("FOLDER")
                     on: !win.busy
                     onClicked: openProc.running = true
                 }
                 BarSep {}
                 ActBtn {
-                    glyph: ""; label: win.busy ? "WORKING" : (win.queue.length > 1 ? "INSTALL ALL" : "INSTALL")
+                    glyph: ""; label: win.busy ? win.t("WORKING") : (win.queue.length > 1 ? win.t("INSTALL ALL") : win.t("INSTALL"))
                     boxed: true
                     on: win.supportedCount() > 0 && !win.busy
                     onClicked: {
@@ -1747,7 +1787,7 @@ ShellRoot {
                             .filter(function (q) { return q.supported === "yes"; })
                             .map(function (q) { return q.path; });
                         win.logText = "";
-                        win.status = "INSTALLING…"; win.statusColor = pal.pink;
+                        win.status = win.t("INSTALLING…"); win.statusColor = pal.pink;
                         installProc.running = true;
                     }
                 }
@@ -1770,11 +1810,11 @@ ShellRoot {
                     Field {
                         id: searchField
                         Layout.fillWidth: true
-                        placeholderText: "filter…"
+                        placeholderText: win.t("filter…")
                         onTextChanged: win.searchText = text
                     }
                     Chip { label: "A–Z";  active: !win.sortBySize; onClicked: win.sortBySize = false }
-                    Chip { label: "SIZE"; active: win.sortBySize;  onClicked: win.sortBySize = true }
+                    Chip { label: win.t("SIZE"); active: win.sortBySize;  onClicked: win.sortBySize = true }
                 }
 
                 // app list
@@ -1820,7 +1860,7 @@ ShellRoot {
                                 }
                                 Text {
                                     visible: modelData.hidden
-                                    text: "HIDDEN"; color: pal.pink
+                                    text: win.t("HIDDEN"); color: pal.pink
                                     font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                                 }
                                 Text {
@@ -1848,7 +1888,7 @@ ShellRoot {
                     Layout.fillWidth: true; spacing: 10
                     visible: win.selPath !== ""
 
-                Section { Layout.fillWidth: true; label: "EDIT"; info: win.manageStatus }
+                Section { Layout.fillWidth: true; label: win.t("EDIT"); info: win.manageStatus }
 
                 // editor row: icon preview + fields
                 RowLayout {
@@ -1878,14 +1918,14 @@ ShellRoot {
                         Field {
                             id: nameEdit
                             Layout.fillWidth: true; enabled: win.selPath !== ""
-                            placeholderText: "app name"; font.pixelSize: 13
+                            placeholderText: win.t("app name"); font.pixelSize: 13
                         }
                         RowLayout {
                             Layout.fillWidth: true; spacing: 8
                             Field {
                                 id: iconEdit
                                 Layout.fillWidth: true; enabled: win.selPath !== ""
-                                placeholderText: "icon name or /path"
+                                placeholderText: win.t("icon name or /path")
                             }
                             Rectangle {
                                 width: 40; height: 34; radius: 6
@@ -1914,7 +1954,7 @@ ShellRoot {
                             font.pixelSize: 11
                         }
                         Chip { label: "WAYLAND"; tint: pal.sky; onClicked: execEdit.text = win.withWaylandFlags(execEdit.text) }
-                        Chip { label: "COPY"; onClicked: win.runQuick(copyProc) }
+                        Chip { label: win.t("COPY"); onClicked: win.runQuick(copyProc) }
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
@@ -1925,7 +1965,7 @@ ShellRoot {
                             placeholderText: "Game;Utility;Development;…"
                             font.pixelSize: 11
                         }
-                        Chip { label: "HIDDEN"; tint: pal.pink; active: win.selHidden; onClicked: win.selHidden = !win.selHidden }
+                        Chip { label: win.t("HIDDEN"); tint: pal.pink; active: win.selHidden; onClicked: win.selHidden = !win.selHidden }
                         Chip { label: "TERMINAL"; active: win.selTerminal; onClicked: win.selTerminal = !win.selTerminal }
                     }
                 }
@@ -1936,7 +1976,7 @@ ShellRoot {
                     visible: win.selSource === "flatpak" && win.fpPerms.length > 0
                     Text {
                         Layout.alignment: Qt.AlignTop; Layout.topMargin: 6
-                        text: "PERMS"; Layout.preferredWidth: 38; color: pal.dim
+                        text: win.t("PERMS"); Layout.preferredWidth: 38; color: pal.dim
                         font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                     }
                     Flow {
@@ -1956,7 +1996,7 @@ ShellRoot {
                             }
                         }
                         Chip {
-                            label: "RESET"; tint: pal.bad
+                            label: win.t("RESET"); tint: pal.bad
                             on: !win.manageBusy
                             onClicked: { win.manageLog = ""; win.fpArgs = ["fpreset", win.selAppId]; fpSetProc.running = true; }
                         }
@@ -2005,13 +2045,13 @@ ShellRoot {
                             visible: win.sizes[win.selPath] !== undefined
                             text: {
                                 var s = win.sizes[win.selPath];
-                                return s ? "  app " + (win.human(s.app) || "–") + "  ·  data " + (win.human(s.data) || "–") : "";
+                                return s ? "  app " + (win.human(s.app) || "–") + win.t("  ·  data ") + (win.human(s.data) || "–") : "";
                             }
                             color: pal.amber; font.family: win.mono; font.pixelSize: 10
                         }
                     }
                     Chip {
-                        label: win.selAutostart ? "✓ AUTOSTART" : "AUTOSTART"
+                        label: win.selAutostart ? win.t("✓ AUTOSTART") : win.t("AUTOSTART")
                         tint: pal.ok; active: win.selAutostart
                         on: !win.manageBusy
                         onClicked: {
@@ -2021,13 +2061,13 @@ ShellRoot {
                         }
                     }
                     Chip {
-                        label: win.purge ? "✓ DELETE DATA" : "+ DELETE DATA"
+                        label: win.purge ? win.t("✓ DELETE DATA") : win.t("+ DELETE DATA")
                         tint: pal.bad; active: win.purge
                         on: win.selSource !== "system" && win.selSource !== "wine" && !win.manageBusy
                         onClicked: win.purge = !win.purge
                     }
                     Chip {
-                        label: win.showAdvanced ? "LESS ▴" : "MORE ▾"
+                        label: win.showAdvanced ? win.t("LESS ▴") : win.t("MORE ▾")
                         active: win.showAdvanced
                         onClicked: win.showAdvanced = !win.showAdvanced
                     }
@@ -2046,25 +2086,25 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 0
                     ActBtn {
-                        glyph: ""; label: "REFRESH"
+                        glyph: ""; label: win.t("REFRESH")
                         on: !win.manageBusy
                         onClicked: { win.searchText = ""; searchField.text = ""; win.refreshApps(); }
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: "LAUNCH"
+                        glyph: ""; label: win.t("LAUNCH")
                         on: win.selPath !== "" && !win.manageBusy
                         onClicked: win.runQuick(launchProc)
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: "FOLDER"
+                        glyph: ""; label: win.t("FOLDER")
                         on: win.selPath !== "" && !win.manageBusy
                         onClicked: win.runQuick(dirProc)
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: "SAVE"; boxed: true
+                        glyph: ""; label: win.t("SAVE"); boxed: true
                         on: win.selPath !== "" && !win.manageBusy
                         onClicked: {
                             var a = [win.selPath, "NAME=" + nameEdit.text, "ICON=" + iconEdit.text];
@@ -2079,20 +2119,20 @@ ShellRoot {
                     BarSep {}
                     ActBtn {
                         glyph: ""
-                        label: win.confirmUninstall ? "CONFIRM?" : "UNINSTALL"
+                        label: win.confirmUninstall ? win.t("CONFIRM?") : win.t("UNINSTALL")
                         on: win.selPath !== "" && win.selSource !== "system" && !win.manageBusy
                         onClicked: {
                             if (!win.confirmUninstall) {
                                 win.confirmUninstall = true;
                                 win.manageLog = "";
                                 if (win.selSource === "pacman") {
-                                    win.manageStatus = "REVIEW AND CONFIRM";
+                                    win.manageStatus = win.t("REVIEW AND CONFIRM");
                                     previewProc.running = true;   // pacman -Rns preview (+ leftovers)
                                 } else if (win.purge) {
-                                    win.manageStatus = "REVIEW AND CONFIRM";
+                                    win.manageStatus = win.t("REVIEW AND CONFIRM");
                                     leftoverProc.running = true;
                                 } else {
-                                    win.manageStatus = "CLICK AGAIN TO CONFIRM";
+                                    win.manageStatus = win.t("CLICK AGAIN TO CONFIRM");
                                 }
                             } else {
                                 win.uninstallArgs = win.purge ? [win.selPath, "--purge"] : [win.selPath];
@@ -2110,7 +2150,7 @@ ShellRoot {
                 visible: win.view === "store"
                 spacing: 12
 
-                Section { Layout.fillWidth: true; label: "SEARCH"; info: win.storeStatus }
+                Section { Layout.fillWidth: true; label: win.t("SEARCH"); info: win.storeStatus }
 
                 // query
                 RowLayout {
@@ -2119,13 +2159,13 @@ ShellRoot {
                     Field {
                         id: queryField
                         Layout.fillWidth: true
-                        placeholderText: "search repos · AUR · flatpak…  or  github.com/user/repo"
+                        placeholderText: win.t("search repos · AUR · flatpak…  or  github.com/user/repo")
                         enabled: !win.storeBusy
                         onAccepted: win.runSearch(text)
                     }
                     MiniBtn {
                         width: 78; height: 34
-                        label: win.storeBusy ? "…" : "SEARCH"
+                        label: win.storeBusy ? "…" : win.t("SEARCH")
                         on: !win.storeBusy
                         onClicked: win.runSearch(queryField.text)
                     }
@@ -2139,11 +2179,11 @@ ShellRoot {
 
                     EmptyHint {
                         visible: win.results.length === 0
-                        title: win.storeBusy ? "SEARCHING…"
-                             : (win.storeQuery === "" ? "TYPE AN APP AND PRESS ENTER"
-                                                      : "NO RESULTS FOR «" + win.storeQuery + "»")
+                        title: win.storeBusy ? win.t("SEARCHING…")
+                             : (win.storeQuery === "" ? win.t("TYPE AN APP AND PRESS ENTER")
+                                                      : win.t("NO RESULTS FOR «") + win.storeQuery + "»")
                         sub: win.storeQuery === "" && !win.storeBusy
-                             ? "official repos · AUR · Flatpak · GitHub releases" : ""
+                             ? win.t("official repos · AUR · Flatpak · GitHub releases") : ""
                     }
 
                     ListView {
@@ -2186,7 +2226,7 @@ ShellRoot {
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
                                     width: 68
-                                    label: modelData.installed ? "INSTALLED" : (modelData.source === "aur" ? "REVIEW" : "INSTALL")
+                                    label: modelData.installed ? win.t("INSTALLED") : (modelData.source === "aur" ? win.t("REVIEW") : win.t("INSTALL"))
                                     primary: !modelData.installed
                                     on: !modelData.installed && !win.storeBusy
                                     onClicked: win.installPkg(modelData.source, modelData.id, modelData.remote)
@@ -2203,7 +2243,7 @@ ShellRoot {
                     radius: 8; color: pal.panel; clip: true
                     border.color: win.review ? win.riskColor(win.review.risk) : pal.border; border.width: 1
 
-                    EmptyHint { visible: reviewProc.running; title: "READING THE PKGBUILD…" }
+                    EmptyHint { visible: reviewProc.running; title: win.t("READING THE PKGBUILD…") }
 
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 12; spacing: 8
@@ -2218,17 +2258,17 @@ ShellRoot {
                             }
                             Badge {
                                 width: 84
-                                label: win.review ? win.review.risk + " risk" : ""
+                                label: win.review ? win.review.risk + win.t(" risk") : ""
                                 tint: win.review ? win.riskColor(win.review.risk) : pal.dim
                             }
                         }
                         Text {
                             Layout.fillWidth: true; wrapMode: Text.WordWrap
                             text: !win.review ? "" :
-                                  (win.review.maintainer ? "maintainer " + win.review.maintainer : "ORPHANED (no maintainer)")
-                                  + "  ·  " + win.review.votes + " votes"
-                                  + "  ·  since " + win.dateOf(win.review.submitted)
-                                  + "  ·  updated " + win.dateOf(win.review.modified)
+                                  (win.review.maintainer ? "maintainer " + win.review.maintainer : win.t("ORPHANED (no maintainer)"))
+                                  + "  ·  " + win.review.votes + win.t(" votes")
+                                  + win.t("  ·  since ") + win.dateOf(win.review.submitted)
+                                  + win.t("  ·  updated ") + win.dateOf(win.review.modified)
                             color: pal.dim; font.family: win.mono; font.pixelSize: 10
                         }
 
@@ -2236,7 +2276,7 @@ ShellRoot {
                         Text {
                             visible: win.review !== null && win.review.flags.length === 0
                             Layout.fillWidth: true; wrapMode: Text.WordWrap
-                            text: "✓ No suspicious patterns found. Still, only build packages you trust."
+                            text: win.t("✓ No suspicious patterns found. Still, only build packages you trust.")
                             color: pal.ok; font.family: win.mono; font.pixelSize: 10
                         }
                         Repeater {
@@ -2281,18 +2321,18 @@ ShellRoot {
                         RowLayout {
                             Layout.fillWidth: true; spacing: 10
                             Hint {
-                                text: "Building runs the PKGBUILD on your machine. Read it if anything is flagged."
+                                text: win.t("Building runs the PKGBUILD on your machine. Read it if anything is flagged.")
                             }
                             MiniBtn {
-                                width: 76; label: "CANCEL"; primary: false
-                                onClicked: { win.review = null; win.storeStatus = win.results.length + " RESULTS"; }
+                                width: 76; label: win.t("CANCEL"); primary: false
+                                onClicked: { win.review = null; win.storeStatus = win.results.length + win.t(" RESULTS"); }
                             }
                             MiniBtn {
                                 width: 120
                                 tint: win.review ? win.riskColor(win.review.risk) : pal.accent
                                 label: !win.review ? "" : (win.review.risk === "high"
-                                       ? (win.confirmRisky ? "REALLY BUILD?" : "BUILD ANYWAY")
-                                       : "BUILD & INSTALL")
+                                       ? (win.confirmRisky ? win.t("REALLY BUILD?") : win.t("BUILD ANYWAY"))
+                                       : win.t("BUILD & INSTALL"))
                                 on: !win.storeBusy
                                 onClicked: {
                                     if (win.review.risk === "high" && !win.confirmRisky) { win.confirmRisky = true; return; }
@@ -2305,7 +2345,7 @@ ShellRoot {
 
                 Hint {
                     visible: win.storeLog === ""
-                    text: "Repos/Flatpak/GitHub install here. AUR packages are reviewed first, then built in a terminal. GitHub installs update from UPDATES."
+                    text: win.t("Repos/Flatpak/GitHub install here. AUR packages are reviewed first, then built in a terminal. GitHub installs update from UPDATES.")
                 }
 
                 LogBox {
@@ -2322,21 +2362,21 @@ ShellRoot {
                 visible: win.view === "updates"
                 spacing: 12
 
-                Section { Layout.fillWidth: true; label: "UPDATES"; info: win.updStatus }
+                Section { Layout.fillWidth: true; label: win.t("UPDATES"); info: win.updStatus }
 
                 // opt-in background check
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
                     Chip {
-                        label: win.autoCheck ? "✓ AUTO-CHECK ON" : "AUTO-CHECK OFF"
+                        label: win.autoCheck ? win.t("✓ AUTO-CHECK ON") : win.t("AUTO-CHECK OFF")
                         tint: pal.ok; active: win.autoCheck
                         on: !win.updBusy
                         onClicked: { win.updLog = ""; win.timerArgs = win.autoCheck ? ["off"] : ["on"]; timerProc.running = true; }
                     }
                     Hint {
                         text: win.autoCheck
-                              ? "Checked every 6 h in the background: you get a notification, even with the deck closed."
-                              : "Turn on to get a notification when updates are available (the deck doesn't need to be open)."
+                              ? win.t("Checked every 6 h in the background: you get a notification, even with the deck closed.")
+                              : win.t("Turn on to get a notification when updates are available (the deck doesn't need to be open).")
                     }
                 }
 
@@ -2350,8 +2390,8 @@ ShellRoot {
                         id: drvText
                         anchors.fill: parent; anchors.margins: 8; wrapMode: Text.WordWrap
                         color: pal.sky; font.family: win.mono; font.pixelSize: 10
-                        text: "\uf108  This update changes the GPU driver (" + win.driverUpdates.map(function (u) { return u.name + " " + u.old + " → " + u.new; }).join(", ")
-                              + "). Every game's shader cache gets rebuilt: expect some stutter the first time you play each game. Old driver caches can be cleaned afterwards in GAMING → SHADERS."
+                        text: win.t("\uf108  This update changes the GPU driver (") + win.driverUpdates.map(function (u) { return u.name + " " + u.old + " → " + u.new; }).join(", ")
+                              + win.t("). Every game's shader cache gets rebuilt: expect some stutter the first time you play each game. Old driver caches can be cleaned afterwards in GAMING → SHADERS.")
                     }
                 }
 
@@ -2366,7 +2406,7 @@ ShellRoot {
                         anchors.fill: parent; anchors.margins: 9; spacing: 6
                         Text {
                             Layout.fillWidth: true; wrapMode: Text.WordWrap
-                            text: "\uf1ea  " + win.unreadNews.length + " Arch news since your last upgrade — some need manual steps. Read them before updating:"
+                            text: "\uf1ea  " + win.unreadNews.length + win.t(" Arch news since your last upgrade — some need manual steps. Read them before updating:")
                             color: pal.amber; font.family: win.mono; font.pixelSize: 10; font.bold: true
                         }
                         Repeater {
@@ -2400,9 +2440,9 @@ ShellRoot {
 
                     EmptyHint {
                         visible: win.updates.length === 0
-                        title: checkProc.running ? "CHECKING FOR UPDATES…"
-                             : (win.updChecked ? "ALL UP TO DATE ✓" : "PRESS CHECK")
-                        sub: "repos · AUR · Flatpak · AppImage/GitHub"
+                        title: checkProc.running ? win.t("CHECKING FOR UPDATES…")
+                             : (win.updChecked ? win.t("ALL UP TO DATE ✓") : win.t("PRESS CHECK"))
+                        sub: win.t("repos · AUR · Flatpak · AppImage/GitHub")
                     }
 
                     ListView {
@@ -2436,11 +2476,11 @@ ShellRoot {
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
                                     width: 68
-                                    label: modelData.source === "repo" ? "SYSTEM" : "UPDATE"
+                                    label: modelData.source === "repo" ? win.t("SYSTEM") : win.t("UPDATE")
                                     primary: modelData.source !== "repo"
                                     on: !win.updBusy
                                     onClicked: win.guardedUpdate(["update", modelData.source, modelData.id],
-                                                                 "UPDATING " + modelData.name + "…",
+                                                                 win.t("UPDATING ") + modelData.name + "…",
                                                                  modelData.source === "repo")
                                 }
                             }
@@ -2450,7 +2490,7 @@ ShellRoot {
 
                 Hint {
                     visible: win.updLog === ""
-                    text: "Arch doesn't support partial upgrades: repo packages are updated together (pacman -Syu). AUR opens a terminal."
+                    text: win.t("Arch doesn't support partial upgrades: repo packages are updated together (pacman -Syu). AUR opens a terminal.")
                 }
 
                 LogBox {
@@ -2464,16 +2504,16 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 0
                     ActBtn {
-                        glyph: ""; label: checkProc.running ? "CHECKING" : "CHECK"
+                        glyph: ""; label: checkProc.running ? win.t("CHECKING") : win.t("CHECK")
                         on: !win.updBusy
                         onClicked: { win.updLog = ""; win.checkUpdates(); }
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: updProc.running ? "WORKING" : "UPDATE ALL"
+                        glyph: ""; label: updProc.running ? win.t("WORKING") : win.t("UPDATE ALL")
                         boxed: true
                         on: win.updates.length > 0 && !win.updBusy
-                        onClicked: win.guardedUpdate(["updateall"], "UPDATING ALL…",
+                        onClicked: win.guardedUpdate(["updateall"], win.t("UPDATING ALL…"),
                                                      win.updates.some(function (u) { return u.source === "repo"; }))
                     }
                 }
@@ -2488,9 +2528,9 @@ ShellRoot {
 
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
-                    Chip { label: "CLEAN";   active: win.sysView === "clean";   onClicked: win.openSystem("clean") }
-                    Chip { label: "BACKUP";  active: win.sysView === "backup";  onClicked: win.openSystem("backup") }
-                    Chip { label: "HISTORY"; active: win.sysView === "history"; onClicked: win.openSystem("history") }
+                    Chip { label: win.t("CLEAN");   active: win.sysView === "clean";   onClicked: win.openSystem("clean") }
+                    Chip { label: win.t("BACKUP");  active: win.sysView === "backup";  onClicked: win.openSystem("backup") }
+                    Chip { label: win.t("HISTORY"); active: win.sysView === "history"; onClicked: win.openSystem("history") }
                     Chip { label: "SNAPSHOTS"; active: win.sysView === "snapshots"; onClicked: win.openSystem("snapshots") }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
@@ -2507,7 +2547,7 @@ ShellRoot {
 
                     EmptyHint {
                         visible: win.cleanItems.length === 0
-                        title: scanProc.running ? "SCANNING THE SYSTEM…" : "PRESS RESCAN"
+                        title: scanProc.running ? win.t("SCANNING THE SYSTEM…") : win.t("PRESS RESCAN")
                     }
 
                     ListView {
@@ -2528,7 +2568,7 @@ ShellRoot {
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 8
                                         Text {
-                                            text: modelData.title; color: pal.text; font.family: win.mono
+                                            text: win.t(modelData.title); color: pal.text; font.family: win.mono
                                             font.pixelSize: 12; font.bold: true
                                         }
                                         Text {
@@ -2540,7 +2580,7 @@ ShellRoot {
                                     }
                                     Text {
                                         Layout.fillWidth: true
-                                        text: modelData.details ? modelData.details : modelData.desc
+                                        text: modelData.details ? modelData.details : win.t(modelData.desc)
                                         color: pal.dim; font.family: win.mono; font.pixelSize: 10
                                         elide: Text.ElideRight; maximumLineCount: 1
                                     }
@@ -2548,7 +2588,7 @@ ShellRoot {
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
                                     width: win.confirmClean === modelData.id ? 84 : 68
-                                    label: modelData.count === 0 ? "OK ✓" : (win.confirmClean === modelData.id ? "CONFIRM?" : "CLEAN")
+                                    label: modelData.count === 0 ? "OK ✓" : (win.confirmClean === modelData.id ? win.t("CONFIRM?") : win.t("CLEAN"))
                                     primary: modelData.count > 0
                                     on: modelData.count > 0 && !win.sysBusy
                                     onClicked: {
@@ -2556,7 +2596,7 @@ ShellRoot {
                                             win.confirmClean = modelData.id; return;
                                         }
                                         win.confirmClean = "";
-                                        win.runSys(["clean", modelData.id], "CLEANING…");
+                                        win.runSys(["clean", modelData.id], win.t("CLEANING…"));
                                     }
                                 }
                             }
@@ -2570,20 +2610,20 @@ ShellRoot {
                     visible: win.sysView === "backup"
                     spacing: 12
 
-                    Section { Layout.fillWidth: true; label: "EXPORT" }
+                    Section { Layout.fillWidth: true; label: win.t("EXPORT") }
                     Hint {
-                        text: "Saves your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to ~/control-deck-backup-<date>.json."
+                        text: win.t("Saves your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to ~/control-deck-backup-<date>.json.")
                     }
                     MiniBtn {
                         width: 120; height: 34
-                        label: "EXPORT BACKUP"
+                        label: win.t("EXPORT BACKUP")
                         on: !win.sysBusy
-                        onClicked: win.runSys(["export"], "EXPORTING…")
+                        onClicked: win.runSys(["export"], win.t("EXPORTING…"))
                     }
 
-                    Section { Layout.fillWidth: true; label: "RESTORE" }
+                    Section { Layout.fillWidth: true; label: win.t("RESTORE") }
                     Hint {
-                        text: "Installs whatever is missing from a backup: repo packages with pacman, Flatpaks, GitHub AppImages and launchers. AUR packages are built in a terminal."
+                        text: win.t("Installs whatever is missing from a backup: repo packages with pacman, Flatpaks, GitHub AppImages and launchers. AUR packages are built in a terminal.")
                     }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
@@ -2604,17 +2644,17 @@ ShellRoot {
                         }
                         MiniBtn {
                             width: 92; height: 34
-                            label: win.confirmRestore ? "CONFIRM?" : "RESTORE"
+                            label: win.confirmRestore ? win.t("CONFIRM?") : win.t("RESTORE")
                             on: restoreField.text.trim() !== "" && !win.sysBusy
                             onClicked: {
                                 if (!win.confirmRestore) { win.confirmRestore = true; return; }
-                                win.runSys(["restore", win.expandHome(restoreField.text.trim())], "RESTORING…");
+                                win.runSys(["restore", win.expandHome(restoreField.text.trim())], win.t("RESTORING…"));
                             }
                         }
                         MiniBtn {
-                            width: 120; height: 34; label: "GAMING ONLY"; primary: false
+                            width: 120; height: 34; label: win.t("GAMING ONLY"); primary: false
                             on: restoreField.text.trim() !== "" && !win.sysBusy
-                            onClicked: win.runSys(["gaming-import", win.expandHome(restoreField.text.trim())], "IMPORTING…")
+                            onClicked: win.runSys(["gaming-import", win.expandHome(restoreField.text.trim())], win.t("IMPORTING…"))
                         }
                     }
                     Item { Layout.fillHeight: true }
@@ -2628,7 +2668,7 @@ ShellRoot {
 
                     EmptyHint {
                         visible: win.history.length === 0
-                        title: "NO OPERATIONS YET"
+                        title: win.t("NO OPERATIONS YET")
                     }
 
                     ListView {
@@ -2677,10 +2717,10 @@ ShellRoot {
 
                     Hint {
                         text: !win.snapStatus.snapper
-                              ? "snapper has no '" + (win.snapStatus.config || "root") + "' config on this system: nothing to show."
+                              ? win.t("snapper has no '") + (win.snapStatus.config || "root") + win.t("' config on this system: nothing to show.")
                               : (win.snapStatus.snappac
-                                 ? "snap-pac is installed: every pacman operation already gets a pre/post snapshot."
-                                 : "snap-pac is not installed: the deck takes a snapshot itself before pacman changes.")
+                                 ? win.t("snap-pac is installed: every pacman operation already gets a pre/post snapshot.")
+                                 : win.t("snap-pac is not installed: the deck takes a snapshot itself before pacman changes."))
                     }
 
                     // listing needs root unless the user was allowed (opt-in)
@@ -2693,13 +2733,13 @@ ShellRoot {
                             id: permCol
                             anchors.fill: parent; anchors.margins: 10; spacing: 8
                             Hint {
-                                text: "Your snapper config only lets root list snapshots. Load them once with your password, or allow your user to list them (adds you to ALLOW_USERS — reading only; creating still asks for the password)."
+                                text: win.t("Your snapper config only lets root list snapshots. Load them once with your password, or allow your user to list them (adds you to ALLOW_USERS — reading only; creating still asks for the password).")
                             }
                             RowLayout {
                                 spacing: 8
-                                MiniBtn { width: 130; label: "LOAD (PASSWORD)"; on: !win.sysBusy; onClicked: win.loadSnapshots(true) }
-                                MiniBtn { width: 120; label: "ALLOW MY USER"; primary: false; on: !win.sysBusy
-                                          onClicked: win.runSys(["snapallow"], "ALLOWING…") }
+                                MiniBtn { width: 130; label: win.t("LOAD (PASSWORD)"); on: !win.sysBusy; onClicked: win.loadSnapshots(true) }
+                                MiniBtn { width: 120; label: win.t("ALLOW MY USER"); primary: false; on: !win.sysBusy
+                                          onClicked: win.runSys(["snapallow"], win.t("ALLOWING…")) }
                             }
                         }
                     }
@@ -2712,7 +2752,7 @@ ShellRoot {
 
                         EmptyHint {
                             visible: win.snapshots.length === 0
-                            title: snapListProc.running ? "LOADING SNAPSHOTS…" : "NO SNAPSHOTS LOADED"
+                            title: snapListProc.running ? win.t("LOADING SNAPSHOTS…") : win.t("NO SNAPSHOTS LOADED")
                         }
 
                         ListView {
@@ -2768,18 +2808,18 @@ ShellRoot {
                         Field {
                             id: snapDescField
                             Layout.fillWidth: true
-                            placeholderText: "description for a new snapshot…"
+                            placeholderText: win.t("description for a new snapshot…")
                         }
                         MiniBtn {
-                            width: 84; height: 34; label: "CREATE"
+                            width: 84; height: 34; label: win.t("CREATE")
                             on: !win.sysBusy
-                            onClicked: { win.runSys(["snapcreate", snapDescField.text.trim() || "manual snapshot"], "SNAPSHOTTING…"); snapDescField.text = ""; }
+                            onClicked: { win.runSys(["snapcreate", snapDescField.text.trim() || win.t("manual snapshot")], win.t("SNAPSHOTTING…")); snapDescField.text = ""; }
                         }
                         MiniBtn {
                             width: 110; height: 34; primary: false
-                            label: win.selSnaps.length === 1 ? "DIFF #" + win.selSnaps[0] + " → NOW" : "DIFF → NOW"
+                            label: win.selSnaps.length === 1 ? "DIFF #" + win.selSnaps[0] + win.t(" → NOW") : win.t("DIFF → NOW")
                             on: win.selSnaps.length === 1 && !win.sysBusy
-                            onClicked: win.runSys(["snapdiff", String(win.selSnaps[0])], "COMPARING…")
+                            onClicked: win.runSys(["snapdiff", String(win.selSnaps[0])], win.t("COMPARING…"))
                         }
                     }
 
@@ -2791,36 +2831,36 @@ ShellRoot {
                             text: {
                                 var l = win.snapLimits;
                                 if (!l.NUMBER_LIMIT) return "";
-                                return "Auto-cleanup " + (l.CLEANUP_TIMER === "enabled" ? "runs hourly" : "is OFF (snapper-cleanup.timer disabled)")
-                                     + ": keeps " + l.NUMBER_LIMIT + " numbered snapshots (" + l.NUMBER_LIMIT_IMPORTANT
-                                     + " important), none younger than " + Math.round(l.NUMBER_MIN_AGE / 60) + " min."
-                                     + (l.QGROUP ? "" : " Space limits need Btrfs quotas (off).");
+                                return win.t("Auto-cleanup ") + (l.CLEANUP_TIMER === "enabled" ? win.t("runs hourly") : win.t("is OFF (snapper-cleanup.timer disabled)"))
+                                     + win.t(": keeps ") + l.NUMBER_LIMIT + win.t(" numbered snapshots (") + l.NUMBER_LIMIT_IMPORTANT
+                                     + win.t(" important), none younger than ") + Math.round(l.NUMBER_MIN_AGE / 60) + " min."
+                                     + (l.QGROUP ? "" : win.t(" Space limits need Btrfs quotas (off)."));
                             }
                         }
                         MiniBtn {
                             width: 116; height: 34; primary: false
-                            label: win.confirmSnapCleanup ? "CONFIRM?" : "CLEANUP NOW"
+                            label: win.confirmSnapCleanup ? win.t("CONFIRM?") : win.t("CLEANUP NOW")
                             on: !win.sysBusy
                             onClicked: {
                                 if (!win.confirmSnapCleanup) { win.confirmSnapCleanup = true; return; }
-                                win.runSys(["snapcleanup"], "CLEANING UP…");
+                                win.runSys(["snapcleanup"], win.t("CLEANING UP…"));
                             }
                         }
                         MiniBtn {
                             width: 112; height: 34
                             tint: pal.bad
-                            label: win.selSnaps.length === 0 ? "DELETE"
-                                 : (win.confirmSnapDelete ? "CONFIRM " + win.selSnaps.length + "?" : "DELETE (" + win.selSnaps.length + ")")
+                            label: win.selSnaps.length === 0 ? win.t("DELETE")
+                                 : (win.confirmSnapDelete ? win.t("CONFIRM ") + win.selSnaps.length + "?" : win.t("DELETE (") + win.selSnaps.length + ")")
                             on: win.selSnaps.length > 0 && !win.sysBusy
                             onClicked: {
                                 if (!win.confirmSnapDelete) {
                                     win.confirmSnapDelete = true;
-                                    win.sysLog = "Will delete snapshot(s): #" + win.selSnaps.join(", #") + "\nClick again to confirm.\n";
+                                    win.sysLog = win.t("Will delete snapshot(s): #") + win.selSnaps.join(", #") + win.t("\nClick again to confirm.\n");
                                     return;
                                 }
                                 win.pendingDelete = win.selSnaps.slice();
                                 win.confirmSnapDelete = false;
-                                win.runSys(["snapdelete"].concat(win.selSnaps.map(String)), "DELETING…");
+                                win.runSys(["snapdelete"].concat(win.selSnaps.map(String)), win.t("DELETING…"));
                             }
                         }
                     }
@@ -2830,8 +2870,8 @@ ShellRoot {
                         visible: win.snapStatus.snapper === true
                         Hint {
                             text: win.snapStatus.grubbtrfs
-                                  ? "To go back: reboot, open \"Arch Linux snapshots\" in GRUB (grub-btrfs), boot the snapshot and check everything works, then run  sudo snapper rollback  and reboot."
-                                  : "To go back: boot the snapshot from your boot menu (or a live USB), then run  sudo snapper rollback  and reboot."
+                                  ? win.t("To go back: reboot, open \"Arch Linux snapshots\" in GRUB (grub-btrfs), boot the snapshot and check everything works, then run  sudo snapper rollback  and reboot.")
+                                  : win.t("To go back: boot the snapshot from your boot menu (or a live USB), then run  sudo snapper rollback  and reboot.")
                         }
                         Chip {
                             visible: win.snapStatus.assistant === true
@@ -2852,19 +2892,19 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 0
                     ActBtn {
-                        glyph: ""; label: "RESCAN"
+                        glyph: ""; label: win.t("RESCAN")
                         on: !win.sysBusy
                         onClicked: { win.sysLog = ""; win.openSystem("clean"); win.scanClean(); }
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: "HISTORY"
+                        glyph: ""; label: win.t("HISTORY")
                         on: !win.sysBusy
                         onClicked: win.openSystem("history")
                     }
                     BarSep {}
                     ActBtn {
-                        glyph: ""; label: "APPS DIR"
+                        glyph: ""; label: win.t("APPS DIR")
                         onClicked: openProc.running = true
                     }
                 }
@@ -2878,13 +2918,13 @@ ShellRoot {
 
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
-                    Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
-                    Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: win.gameView = "status" }
+                    Chip { label: win.t("LIBRARY"); active: win.gameView === "library"; onClicked: win.gameView = "library" }
+                    Chip { label: win.t("STATUS");  active: win.gameView === "status";  onClicked: win.gameView = "status" }
                     Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: win.gameView = "shaders" }
-                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: win.gameView = "bench" }
+                    Chip { label: win.t("BENCH");   active: win.gameView === "bench";   onClicked: win.gameView = "bench" }
                     Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: win.gameView = "prefixes" }
                     Chip { label: "FX";      active: win.gameView === "fx";      onClicked: win.openFx() }
-                    Chip { label: "HEALTH";  active: win.gameView === "health";  onClicked: win.gameView = "health" }
+                    Chip { label: win.t("HEALTH");  active: win.gameView === "health";  onClicked: win.gameView = "health" }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -2907,12 +2947,12 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.amber; font.family: win.mono; font.pixelSize: 11; font.bold: true
-                                text: "CHECK FOR THIS PC — " + (win.gaudit.issues || []).length + " setting(s) don't fit this "
-                                      + String(win.gaudit.vendor || "").toUpperCase() + " GPU or aren't set up here yet"
+                                text: win.t("CHECK FOR THIS PC — ") + (win.gaudit.issues || []).length + win.t(" setting(s) don't fit this ")
+                                      + String(win.gaudit.vendor || "").toUpperCase() + win.t(" GPU or aren't set up here yet")
                             }
                             MiniBtn {
-                                width: 90; height: 28; label: "FIX ALL"; on: !win.gameBusy
-                                onClicked: win.runGame(["gaudit", "fix", "all"], "ADJUSTING PROFILES…")
+                                width: 90; height: 28; label: win.t("FIX ALL"); on: !win.gameBusy
+                                onClicked: win.runGame(["gaudit", "fix", "all"], win.t("ADJUSTING PROFILES…"))
                             }
                         }
                         Repeater {
@@ -2922,9 +2962,9 @@ ShellRoot {
                                 Layout.fillWidth: true; elide: Text.ElideRight
                                 color: pal.text; font.family: win.mono; font.pixelSize: 10
                                 text: "· " + win.gameName(String(modelData.key).replace(/^[a-z]+:/, "")) + ": "
-                                      + (modelData.kind === "env" ? modelData.var + " is " + (modelData.vendor === "mesa" ? "Mesa" : modelData.vendor.toUpperCase()) + "-only → remove"
-                                         : (modelData.kind === "reshade" ? "ReShade isn't installed in its folder on this PC → set it up"
-                                            : "vkBasalt isn't installed here → FX → INSTALL"))
+                                      + (modelData.kind === "env" ? modelData.var + win.t(" is ") + (modelData.vendor === "mesa" ? "Mesa" : modelData.vendor.toUpperCase()) + win.t("-only → remove")
+                                         : (modelData.kind === "reshade" ? win.t("ReShade isn't installed in its folder on this PC → set it up")
+                                            : win.t("vkBasalt isn't installed here → FX → INSTALL")))
                             }
                         }
                     }
@@ -2937,8 +2977,8 @@ ShellRoot {
 
                     EmptyHint {
                         visible: win.games.length === 0
-                        title: gamesProc.running ? "READING YOUR LIBRARY…" : "NO GAMES FOUND"
-                        sub: gamesProc.running ? "" : "installed Steam games and Umbral games show up here"
+                        title: gamesProc.running ? win.t("READING YOUR LIBRARY…") : win.t("NO GAMES FOUND")
+                        sub: gamesProc.running ? "" : win.t("installed Steam games and Umbral games show up here")
                     }
 
                     ListView {
@@ -2960,7 +3000,7 @@ ShellRoot {
                                 }
                                 Text {
                                     visible: modelData.new === true
-                                    text: "NEW"; color: pal.amber
+                                    text: win.t("NEW"); color: pal.amber
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
                                 }
                                 Text {
@@ -2973,12 +3013,12 @@ ShellRoot {
                                     visible: !!r && !!r.sfx && r.sfx.count > 0 && !r.current && r.eligible
                                     text: "FX " + (r && r.sfx ? r.sfx.count : ""); color: pal.pink
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
-                                    Tip { visible: fxBadgeMa.containsMouse; text: "ReShade presets for this game on SweetFX DB — see GAMING → FX" }
+                                    Tip { visible: fxBadgeMa.containsMouse; text: win.t("ReShade presets for this game on SweetFX DB — see GAMING → FX") }
                                     MouseArea { id: fxBadgeMa; anchors.fill: parent; hoverEnabled: true }
                                 }
                                 Text {
                                     visible: modelData.wrapped
-                                    text: "◆ DECK"; color: pal.accent
+                                    text: win.t("◆ DECK"); color: pal.accent
                                     font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
                                 }
                                 Text {
@@ -3011,19 +3051,19 @@ ShellRoot {
                         Layout.fillWidth: true; spacing: 9
                         Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
                         Text {
-                            text: win.selGameSource === "steam" ? "PROFILE" : "GAME"
+                            text: win.selGameSource === "steam" ? win.t("PROFILE") : win.t("GAME")
                             color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true
                         }
                         Text {
                             Layout.fillWidth: true; elide: Text.ElideRight
-                            text: win.selGameName + (win.selGameSource === "steam" && !win.gp.custom ? "  · default profile" : "")
+                            text: win.selGameName + (win.selGameSource === "steam" && !win.gp.custom ? win.t("  · default profile") : "")
                             color: pal.dim; font.family: win.mono; font.pixelSize: 11
                         }
                         Text {
                             id: pdbTxt
                             visible: win.selGameSource === "steam" && !!(win.pdb[win.selGameId] || {}).total
                             property var d: win.pdb[win.selGameId] || {}
-                            text: String(d.tier || "").toUpperCase() + " · " + d.total + " reports ↗"
+                            text: String(d.tier || "").toUpperCase() + " · " + d.total + win.t(" reports ↗")
                             color: win.tierColor(d.tier); font.family: win.mono; font.pixelSize: 10; font.bold: true
                             font.underline: pdbMa.containsMouse
                             MouseArea {
@@ -3031,8 +3071,8 @@ ShellRoot {
                                 anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: Qt.openUrlExternally("https://www.protondb.com/app/" + win.selGameId)
                             }
-                            Tip { visible: pdbMa.containsMouse; text: "ProtonDB: score " + pdbTxt.d.score + " · trending " + pdbTxt.d.trendingTier
-                                          + " · confidence " + pdbTxt.d.confidence + ". Click to open." }
+                            Tip { visible: pdbMa.containsMouse; text: win.t("ProtonDB: score ") + pdbTxt.d.score + win.t(" · trending ") + pdbTxt.d.trendingTier
+                                          + win.t(" · confidence ") + pdbTxt.d.confidence + win.t(". Click to open.") }
                         }
                     }
 
@@ -3048,11 +3088,11 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.text; font.family: win.mono; font.pixelSize: 11
-                                text: (win.selGameObj.umbralKind === "battlenet" ? "Battle.net client"
-                                       : (win.selGameObj.umbralKind === "blizzard" ? "Battle.net game" : "Own game"))
+                                text: (win.selGameObj.umbralKind === "battlenet" ? win.t("Battle.net client")
+                                       : (win.selGameObj.umbralKind === "blizzard" ? win.t("Battle.net game") : win.t("Own game")))
                                       + "  ·  " + (win.selGameObj.prefixName || "?") + " prefix (" + (win.selGameObj.compat || "?") + ")"
                                       + "  ·  " + win.playtimeText(win.selGameObj.playtime)
-                                      + (win.selGameObj.lastPlayed ? "  ·  last " + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
+                                      + (win.selGameObj.lastPlayed ? win.t("  ·  last ") + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
                             }
                             Text {
                                 Layout.fillWidth: true; elide: Text.ElideMiddle; visible: !!win.selGameObj.exe
@@ -3062,18 +3102,18 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                text: "Launch options are set in Umbral. Control Deck adds TEMPS and shaders when Umbral 0.10.0+ starts the game."
+                                text: win.t("Launch options are set in Umbral. Control Deck adds TEMPS and shaders when Umbral 0.10.0+ starts the game.")
                             }
                             RowLayout {
                                 spacing: 6
                                 Chip {
                                     label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; on: !win.gameBusy
-                                    tip: "CPU · GPU temperature line at the top right while the game runs"
-                                    onClicked: win.runGame(["gprofile", "set", win.selGame, "overlay=" + !(win.gp.overlay === true)], "SAVING…")
+                                    tip: win.t("CPU · GPU temperature line at the top right while the game runs")
+                                    onClicked: win.runGame(["gprofile", "set", win.selGame, "overlay=" + !(win.gp.overlay === true)], win.t("SAVING…"))
                                 }
                                 Chip {
                                     label: "FX"; tint: pal.ok; active: win.gp.fx === true
-                                    tip: "Visual shaders (ReShade / vkBasalt) for this game"
+                                    tip: win.t("Visual shaders (ReShade / vkBasalt) for this game")
                                     onClicked: win.openFx()
                                 }
                             }
@@ -3090,17 +3130,17 @@ ShellRoot {
                             id: launchGrid
                             anchors.fill: parent; anchors.margins: 10
                             columns: 2; columnSpacing: 12; rowSpacing: 8
-                            Text { text: "LAUNCH"; Layout.preferredWidth: 52; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            Text { text: win.t("LAUNCH"); Layout.preferredWidth: 52; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 6
                                 Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
-                                Chip { label: "MANGOHUD"; tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
+                                Chip { label: win.t("MANGOHUD"); tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
                                 Chip { label: "FX"; tint: pal.ok; active: win.gp.fx === true; onClicked: win.openFx()
-                                       tip: "Visual shaders (vkBasalt): sharpening, anti-aliasing, ReShade presets" }
+                                       tip: win.t("Visual shaders (vkBasalt): sharpening, anti-aliasing, ReShade presets") }
                                 Chip { label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; onClicked: win.gpSet("overlay", !win.gp.overlay)
-                                       tip: "A CPU · GPU temperature line at the top right while the game runs (click-through, closes with the game)" }
-                                Chip { label: "IO PRIORITY"; tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
-                                       tip: "ionice best-effort level 0 for the game" }
+                                       tip: win.t("A CPU · GPU temperature line at the top right while the game runs (click-through, closes with the game)") }
+                                Chip { label: win.t("IO PRIORITY"); tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
+                                       tip: win.t("ionice best-effort level 0 for the game") }
                                 Item { Layout.fillWidth: true }
                                 Text { text: "NICE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
                                 Repeater {
@@ -3117,31 +3157,31 @@ ShellRoot {
                             Text { text: "PREFIX"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 8
-                                Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "before the game, e.g. gamescope -f --" }
+                                Field { id: gPrefix; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: win.t("before the game, e.g. gamescope -f --") }
                                 Text { text: "ARGS"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
-                                Field { id: gArgs; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: "after the game, e.g. -novid" }
+                                Field { id: gArgs; Layout.fillWidth: true; font.pixelSize: 11; placeholderText: win.t("after the game, e.g. -novid") }
                             }
                             Text { text: "PROTON"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                                    Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
                             Flow {
                                 Layout.fillWidth: true; spacing: 6
                                 Chip {
-                                    label: "STEAM DEFAULT"; active: win.selGameCompat === ""
-                                    on: !win.gameBusy; tip: "Steam must be closed to change it"
-                                    onClicked: win.runGame(["steamcompat", win.selGameId, "default"], "SETTING PROTON…")
+                                    label: win.t("STEAM DEFAULT"); active: win.selGameCompat === ""
+                                    on: !win.gameBusy; tip: win.t("Steam must be closed to change it")
+                                    onClicked: win.runGame(["steamcompat", win.selGameId, "default"], win.t("SETTING PROTON…"))
                                 }
                                 Repeater {
                                     model: win.tools
                                     delegate: Chip {
                                         required property var modelData
                                         label: modelData.display; active: win.selGameCompat === modelData.name
-                                        on: !win.gameBusy; tip: "Steam must be closed to change it"
-                                        onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
+                                        on: !win.gameBusy; tip: win.t("Steam must be closed to change it")
+                                        onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], win.t("SETTING PROTON…"))
                                     }
                                 }
                             }
                             // FSR 4 / DLSS / XeSS upgrades (GE-Proton, Proton-CachyOS)
-                            Text { text: "UPSCALE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                            Text { text: win.t("UPSCALE"); color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                                    Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
                             ColumnLayout {
                                 Layout.fillWidth: true; spacing: 4
@@ -3153,25 +3193,25 @@ ShellRoot {
                                         delegate: Chip {
                                             required property var modelData
                                             property bool isOn: win.envValue(modelData.var) === "1"
-                                            label: (isOn ? "✓ " : "") + modelData.label
+                                            label: (isOn ? "✓ " : "") + win.t(modelData.label)
                                             tint: pal.ok; active: isOn
                                             on: modelData.available || isOn
                                             tip: modelData.available
-                                                 ? (modelData.id === "fsr4" ? "The game's FSR 3.1 runs as FSR 4 (AMD's ML upscaler). Proton downloads the DLL. SAVE to apply."
+                                                 ? (modelData.id === "fsr4" ? win.t("The game's FSR 3.1 runs as FSR 4 (AMD's ML upscaler). Proton downloads the DLL. SAVE to apply.")
                                                     : modelData.id === "optifsr4"
-                                                      ? "OptiScaler takes over the game's DLSS / XeSS / FSR and renders it with FSR 4 — pick that upscaler in the game's settings. Proton downloads everything; nothing to install."
-                                                        + (win.ups.preferDirect ? " This game has FSR 3.1: the plain FSR 4 chip is simpler." : "")
-                                                        + " Its menu: INSERT (Page Down if INSERT is your shader key)."
-                                                    : "Proton swaps in the newest " + modelData.label.replace(" (newest)", "") + " DLL. SAVE to apply.")
-                                                 : modelData.why
+                                                      ? win.t("OptiScaler takes over the game's DLSS / XeSS / FSR and renders it with FSR 4 — pick that upscaler in the game's settings. Proton downloads everything; nothing to install.")
+                                                        + (win.ups.preferDirect ? win.t(" This game has FSR 3.1: the plain FSR 4 chip is simpler.") : "")
+                                                        + win.t(" Its menu: INSERT (Page Down if INSERT is your shader key).")
+                                                    : win.t("Proton swaps in the newest ") + modelData.label.replace(" (newest)", "") + win.t(" DLL. SAVE to apply."))
+                                                 : win.t(modelData.why)
                                             onClicked: win.toggleEnvSet(modelData.set, isOn)
                                         }
                                     }
                                     Chip {
                                         visible: (win.ups.options || []).some(function (o) { return o.available && (o.id === "fsr4" || o.id === "dlss"); })
                                         property string iv: (win.ups.options || []).some(function (o) { return o.id === "fsr4" && o.available; }) ? "PROTON_FSR4_INDICATOR" : "PROTON_DLSS_INDICATOR"
-                                        label: (win.envValue(iv) === "1" ? "✓ " : "") + "ON-SCREEN CHECK"; active: win.envValue(iv) === "1"
-                                        tip: "Shows the upscaler's own watermark in game, to confirm the upgrade is active"
+                                        label: (win.envValue(iv) === "1" ? "✓ " : "") + win.t("ON-SCREEN CHECK"); active: win.envValue(iv) === "1"
+                                        tip: win.t("Shows the upscaler's own watermark in game, to confirm the upgrade is active")
                                         onClicked: win.toggleEnv(iv)
                                     }
                                 }
@@ -3181,13 +3221,13 @@ ShellRoot {
                                     // nothing applies: one line, the reasons on hover
                                     property bool none: !(win.ups.options || []).some(function (o) { return o.available || o.on; })
                                     MouseArea { id: upsMa; anchors.fill: parent; hoverEnabled: true; visible: parent.none }
-                                    Tip { visible: upsMa.containsMouse; text: (win.ups.options || []).map(function (o) { return o.label + ": " + o.why; }).join("\n") }
-                                    text: !win.ups.ships ? "" : none ? "No upscaler upgrade for this game ⓘ" :
-                                          "Ships: " + ([win.ups.ships.fsr31dx12 ? "FSR 3.1 (DX12)" : "", win.ups.ships.fsr31vk ? "FSR 3.1 (Vulkan)" : "",
+                                    Tip { visible: upsMa.containsMouse; text: (win.ups.options || []).map(function (o) { return win.t(o.label) + ": " + win.t(o.why); }).join("\n") }
+                                    text: !win.ups.ships ? "" : none ? win.t("No upscaler upgrade for this game ⓘ") :
+                                          win.t("Ships: ") + ([win.ups.ships.fsr31dx12 ? "FSR 3.1 (DX12)" : "", win.ups.ships.fsr31vk ? "FSR 3.1 (Vulkan)" : "",
                                                         win.ups.ships.dlss ? "DLSS" : "", win.ups.ships.xess ? "XeSS" : ""]
-                                                       .filter(function (x) { return x; }).join(" · ") || "no swappable upscaler DLL")
-                                          + "  ·  Proton: " + (win.ups.proton && win.ups.proton.tool ? win.ups.proton.tool : "Steam default")
-                                          + ((win.ups.proton || {}).supports && win.ups.proton.supports.length ? " (supports upgrades)" : " (no upgrades: GE-Proton or Proton-CachyOS do)")
+                                                       .filter(function (x) { return x; }).join(" · ") || win.t("no swappable upscaler DLL"))
+                                          + win.t("  ·  Proton: ") + (win.ups.proton && win.ups.proton.tool ? win.ups.proton.tool : win.t("Steam default"))
+                                          + ((win.ups.proton || {}).supports && win.ups.proton.supports.length ? win.t(" (supports upgrades)") : win.t(" (no upgrades: GE-Proton or Proton-CachyOS do)"))
                                 }
                             }
                         }
@@ -3204,25 +3244,25 @@ ShellRoot {
                             anchors.fill: parent; anchors.margins: 10; spacing: 8
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 8
-                                Text { text: "★ SUGGESTED FOR THIS PC"; color: pal.amber; font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1 }
+                                Text { text: win.t("★ SUGGESTED FOR THIS PC"); color: pal.amber; font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1 }
                                 Text {
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                     color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                     text: !win.sug.index || !win.sug.reports ? "" :
-                                          (win.sug.gpuName || "") + " · " + (win.sug.similarReports > 0 ? win.sug.similarReports + " similar players"
-                                          : (win.sug.vendorReports > 0 ? win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + " players" : win.sug.reports + " players"))
+                                          (win.sug.gpuName || "") + " · " + (win.sug.similarReports > 0 ? win.sug.similarReports + win.t(" similar players")
+                                          : (win.sug.vendorReports > 0 ? win.sug.vendorReports + " " + String(win.sug.vendor).toUpperCase() + win.t(" players") : win.sug.reports + win.t(" players")))
                                 }
                                 Chip {
                                     visible: win.sugOthers.length > 0
-                                    label: win.sugExpanded ? "LESS ▴" : "+" + win.sugOthers.length + " MORE ▾"
+                                    label: win.sugExpanded ? win.t("LESS ▴") : "+" + win.sugOthers.length + win.t(" MORE ▾")
                                     onClicked: win.sugExpanded = !win.sugExpanded
                                 }
                                 Chip {
                                     visible: win.pdbStat.present !== true || win.pdbStat.stale === true
-                                    label: win.pdbStat.present === true ? "UPDATE DATA" : "GET DATA (70 MB)"
+                                    label: win.pdbStat.present === true ? win.t("UPDATE DATA") : win.t("GET DATA (70 MB)")
                                     on: !win.gameBusy; tint: pal.amber; active: true
-                                    tip: "ProtonDB's open data (every game's reported launch options), indexed locally to ≈5 MB"
-                                    onClicked: win.runGame(["pdbindex", "update"], "INDEXING PROTONDB DATA…")
+                                    tip: win.t("ProtonDB's open data (every game's reported launch options), indexed locally to ≈5 MB")
+                                    onClicked: win.runGame(["pdbindex", "update"], win.t("INDEXING PROTONDB DATA…"))
                                 }
                             }
                             Flow {
@@ -3258,11 +3298,11 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; elide: Text.ElideRight
                                 color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                text: win.pdbStat.present !== true ? "Get the data once to see what players with hardware like yours use."
-                                      : (!win.sug.index ? "" : (win.sug.reports === 0 ? "No ProtonDB report with launch options for this game yet."
-                                         : (win.sugRecommended.length + win.sugOthers.length === 0 ? "Players don't agree on any launch option for this game."
-                                            : (win.sugRecommended.length === 0 ? "Nothing is used by enough similar players to recommend it. " : "")
-                                              + "Click to add, then SAVE · % of players who say it works · ProtonDB (ODbL) " + win.pdbStat.date)))
+                                text: win.pdbStat.present !== true ? win.t("Get the data once to see what players with hardware like yours use.")
+                                      : (!win.sug.index ? "" : (win.sug.reports === 0 ? win.t("No ProtonDB report with launch options for this game yet.")
+                                         : (win.sugRecommended.length + win.sugOthers.length === 0 ? win.t("Players don't agree on any launch option for this game.")
+                                            : (win.sugRecommended.length === 0 ? win.t("Nothing is used by enough similar players to recommend it. ") : "")
+                                              + win.t("Click to add, then SAVE · % of players who say it works · ProtonDB (ODbL) ") + win.pdbStat.date)))
                             }
                         }
                     }
@@ -3275,34 +3315,34 @@ ShellRoot {
                             font.family: win.mono; font.pixelSize: 10
                             color: win.selGameSource === "steam" && win.selGameWrapped ? pal.ok : pal.dim
                             text: win.selGameSource !== "steam" ? ""
-                                  : (win.selGameWrapped ? "● Launched through Control Deck"
-                                     : "○ Steam options: " + (win.selGameLaunch || "none"))
-                            Tip { visible: stMa.containsMouse && parent.text !== ""; text: win.selGameWrapped ? "The profile applies on every launch from Steam."
-                                          : "USE IN STEAM moves these options into the profile (Steam must be closed)." }
+                                  : (win.selGameWrapped ? win.t("● Launched through Control Deck")
+                                     : win.t("○ Steam options: ") + (win.selGameLaunch || "none"))
+                            Tip { visible: stMa.containsMouse && parent.text !== ""; text: win.selGameWrapped ? win.t("The profile applies on every launch from Steam.")
+                                          : win.t("USE IN STEAM moves these options into the profile (Steam must be closed).") }
                             MouseArea { id: stMa; anchors.fill: parent; hoverEnabled: true }
                         }
                         MiniBtn {
-                            width: 70; height: 32; primary: false; label: "RESET"
+                            width: 70; height: 32; primary: false; label: win.t("RESET")
                             visible: win.selGameSource === "steam" && win.gp.custom === true
                             on: !win.gameBusy
-                            onClicked: win.runGame(["gprofile", "reset", win.selGame], "RESETTING…")
+                            onClicked: win.runGame(["gprofile", "reset", win.selGame], win.t("RESETTING…"))
                         }
                         MiniBtn {
                             width: 120; height: 32; primary: false
                             visible: win.selGameSource === "steam"
-                            label: win.selGameWrapped ? "RESTORE STEAM" : "USE IN STEAM"
+                            label: win.selGameWrapped ? win.t("RESTORE STEAM") : win.t("USE IN STEAM")
                             on: !win.gameBusy
                             onClicked: win.runGame(["steamwrap", win.selGameId, win.selGameWrapped ? "off" : "on"],
-                                                   win.selGameWrapped ? "RESTORING…" : "WRAPPING…")
+                                                   win.selGameWrapped ? win.t("RESTORING…") : win.t("WRAPPING…"))
                         }
                         MiniBtn {
-                            width: 76; height: 32; label: "SAVE"
+                            width: 76; height: 32; label: win.t("SAVE")
                             visible: win.selGameSource === "steam"
                             on: !win.gameBusy
                             onClicked: win.saveGameProfile()
                         }
                         MiniBtn {
-                            width: 76; height: 32; label: "▶ PLAY"; tint: pal.ok
+                            width: 76; height: 32; label: win.t("▶ PLAY"); tint: pal.ok
                             on: !win.gameBusy
                             onClicked: win.playGame()
                         }
@@ -3316,16 +3356,16 @@ ShellRoot {
                     spacing: 8
 
                     Hint {
-                        text: !win.pfx.prefixes ? "" : win.pfx.prefixes.length + " prefixes · " + win.human(win.pfx.total)
-                              + ((win.pfx.orphanBytes || 0) > 0 ? " · " + win.human(win.pfx.orphanBytes) + " in orphans (games no longer installed)" : "")
-                              + " · " + win.pfxBackups.length + " backups in ~/control-deck-backups/prefixes"
+                        text: !win.pfx.prefixes ? "" : win.pfx.prefixes.length + win.t(" prefixes · ") + win.human(win.pfx.total)
+                              + ((win.pfx.orphanBytes || 0) > 0 ? " · " + win.human(win.pfx.orphanBytes) + win.t(" in orphans (games no longer installed)") : "")
+                              + " · " + win.pfxBackups.length + win.t(" backups in ~/control-deck-backups/prefixes")
                     }
                     Rectangle {
                         Layout.fillWidth: true; Layout.fillHeight: true
                         radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
                         EmptyHint {
                             visible: !win.pfx.prefixes || win.pfx.prefixes.length === 0
-                            title: pfxProc.running ? "LOOKING FOR PREFIXES…" : "NO WINE/PROTON PREFIXES FOUND"
+                            title: pfxProc.running ? win.t("LOOKING FOR PREFIXES…") : win.t("NO WINE/PROTON PREFIXES FOUND")
                         }
                         ListView {
                             id: pfxList
@@ -3349,28 +3389,28 @@ ShellRoot {
                                             Text { text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true
                                                    elide: Text.ElideRight; Layout.maximumWidth: 300 }
                                             Text { text: win.human(modelData.size); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
-                                            Text { visible: modelData.orphan; text: "ORPHAN"; color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
-                                            Text { visible: modelData.running; text: "IN USE"; color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.orphan; text: win.t("ORPHAN"); color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.running; text: win.t("IN USE"); color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
                                             Text { visible: modelData.kind === "tool" || modelData.kind === "shared"; text: modelData.kind.toUpperCase()
                                                    color: pal.dim; font.family: win.mono; font.pixelSize: 8; font.bold: true }
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideMiddle
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: (modelData.version || "?") + "  ·  " + modelData.arch + "  ·  used " + win.dateOfEpoch(modelData.lastUsed)
+                                            text: (modelData.version || "?") + "  ·  " + modelData.arch + win.t("  ·  used ") + win.dateOfEpoch(modelData.lastUsed)
                                                   + "  ·  " + modelData.path.replace(win.home, "~")
                                         }
                                     }
-                                    MiniBtn { width: 64; label: "BACKUP"; primary: false; on: !win.gameBusy && !modelData.running
-                                              onClicked: win.runGame(["prefix", "backup", modelData.path], "BACKING UP…") }
-                                    MiniBtn { width: 60; label: "CLONE"; primary: false; on: !win.gameBusy && !modelData.running
-                                              onClicked: win.runGame(["prefix", "clone", modelData.path], "CLONING…") }
+                                    MiniBtn { width: 64; label: win.t("BACKUP"); primary: false; on: !win.gameBusy && !modelData.running
+                                              onClicked: win.runGame(["prefix", "backup", modelData.path], win.t("BACKING UP…")) }
+                                    MiniBtn { width: 60; label: win.t("CLONE"); primary: false; on: !win.gameBusy && !modelData.running
+                                              onClicked: win.runGame(["prefix", "clone", modelData.path], win.t("CLONING…")) }
                                     MiniBtn {
                                         width: 80; tint: pal.bad
                                         property string key: "pfx:" + modelData.path
-                                        label: win.confirmShader === key ? "CONFIRM?" : "DELETE"
+                                        label: win.confirmShader === key ? win.t("CONFIRM?") : win.t("DELETE")
                                         on: !win.gameBusy && !modelData.running && modelData.kind !== "tool" && modelData.kind !== "shared"
-                                        onClicked: win.shaderAction(["prefix", "delete", modelData.path], key, "BACKING UP + DELETING…")
+                                        onClicked: win.shaderAction(["prefix", "delete", modelData.path], key, win.t("BACKING UP + DELETING…"))
                                     }
                                 }
                             }
@@ -3379,9 +3419,9 @@ ShellRoot {
                     RowLayout {
                         Layout.fillWidth: true; spacing: 8
                         Hint {
-                            text: "DELETE always makes a backup first (a Steam game's prefix is recreated on its next launch — saves kept only in the prefix would be lost without it). CLONE copies the Wine prefix to ~/Games/prefixes (instant on Btrfs). Restore a backup: control-deck prefix restore <backup> <folder>."
+                            text: win.t("DELETE always makes a backup first (a Steam game's prefix is recreated on its next launch — saves kept only in the prefix would be lost without it). CLONE copies the Wine prefix to ~/Games/prefixes (instant on Btrfs). Restore a backup: control-deck prefix restore <backup> <folder>.")
                         }
-                        MiniBtn { width: 100; label: "BACKUPS ↗"; primary: false; onClicked: pfxOpenProc.running = true }
+                        MiniBtn { width: 100; label: win.t("BACKUPS ↗"); primary: false; onClicked: pfxOpenProc.running = true }
                     }
                 }
 
@@ -3394,7 +3434,7 @@ ShellRoot {
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
                         visible: win.selGame === "" || win.selGameSource !== "steam"
-                        EmptyHint { title: win.selGame === "" ? "PICK A GAME IN LIBRARY FIRST" : "A/B BENCHMARKS ARE FOR STEAM GAMES" }
+                        EmptyHint { title: win.selGame === "" ? win.t("PICK A GAME IN LIBRARY FIRST") : win.t("A/B BENCHMARKS ARE FOR STEAM GAMES") }
                     }
 
                     ColumnLayout {
@@ -3412,29 +3452,29 @@ ShellRoot {
 
                         RowLayout {
                             Layout.fillWidth: true; spacing: 6
-                            Text { text: "MEASURE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                            Text { text: win.t("MEASURE"); color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
                             Repeater {
                                 model: [30, 60, 120, 300]
                                 delegate: Chip { required property int modelData; label: modelData + " s"; active: win.bench.duration === modelData
                                                  onClicked: win.saveBench(["duration=" + modelData]) }
                             }
-                            Text { text: "AFTER"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.leftMargin: 8 }
+                            Text { text: win.t("AFTER"); color: pal.dim; font.family: win.mono; font.pixelSize: 9; Layout.leftMargin: 8 }
                             Repeater {
                                 model: [5, 15, 30, 60]
                                 delegate: Chip { required property int modelData; label: modelData + " s"; active: win.bench.delay === modelData
                                                  onClicked: win.saveBench(["delay=" + modelData]) }
                             }
                             Item { Layout.fillWidth: true }
-                            MiniBtn { width: 70; label: "SAVE"; on: !win.gameBusy; onClicked: win.saveBench([]) }
-                            MiniBtn { width: 70; label: "RUN A"; tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
+                            MiniBtn { width: 70; label: win.t("SAVE"); on: !win.gameBusy; onClicked: win.saveBench([]) }
+                            MiniBtn { width: 70; label: win.t("RUN A"); tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
                                       onClicked: win.runBench("A") }
-                            MiniBtn { width: 70; label: "RUN B"; tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
+                            MiniBtn { width: 70; label: win.t("RUN B"); tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
                                       onClicked: win.runBench("B") }
                         }
                         Hint {
-                            text: !win.selGameWrapped ? "The game must launch through Control Deck: LIBRARY → USE IN STEAM first."
-                                  : "RUN starts the game from Steam; MangoHud records every frame after the delay, for the measured time. Play the same scene in both runs, quit the game, then REFRESH. Variants changing Proton need Steam closed."
-                                    + (win.bench.originalProton ? "  Proton was changed for a run: RESTORE PROTON when done." : "")
+                            text: !win.selGameWrapped ? win.t("The game must launch through Control Deck: LIBRARY → USE IN STEAM first.")
+                                  : win.t("RUN starts the game from Steam; MangoHud records every frame after the delay, for the measured time. Play the same scene in both runs, quit the game, then REFRESH. Variants changing Proton need Steam closed.")
+                                    + (win.bench.originalProton ? win.t("  Proton was changed for a run: RESTORE PROTON when done.") : "")
                         }
 
                         // results
@@ -3443,7 +3483,7 @@ ShellRoot {
                             radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
                             EmptyHint {
                                 visible: !win.bench.results || (!win.bench.results.A && !win.bench.results.B)
-                                title: "NO RUNS YET"
+                                title: win.t("NO RUNS YET")
                             }
                             RowLayout {
                                 anchors.fill: parent; anchors.margins: 10; spacing: 12
@@ -3452,12 +3492,12 @@ ShellRoot {
                                     columns: 4; rowSpacing: 4; columnSpacing: 12
                                     Layout.alignment: Qt.AlignTop
                                     Repeater {
-                                        model: [["", "A", "B", "Δ B vs A"],
-                                                ["Avg FPS", "avgFps", "avgFps", "avgFps"], ["1% low", "low1", "low1", "low1"],
-                                                ["0.1% low", "low01", "low01", ""], ["p99 frame ms", "p99ms", "p99ms", "p99ms"],
-                                                ["Spikes", "spikes", "spikes", ""], ["CPU load %", "cpuLoad", "cpuLoad", ""],
-                                                ["GPU load %", "gpuLoad", "gpuLoad", ""], ["GPU max °C", "gpuTempMax", "gpuTempMax", ""],
-                                                ["Frames", "frames", "frames", ""]]
+                                        model: [["", "A", "B", win.t("Δ B vs A")],
+                                                [win.t("Avg FPS"), "avgFps", "avgFps", "avgFps"], [win.t("1% low"), "low1", "low1", "low1"],
+                                                [win.t("0.1% low"), "low01", "low01", ""], [win.t("p99 frame ms"), "p99ms", "p99ms", "p99ms"],
+                                                [win.t("Spikes"), "spikes", "spikes", ""], [win.t("CPU load %"), "cpuLoad", "cpuLoad", ""],
+                                                [win.t("GPU load %"), "gpuLoad", "gpuLoad", ""], [win.t("GPU max °C"), "gpuTempMax", "gpuTempMax", ""],
+                                                [win.t("Frames"), "frames", "frames", ""]]
                                         delegate: Item {
                                             required property var modelData
                                             required property int index
@@ -3519,11 +3559,11 @@ ShellRoot {
                         RowLayout {
                             Layout.fillWidth: true; spacing: 8
                             Item { Layout.fillWidth: true }
-                            MiniBtn { width: 110; label: "REFRESH RESULTS"; primary: false; on: !win.gameBusy; onClicked: benchProc.running = true }
-                            MiniBtn { width: 110; label: "RESTORE PROTON"; primary: false; visible: !!win.bench.originalProton; on: !win.gameBusy
-                                      onClicked: win.runGame(["bench", "restore", win.selGame], "RESTORING…") }
-                            MiniBtn { width: 70; label: "CLEAR"; tint: pal.bad; primary: false; on: !win.gameBusy
-                                      onClicked: win.runGame(["bench", "clear", win.selGame], "CLEARING…") }
+                            MiniBtn { width: 110; label: win.t("REFRESH RESULTS"); primary: false; on: !win.gameBusy; onClicked: benchProc.running = true }
+                            MiniBtn { width: 110; label: win.t("RESTORE PROTON"); primary: false; visible: !!win.bench.originalProton; on: !win.gameBusy
+                                      onClicked: win.runGame(["bench", "restore", win.selGame], win.t("RESTORING…")) }
+                            MiniBtn { width: 70; label: win.t("CLEAR"); tint: pal.bad; primary: false; on: !win.gameBusy
+                                      onClicked: win.runGame(["bench", "clear", win.selGame], win.t("CLEARING…")) }
                         }
                     }
                 }
@@ -3533,9 +3573,9 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 6
                     visible: win.gameView === "fx"
-                    Chip { label: "THIS GAME"; active: win.fxScope === "game"; onClicked: win.fxScope = "game" }
+                    Chip { label: win.t("THIS GAME"); active: win.fxScope === "game"; onClicked: win.fxScope = "game" }
                     Chip {
-                        label: "MY LIBRARY" + (win.fxEligible > 0 ? "  ·  " + win.fxEligible + " to set up" : "")
+                        label: win.t("MY LIBRARY") + (win.fxEligible > 0 ? "  ·  " + win.fxEligible + win.t(" to set up") : "")
                         active: win.fxScope === "library"
                         onClicked: { win.fxScope = "library"; if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = false; fxScanProc.running = true; } }
                     }
@@ -3559,7 +3599,7 @@ ShellRoot {
                             EmptyHint {
                                 Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 40; anchors.centerIn: undefined
                                 visible: !win.fxGame
-                                title: "PICK A STEAM OR UMBRAL GAME IN LIBRARY"
+                                title: win.t("PICK A STEAM OR UMBRAL GAME IN LIBRARY")
                             }
 
                             // header: game · GPU · vkBasalt
@@ -3567,12 +3607,12 @@ ShellRoot {
                                 Layout.fillWidth: true; spacing: 9
                                 visible: win.fxGame
                                 Rectangle { width: 7; height: 7; color: pal.accent; Layout.alignment: Qt.AlignVCenter }
-                                Text { text: "VISUAL SHADERS"; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
+                                Text { text: win.t("VISUAL SHADERS"); color: pal.text; font.family: win.mono; font.pixelSize: 12; font.letterSpacing: 4; font.bold: true }
                                 Text { Layout.fillWidth: true; elide: Text.ElideRight; text: win.selGameName; color: pal.dim; font.family: win.mono; font.pixelSize: 11 }
                                 Text {
                                     text: (win.fx.gpu || "") + "  ·  " + (win.fxReshade
-                                          ? (win.fx.reshade && win.fx.reshade.version ? "ReShade " + win.fx.reshade.version : "ReShade not installed")
-                                          : (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : "vkBasalt not installed"))
+                                          ? (win.fx.reshade && win.fx.reshade.version ? "ReShade " + win.fx.reshade.version : win.t("ReShade not installed"))
+                                          : (win.fx.vkbasalt ? "vkBasalt " + win.fx.version : win.t("vkBasalt not installed")))
                                     color: (win.fxReshade ? (win.fx.reshade || {}).ready : win.fx.vkbasalt) ? pal.dim : pal.amber
                                     font.family: win.mono; font.pixelSize: 10
                                 }
@@ -3588,7 +3628,7 @@ ShellRoot {
                                     id: noFxTxt
                                     anchors.fill: parent; anchors.margins: 8; wrapMode: Text.WordWrap
                                     color: pal.amber; font.family: win.mono; font.pixelSize: 11
-                                    text: "This game is drawn in 2D with GDI (RPG Maker style), not with DirectX, OpenGL or Vulkan: neither ReShade nor vkBasalt can hook it. TEMPS still works (LIBRARY)."
+                                    text: win.t("This game is drawn in 2D with GDI (RPG Maker style), not with DirectX, OpenGL or Vulkan: neither ReShade nor vkBasalt can hook it. TEMPS still works (LIBRARY).")
                                 }
                             }
 
@@ -3605,7 +3645,7 @@ ShellRoot {
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 8
                                         Text {
-                                            text: win.fxStepsDone === 5 ? "● READY" : "STEPS"
+                                            text: win.fxStepsDone === 5 ? win.t("● READY") : win.t("STEPS")
                                             color: win.fxStepsDone === 5 ? pal.ok : pal.text
                                             font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2
                                         }
@@ -3614,14 +3654,14 @@ ShellRoot {
                                             font.family: win.mono; font.pixelSize: 10
                                             color: win.fxStepsDone === 5 ? pal.text : pal.dim
                                             text: win.fxStepsDone === 5
-                                                  ? (win.fxReshade ? "ReShade" : "vkBasalt") + "  ·  " + (win.fxCur.name || "") + " (" + (win.fxCur.applied || 0) + " effects)"
-                                                    + "  ·  menu " + (win.fx.key || "Home").toUpperCase()
-                                                    + (win.fxReshade && (win.fx.effectsKey || "End") !== "None" ? "  ·  on/off " + (win.fx.effectsKey || "End").toUpperCase() : "")
-                                                  : win.fxStepsDone + " of 5 done — next: " + ((win.fxSteps.filter(function (s) { return !s[0]; })[0] || ["", ""])[1])
+                                                  ? (win.fxReshade ? "ReShade" : "vkBasalt") + "  ·  " + (win.fxCur.name || "") + " (" + (win.fxCur.applied || 0) + win.t(" effects)")
+                                                    + win.t("  ·  menu ") + (win.fx.key || "Home").toUpperCase()
+                                                    + (win.fxReshade && (win.fx.effectsKey || "End") !== "None" ? win.t("  ·  on/off ") + (win.fx.effectsKey || "End").toUpperCase() : "")
+                                                  : win.fxStepsDone + win.t(" of 5 done — next: ") + ((win.fxSteps.filter(function (s) { return !s[0]; })[0] || ["", ""])[1])
                                         }
                                         Text {
                                             visible: win.fxStepsDone === 5 && (win.fxCur.skipped || []).length > 0
-                                            text: "⚠ " + (win.fxCur.skipped || []).length + " skipped"; color: pal.amber
+                                            text: "⚠ " + (win.fxCur.skipped || []).length + win.t(" skipped"); color: pal.amber
                                             font.family: win.mono; font.pixelSize: 10
                                             MouseArea { id: skipMa; anchors.fill: parent; hoverEnabled: true }
                                             Tip { visible: skipMa.containsMouse; text: (win.fxCur.skipped || []).map(function (x) { return x.effect + " — " + x.why; }).join("\n") }
@@ -3632,10 +3672,10 @@ ShellRoot {
                                         }
                                         Chip {
                                             visible: win.fxStepsDone === 5; label: "OFF"; on: !win.gameBusy
-                                            tip: "Remove the shaders from this game"
-                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                            tip: win.t("Remove the shaders from this game")
+                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], win.t("TURNING OFF…"))
                                         }
-                                        Chip { label: win.fxGuideOpen ? "GUIDE ▴" : "GUIDE ▾"; tip: "Every step, with what each one does"; onClicked: win.fxGuideOpen = !win.fxGuideOpen }
+                                        Chip { label: win.fxGuideOpen ? win.t("GUIDE ▴") : win.t("GUIDE ▾"); tip: win.t("Every step, with what each one does"); onClicked: win.fxGuideOpen = !win.fxGuideOpen }
                                     }
                                     Repeater {
                                         // all steps when opened; otherwise just the next one (none when all is done)
@@ -3670,32 +3710,32 @@ ShellRoot {
                                             // the pending step's own button
                                             MiniBtn {
                                                 visible: next && index === 0
-                                                width: 140; height: 28; label: win.fx.recommended === "vkbasalt" ? "USE VKBASALT ★" : "USE RESHADE ★"
+                                                width: 140; height: 28; label: win.fx.recommended === "vkbasalt" ? win.t("USE VKBASALT ★") : win.t("USE RESHADE ★")
                                                 on: !win.gameBusy
                                                 onClicked: win.fx.recommended === "vkbasalt"
-                                                           ? win.fxApply("mode:vkbasalt", "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
-                                                           : win.fxApply("mode:reshade", "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
+                                                           ? win.fxApply("mode:vkbasalt", win.t("SWITCHING…"), ["fx", "mode", win.selGame, "vkbasalt"])
+                                                           : win.fxApply("mode:reshade", win.t("SETTING UP RESHADE…"), ["fx", "mode", win.selGame, "reshade"])
                                             }
                                             MiniBtn {
                                                 visible: next && index === 1
-                                                width: 90; height: 28; label: "INSTALL"; on: !win.gameBusy
-                                                onClicked: win.runGame(win.fxReshade ? ["fx", "reshade", "install"] : ["fx", "install"], "INSTALLING…")
+                                                width: 90; height: 28; label: win.t("INSTALL"); on: !win.gameBusy
+                                                onClicked: win.runGame(win.fxReshade ? ["fx", "reshade", "install"] : ["fx", "install"], win.t("INSTALLING…"))
                                             }
                                             MiniBtn {
                                                 visible: next && index === 2 && !win.fxUmbral
-                                                width: 120; height: 28; label: "USE IN STEAM"
+                                                width: 120; height: 28; label: win.t("USE IN STEAM")
                                                 on: !win.gameBusy && !win.fx.steamRunning
-                                                onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
+                                                onClicked: win.runGame(["steamwrap", win.selGameId, "on"], win.t("WRAPPING…"))
                                             }
                                             Chip {
                                                 visible: next && index === 3
-                                                label: (win.fx.links || []).length ? "OPEN " + win.fx.links[0].label + " ↗" : "SEARCH NEXUS ↗"
+                                                label: (win.fx.links || []).length ? win.t("OPEN ") + win.fx.links[0].label + " ↗" : win.t("SEARCH NEXUS ↗")
                                                 onClicked: Qt.openUrlExternally((win.fx.links || []).length ? win.fx.links[0].url
                                                     : "https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
                                             }
                                             MiniBtn {
                                                 visible: next && index === 3 && (win.fx.links || []).length > 0
-                                                width: 90; height: 28; label: "IMPORT…"
+                                                width: 90; height: 28; label: win.t("IMPORT…")
                                                 on: !win.gameBusy && win.fxReady && !fxPickProc.running
                                                 onClicked: fxPickProc.running = true
                                             }
@@ -3715,34 +3755,34 @@ ShellRoot {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 6
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        Text { text: "ROUTE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("ROUTE"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Chip {
                                             property string k: "mode:reshade"
-                                            label: win.fxConfirm === k ? "CONFIRM?" : "RESHADE" + (win.fx.recommended === "reshade" ? "  ★" : "")
+                                            label: win.fxConfirm === k ? win.t("CONFIRM?") : "RESHADE" + (win.fx.recommended === "reshade" ? "  ★" : "")
                                             tint: pal.ok; active: win.fxReshade
                                             on: !win.gameBusy
-                                            tip: "ReShade itself: presets exactly as made (depth effects too) and its in-game menu. For D3D9–12 and OpenGL games."
-                                            onClicked: if (!win.fxReshade) win.fxApply(k, "SETTING UP RESHADE…", ["fx", "mode", win.selGame, "reshade"])
+                                            tip: win.t("ReShade itself: presets exactly as made (depth effects too) and its in-game menu. For D3D9–12 and OpenGL games.")
+                                            onClicked: if (!win.fxReshade) win.fxApply(k, win.t("SETTING UP RESHADE…"), ["fx", "mode", win.selGame, "reshade"])
                                         }
                                         Chip {
                                             property string k: "mode:vkbasalt"
-                                            label: win.fxConfirm === k ? "CONFIRM?" : "VKBASALT" + (win.fx.recommended === "vkbasalt" ? "  ★" : "")
+                                            label: win.fxConfirm === k ? win.t("CONFIRM?") : "VKBASALT" + (win.fx.recommended === "vkbasalt" ? "  ★" : "")
                                             tint: pal.ok; active: !win.fxReshade
                                             on: !win.gameBusy
-                                            tip: "A Vulkan layer: simplest, no files in the game folder; presets are converted and effects that need depth are skipped."
-                                            onClicked: if (win.fxReshade) win.fxApply(k, "SWITCHING…", ["fx", "mode", win.selGame, "vkbasalt"])
+                                            tip: win.t("A Vulkan layer: simplest, no files in the game folder; presets are converted and effects that need depth are skipped.")
+                                            onClicked: if (win.fxReshade) win.fxApply(k, win.t("SWITCHING…"), ["fx", "mode", win.selGame, "vkbasalt"])
                                         }
                                         // why the ★ one: one line, the full reasons on hover
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "★ " + (((win.fx.advice || {}).reasons || [""])[0] || "")
+                                            text: "★ " + win.t(((win.fx.advice || {}).reasons || [""])[0] || "")
                                             MouseArea { id: whyMa; anchors.fill: parent; hoverEnabled: true }
-                                            Tip { visible: whyMa.containsMouse; text: ((win.fx.advice || {}).reasons || []).join("\n\n") }
+                                            Tip { visible: whyMa.containsMouse; text: ((win.fx.advice || {}).reasons || []).map(win.t).join("\n\n") }
                                         }
                                         Chip {
-                                            label: win.fxDetails ? "SETTINGS ▴" : "SETTINGS ▾"
-                                            tip: "Executable, graphics API and the in-game keys"
+                                            label: win.fxDetails ? win.t("SETTINGS ▴") : win.t("SETTINGS ▾")
+                                            tip: win.t("Executable, graphics API and the in-game keys")
                                             onClicked: win.fxDetails = !win.fxDetails
                                         }
                                     }
@@ -3750,7 +3790,7 @@ ShellRoot {
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
                                         visible: win.fxReshade && win.fxDetails
-                                        Text { text: "EXECUTABLE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("EXECUTABLE"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Flow {
                                             Layout.fillWidth: true; spacing: 6
                                             Repeater {
@@ -3760,8 +3800,8 @@ ShellRoot {
                                                     label: modelData.rel + "  ·  " + modelData.arch + "-bit"
                                                     active: !!win.fxRsGame && win.fxRsGame.exe === modelData.path
                                                     on: !win.gameBusy
-                                                    tip: "Install ReShade next to this .exe (detected API: " + modelData.api + ")"
-                                                    onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", modelData.path], "MOVING RESHADE…")
+                                                    tip: win.t("Install ReShade next to this .exe (detected API: ") + modelData.api + ")"
+                                                    onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", modelData.path], win.t("MOVING RESHADE…"))
                                                 }
                                             }
                                         }
@@ -3769,62 +3809,62 @@ ShellRoot {
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
                                         visible: win.fxReshade && !!win.fxRsGame && win.fxDetails
-                                        Text { text: "HOOKS"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: "HOOKS"; Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: [["dxgi", "DXGI · DX10–12"], ["d3d9", "D3D9"], ["opengl32", "OPENGL"]]
                                             delegate: Chip {
                                                 required property var modelData
                                                 label: modelData[1]; active: !!win.fxRsGame && win.fxRsGame.api === modelData[0]
                                                 on: !win.gameBusy
-                                                tip: "Only change it if ReShade doesn't show up in game"
-                                                onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", win.fxRsGame.exe, modelData[0]], "SWITCHING API…")
+                                                tip: win.t("Only change it if ReShade doesn't show up in game")
+                                                onClicked: win.runGame(["fx", "mode", win.selGame, "reshade", win.fxRsGame.exe, modelData[0]], win.t("SWITCHING API…"))
                                             }
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "✓ " + (win.fxRsGame ? win.fxRsGame.api : "") + ".dll + d3dcompiler_47 linked in the game folder · OFF removes them"
+                                            text: "✓ " + (win.fxRsGame ? win.fxRsGame.api : "") + win.t(".dll + d3dcompiler_47 linked in the game folder · OFF removes them")
                                         }
                                     }
                                     // the in-game key (ReShade's menu / vkBasalt on-off), one for all games
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
                                         visible: win.fxDetails
-                                        Text { text: "MENU KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("MENU KEY"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: [["Home", "HOME", ""], ["Insert", "INSERT", ""], ["F10", "F10", ""], ["F11", "F11", ""],
-                                                    ["F12", "F12", "Steam takes screenshots with F12 by default"]]
+                                                    ["F12", "F12", win.t("Steam takes screenshots with F12 by default")]]
                                             delegate: Chip {
                                                 required property var modelData
                                                 label: modelData[1]; active: (win.fx.key || "Home") === modelData[0]
                                                 on: !win.gameBusy; tip: modelData[2]
-                                                onClicked: win.runGame(["fx", "key", modelData[0]], "SETTING KEY…")
+                                                onClicked: win.runGame(["fx", "key", modelData[0]], win.t("SETTING KEY…"))
                                             }
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: win.fxReshade ? "opens ReShade's menu in game" : "turns the effects on/off in game"
+                                            text: win.fxReshade ? win.t("opens ReShade's menu in game") : win.t("turns the effects on/off in game")
                                         }
                                     }
                                     // ReShade: one key that switches every effect on/off (the mod guides' "END")
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
                                         visible: win.fxReshade && win.fxDetails
-                                        Text { text: "ON/OFF KEY"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("ON/OFF KEY"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
-                                            model: [["End", "END", "The key most preset guides suggest"], ["F9", "F9", "Some games quick-load with F9"], ["None", "NONE", "No key: effects stay on"]]
+                                            model: [["End", "END", win.t("The key most preset guides suggest")], ["F9", "F9", win.t("Some games quick-load with F9")], ["None", win.t("NONE"), win.t("No key: effects stay on")]]
                                             delegate: Chip {
                                                 required property var modelData
                                                 label: modelData[1]; active: (win.fx.effectsKey || "End") === modelData[0]
                                                 on: !win.gameBusy; tip: modelData[2]
-                                                onClicked: win.runGame(["fx", "effectskey", modelData[0]], "SETTING KEY…")
+                                                onClicked: win.runGame(["fx", "effectskey", modelData[0]], win.t("SETTING KEY…"))
                                             }
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "switches all effects on/off in game — compare, or drop them in heavy scenes"
+                                            text: win.t("switches all effects on/off in game — compare, or drop them in heavy scenes")
                                         }
                                     }
                                     // must launch through the wrapper
@@ -3834,14 +3874,14 @@ ShellRoot {
                                         Text {
                                             Layout.fillWidth: true; wrapMode: Text.WordWrap
                                             color: pal.amber; font.family: win.mono; font.pixelSize: 10
-                                            text: win.fxUmbral ? "⚠ Umbral 0.10.0 or newer is needed: it asks the deck for shaders and TEMPS before starting the game. Update Umbral."
-                                                  : "⚠ This game doesn't launch through Control Deck yet, so the shaders won't load. " + (win.fx.steamRunning ? "Close Steam, then press USE IN STEAM." : "Press USE IN STEAM.")
+                                            text: win.fxUmbral ? win.t("⚠ Umbral 0.10.0 or newer is needed: it asks the deck for shaders and TEMPS before starting the game. Update Umbral.")
+                                                  : win.t("⚠ This game doesn't launch through Control Deck yet, so the shaders won't load. ") + (win.fx.steamRunning ? win.t("Close Steam, then press USE IN STEAM.") : win.t("Press USE IN STEAM."))
                                         }
                                         MiniBtn {
                                             visible: !win.fxUmbral
-                                            width: 120; height: 28; label: "USE IN STEAM"
+                                            width: 120; height: 28; label: win.t("USE IN STEAM")
                                             on: !win.gameBusy && !win.fx.steamRunning
-                                            onClicked: win.runGame(["steamwrap", win.selGameId, "on"], "WRAPPING…")
+                                            onClicked: win.runGame(["steamwrap", win.selGameId, "on"], win.t("WRAPPING…"))
                                         }
                                     }
                                 }
@@ -3860,13 +3900,13 @@ ShellRoot {
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
                                         color: pal.text; font.family: win.mono; font.pixelSize: 11
                                         text: win.fx.reshade && win.fx.reshade.update
-                                              ? "ReShade " + win.fx.reshade.latest + " is out (you have " + win.fx.reshade.version + "). Games pick it up on their next launch."
-                                              : "One-time setup, no password: ReShade " + ((win.fx.reshade || {}).latest || "") + " from reshade.me, d3dcompiler_47 (Mozilla's Firefox installer, checksum-verified, like winetricks) and the standard shaders."
+                                              ? "ReShade " + win.fx.reshade.latest + win.t(" is out (you have ") + win.fx.reshade.version + win.t("). Games pick it up on their next launch.")
+                                              : win.t("One-time setup, no password: ReShade ") + ((win.fx.reshade || {}).latest || "") + win.t(" from reshade.me, d3dcompiler_47 (Mozilla's Firefox installer, checksum-verified, like winetricks) and the standard shaders.")
                                     }
                                     MiniBtn {
-                                        width: 96; height: 32; label: win.fx.reshade && win.fx.reshade.update ? "UPDATE" : "INSTALL"
+                                        width: 96; height: 32; label: win.fx.reshade && win.fx.reshade.update ? win.t("UPDATE") : win.t("INSTALL")
                                         on: !win.gameBusy
-                                        onClicked: win.runGame(["fx", "reshade", "install"], "DOWNLOADING RESHADE…")
+                                        onClicked: win.runGame(["fx", "reshade", "install"], win.t("DOWNLOADING RESHADE…"))
                                     }
                                 }
                             }
@@ -3886,14 +3926,14 @@ ShellRoot {
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
                                         color: pal.text; font.family: win.mono; font.pixelSize: 11
                                         text: win.fx.chaotic === false && !win.fx.vkbasalt
-                                              ? "vkBasalt comes from chaotic-aur, which isn't enabled here. Enable it (or build vkbasalt + lib32-vkbasalt from the AUR), then come back."
-                                              : "One-time setup: vkBasalt (the Vulkan layer that draws the effects, 64 + 32-bit, from chaotic-aur) and the standard ReShade shaders (official packages, ~0.5 MB). Works the same on AMD and NVIDIA."
+                                              ? win.t("vkBasalt comes from chaotic-aur, which isn't enabled here. Enable it (or build vkbasalt + lib32-vkbasalt from the AUR), then come back.")
+                                              : win.t("One-time setup: vkBasalt (the Vulkan layer that draws the effects, 64 + 32-bit, from chaotic-aur) and the standard ReShade shaders (official packages, ~0.5 MB). Works the same on AMD and NVIDIA.")
                                     }
                                     MiniBtn {
                                         visible: win.fx.chaotic !== false || win.fx.vkbasalt
-                                        width: 96; height: 32; label: "INSTALL"
+                                        width: 96; height: 32; label: win.t("INSTALL")
                                         on: !win.gameBusy
-                                        onClicked: win.runGame(["fx", "install"], "INSTALLING SHADERS…")
+                                        onClicked: win.runGame(["fx", "install"], win.t("INSTALLING SHADERS…"))
                                     }
                                 }
                             }
@@ -3912,8 +3952,8 @@ ShellRoot {
                                     wrapMode: Text.WordWrap; font.family: win.mono; font.pixelSize: 10
                                     color: win.fxAnticheat ? pal.bad : pal.amber
                                     text: win.fxAnticheat
-                                          ? "⚠ ONLINE GAME WITH ANTI-CHEAT (" + win.fx.online.anticheats.join(", ") + "). Shaders hook into the game's rendering; an anti-cheat may treat that as a modification and ban the account. Use them only if you accept that risk — applying one here asks for confirmation."
-                                          : "⚠ Online multiplayer game: some online games forbid visual mods in their rules. Check before using shaders there."
+                                          ? win.t("⚠ ONLINE GAME WITH ANTI-CHEAT (") + win.fx.online.anticheats.join(", ") + win.t("). Shaders hook into the game's rendering; an anti-cheat may treat that as a modification and ban the account. Use them only if you accept that risk — applying one here asks for confirmation.")
+                                          : win.t("⚠ Online multiplayer game: some online games forbid visual mods in their rules. Check before using shaders there.")
                                 }
                             }
 
@@ -3940,9 +3980,9 @@ ShellRoot {
                                             font.family: win.mono; font.pixelSize: 11; font.bold: true
                                             color: win.fxActive ? pal.ok : pal.dim
                                             text: win.fxActive
-                                                  ? "● ACTIVE: " + win.fxCur.name + "  ·  " + win.fxCur.applied + " effect" + (win.fxCur.applied > 1 ? "s" : "")
-                                                    + ((win.fxCur.skipped || []).length ? "  ·  " + win.fxCur.skipped.length + " skipped" : "")
-                                                  : "○ No shaders on this game"
+                                                  ? win.t("● ACTIVE: ") + win.fxCur.name + "  ·  " + win.fxCur.applied + win.t(" effect") + (win.fxCur.applied > 1 ? "s" : "")
+                                                    + ((win.fxCur.skipped || []).length ? "  ·  " + win.fxCur.skipped.length + win.t(" skipped") : "")
+                                                  : win.t("○ No shaders on this game")
                                         }
                                         Chip {
                                             visible: win.fxActive && win.fxCur.source === "sfx"
@@ -3952,7 +3992,7 @@ ShellRoot {
                                             visible: win.fxActive
                                             width: 60; height: 28; primary: false; label: "OFF"
                                             on: !win.gameBusy
-                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], "TURNING OFF…")
+                                            onClicked: win.runGame(["fx", "set", win.selGame, "off"], win.t("TURNING OFF…"))
                                         }
                                     }
                                     Repeater {
@@ -3966,8 +4006,8 @@ ShellRoot {
                                     }
                                     Text {
                                         visible: win.fxActive
-                                        text: win.fxReshade ? "In game: " + (win.fx.key || "Home").toUpperCase() + " opens ReShade's menu — tweak values, switch effects on/off; changes are saved to this game's preset."
-                                                            : "In game: " + (win.fx.key || "Home").toUpperCase() + " turns the effects on/off to compare."
+                                        text: win.fxReshade ? win.t("In game: ") + (win.fx.key || "Home").toUpperCase() + win.t(" opens ReShade's menu — tweak values, switch effects on/off; changes are saved to this game's preset.")
+                                                            : win.t("In game: ") + (win.fx.key || "Home").toUpperCase() + win.t(" turns the effects on/off to compare.")
                                         color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                     }
                                 }
@@ -3985,75 +4025,75 @@ ShellRoot {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        Text { text: "QUICK LOOK"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("QUICK LOOK"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
-                                            model: [["sharpen", "SHARPEN", "AMD FidelityFX CAS: crisper image, almost free"],
-                                                    ["sharpen-aa", "SHARPEN + AA", "SMAA anti-aliasing, then CAS sharpening"],
-                                                    ["fxaa", "FXAA", "Light anti-aliasing, softer edges"],
-                                                    ["clarity", "CLARITY", "Denoised luma sharpening: detail without boosting grain"]]
+                                            model: [["sharpen", win.t("SHARPEN"), win.t("AMD FidelityFX CAS: crisper image, almost free")],
+                                                    ["sharpen-aa", win.t("SHARPEN + AA"), win.t("SMAA anti-aliasing, then CAS sharpening")],
+                                                    ["fxaa", "FXAA", win.t("Light anti-aliasing, softer edges")],
+                                                    ["clarity", win.t("CLARITY"), win.t("Denoised luma sharpening: detail without boosting grain")]]
                                             delegate: Chip {
                                                 required property var modelData
                                                 property string k: "builtin:" + modelData[0]
-                                                label: win.fxConfirm === k ? "CONFIRM?" : modelData[1]
+                                                label: win.fxConfirm === k ? win.t("CONFIRM?") : modelData[1]
                                                 tint: pal.ok; tip: modelData[2]
                                                 active: win.fxActive && win.fxCur.source === "builtin" && win.fxCur.name === modelData[0]
                                                 on: !win.gameBusy && win.fxReady
-                                                onClicked: win.fxApply(k, "APPLYING…")
+                                                onClicked: win.fxApply(k, win.t("APPLYING…"))
                                             }
                                         }
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        Text { text: "FROM A FILE"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("FROM A FILE"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Chip {
-                                            label: fxPickProc.running || fxImpListProc.running ? "OPENING…" : "IMPORT…"
+                                            label: fxPickProc.running || fxImpListProc.running ? win.t("OPENING…") : win.t("IMPORT…")
                                             tint: pal.ok; on: !win.gameBusy && win.fxReady && !fxPickProc.running
-                                            tip: "A preset you downloaded (Nexus Mods…): zip, 7z, rar or .ini. Its own shaders come along; its ReShade.ini/DLLs are ignored."
+                                            tip: win.t("A preset you downloaded (Nexus Mods…): zip, 7z, rar or .ini. Its own shaders come along; its ReShade.ini/DLLs are ignored.")
                                             onClicked: fxPickProc.running = true
                                         }
                                         Chip {
-                                            label: "SEARCH NEXUS ↗"; tip: "Web search for this game's ReShade presets on Nexus Mods"
+                                            label: win.t("SEARCH NEXUS ↗"); tip: win.t("Web search for this game's ReShade presets on Nexus Mods")
                                             onClicked: Qt.openUrlExternally("https://duckduckgo.com/?q=" + encodeURIComponent("site:nexusmods.com " + win.selGameName + " reshade preset"))
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "download it, then IMPORT"
+                                            text: win.t("download it, then IMPORT")
                                         }
                                     }
                                     // preset pages saved for this game (can be saved before installing it)
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
-                                        Text { text: "SAVED"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Text { text: win.t("SAVED"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                         Repeater {
                                             model: win.fx.links || []
                                             delegate: Chip {
                                                 required property var modelData
-                                                label: modelData.label + " ↗"; tip: modelData.url + " — right-click removes it"
+                                                label: modelData.label + " ↗"; tip: modelData.url + win.t(" — right-click removes it")
                                                 onClicked: Qt.openUrlExternally(modelData.url)
                                                 MouseArea {
                                                     anchors.fill: parent; acceptedButtons: Qt.RightButton
-                                                    onClicked: win.runGame(["fx", "link", "rm", win.selGame, modelData.url], "REMOVING LINK…")
+                                                    onClicked: win.runGame(["fx", "link", "rm", win.selGame, modelData.url], win.t("REMOVING LINK…"))
                                                 }
                                             }
                                         }
                                         Text {
                                             visible: (win.fx.links || []).length === 0 && !win.fxAddLink
                                             Layout.fillWidth: true; color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                            text: "preset pages you keep for this game (e.g. from Nexus)"
+                                            text: win.t("preset pages you keep for this game (e.g. from Nexus)")
                                         }
                                         Item { Layout.fillWidth: true; visible: (win.fx.links || []).length > 0 && !win.fxAddLink }
-                                        Chip { visible: !win.fxAddLink; label: "+ LINK"; tip: "Keep a preset page for this game"; onClicked: win.fxAddLink = true }
+                                        Chip { visible: !win.fxAddLink; label: win.t("+ LINK"); tip: win.t("Keep a preset page for this game"); onClicked: win.fxAddLink = true }
                                         Field {
                                             id: fxLinkField; Layout.fillWidth: true; font.pixelSize: 10
                                             visible: win.fxAddLink
-                                            placeholderText: "paste a preset page (Nexus…) to keep it here"
-                                            onAccepted: if (text.trim()) { win.runGame(["fx", "link", "add", win.selGame, text.trim()], "SAVING LINK…"); text = ""; }
+                                            placeholderText: win.t("paste a preset page (Nexus…) to keep it here")
+                                            onAccepted: if (text.trim()) { win.runGame(["fx", "link", "add", win.selGame, text.trim()], win.t("SAVING LINK…")); text = ""; }
                                         }
                                         Chip {
                                             visible: win.fxAddLink
-                                            label: "SAVE"; on: fxLinkField.text.trim().indexOf("https://") === 0 && !win.gameBusy
-                                            onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], "SAVING LINK…"); fxLinkField.text = ""; win.fxAddLink = false; }
+                                            label: win.t("SAVE"); on: fxLinkField.text.trim().indexOf("https://") === 0 && !win.gameBusy
+                                            onClicked: { win.runGame(["fx", "link", "add", win.selGame, fxLinkField.text.trim()], win.t("SAVING LINK…")); fxLinkField.text = ""; win.fxAddLink = false; }
                                         }
                                     }
                                     // notes of a saved page (e.g. the preset author's install guide, mapped to the deck)
@@ -4083,23 +4123,23 @@ ShellRoot {
                                                 tip: modelData.path; tint: pal.ok
                                                 on: !win.gameBusy
                                                 onClicked: { var f = win.fxImportFile, pth = modelData.path; win.fxImportList = [];
-                                                             win.fxApply("file:" + f, "IMPORTING PRESET…", ["fx", "import", win.selGame, f, pth]); }
+                                                             win.fxApply("file:" + f, win.t("IMPORTING PRESET…"), ["fx", "import", win.selGame, f, pth]); }
                                             }
                                         }
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true; spacing: 6
                                         Text {
-                                            text: "PRESETS ⓘ"; Layout.preferredWidth: 80; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                            text: "PRESETS ⓘ"; Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
                                             MouseArea { id: presetsMa; anchors.fill: parent; hoverEnabled: true }
-                                            Tip { visible: presetsMa.containsMouse; text: "From SweetFX Settings DB (sfx.thelazy.net), made for ReShade" + (win.fxReshade ? "." : "; in vkBasalt, effects that need the depth buffer are skipped.") + " Shaders come from the packages the official ReShade installer lists." }
+                                            Tip { visible: presetsMa.containsMouse; text: win.t("From SweetFX Settings DB (sfx.thelazy.net), made for ReShade") + (win.fxReshade ? "." : win.t("; in vkBasalt, effects that need the depth buffer are skipped.")) + win.t(" Shaders come from the packages the official ReShade installer lists.") }
                                         }
                                         Field {
                                             id: fxQuery; Layout.fillWidth: true; font.pixelSize: 11
-                                            placeholderText: "game name on SweetFX Settings DB"
+                                            placeholderText: win.t("game name on SweetFX Settings DB")
                                             onAccepted: win.fxSearch(text)
                                         }
-                                        Chip { label: fxSearchProc.running ? "SEARCHING…" : "SEARCH"; on: !fxSearchProc.running; onClicked: win.fxSearch(fxQuery.text) }
+                                        Chip { label: fxSearchProc.running ? win.t("SEARCHING…") : win.t("SEARCH"); on: !fxSearchProc.running; onClicked: win.fxSearch(fxQuery.text) }
                                     }
                                     Flow {
                                         Layout.fillWidth: true; spacing: 6
@@ -4136,13 +4176,13 @@ ShellRoot {
                                                     Layout.fillWidth: true; elide: Text.ElideRight
                                                     text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
                                                 }
-                                                Chip { label: "↗"; tip: "Open the preset's page"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
+                                                Chip { label: "↗"; tip: win.t("Open the preset's page"); onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
                                                 Chip {
-                                                    label: win.fxConfirm === k ? "CONFIRM?" : (win.fxActive && win.fxCur.id === modelData.id ? "ACTIVE ✓" : "APPLY")
+                                                    label: win.fxConfirm === k ? win.t("CONFIRM?") : (win.fxActive && win.fxCur.id === modelData.id ? win.t("ACTIVE ✓") : win.t("APPLY"))
                                                     tint: pal.ok; on: !win.gameBusy && win.fxReady
-                                                    tip: !win.fxReady ? "Run INSTALL above first"
-                                                         : (win.fxReshade ? "Download it and fetch the shaders it needs; ReShade runs it as it is" : "Download, fetch the shaders it needs and convert it for vkBasalt")
-                                                    onClicked: win.fxApply(k, "APPLYING PRESET…")
+                                                    tip: !win.fxReady ? win.t("Run INSTALL above first")
+                                                         : (win.fxReshade ? win.t("Download it and fetch the shaders it needs; ReShade runs it as it is") : win.t("Download, fetch the shaders it needs and convert it for vkBasalt"))
+                                                    onClicked: win.fxApply(k, win.t("APPLYING PRESET…"))
                                                 }
                                             }
                                         }
@@ -4150,7 +4190,7 @@ ShellRoot {
                                     Text {
                                         visible: false   // source details are in the PRESETS tooltip
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                        text: "Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade" + (win.fxReshade ? "" : " — in vkBasalt, effects that need the depth buffer are skipped") + ". Shaders: the packages the official ReShade installer lists."
+                                        text: win.t("Presets: SweetFX Settings DB (sfx.thelazy.net), made for ReShade") + (win.fxReshade ? "" : win.t(" — in vkBasalt, effects that need the depth buffer are skipped")) + win.t(". Shaders: the packages the official ReShade installer lists.")
                                         color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                     }
                                 }
@@ -4166,13 +4206,13 @@ ShellRoot {
                                 Text {
                                     Layout.fillWidth: true; wrapMode: Text.WordWrap
                                     color: pal.dim; font.family: win.mono; font.pixelSize: 10
-                                    text: "Every Steam game: the most downloaded ReShade preset on SweetFX Settings DB, the ReShade compatibility list (PCGamingWiki, which reshade.me links) and online/anti-cheat risk. SET UP installs ReShade with that preset — or SHARPEN + AA when there's none — and the depth settings the list gives. Anti-cheat games and games where ReShade is banned are never touched."
+                                    text: win.t("Every Steam game: the most downloaded ReShade preset on SweetFX Settings DB, the ReShade compatibility list (PCGamingWiki, which reshade.me links) and online/anti-cheat risk. SET UP installs ReShade with that preset — or SHARPEN + AA when there's none — and the depth settings the list gives. Anti-cheat games and games where ReShade is banned are never touched.")
                                 }
-                                Chip { label: fxScanProc.running ? "SCANNING…" : "SCAN"; on: !fxScanProc.running; onClicked: { fxScanProc.cached = false; fxScanProc.running = true; } }
+                                Chip { label: fxScanProc.running ? win.t("SCANNING…") : win.t("SCAN"); on: !fxScanProc.running; onClicked: { fxScanProc.cached = false; fxScanProc.running = true; } }
                                 MiniBtn {
-                                    width: 150; height: 32; label: "SET UP ALL (" + win.fxEligible + ")"
+                                    width: 150; height: 32; label: win.t("SET UP ALL (") + win.fxEligible + ")"
                                     on: !win.gameBusy && win.fxEligible > 0
-                                    onClicked: win.runGame(["fx", "autoinstall"].concat(win.fxScan.filter(function (r) { return r.eligible && !r.current; }).map(function (r) { return r.key; })), "SETTING UP " + win.fxEligible + " GAME(S)…")
+                                    onClicked: win.runGame(["fx", "autoinstall"].concat(win.fxScan.filter(function (r) { return r.eligible && !r.current; }).map(function (r) { return r.key; })), win.t("SETTING UP ") + win.fxEligible + win.t(" GAME(S)…"))
                                 }
                             }
                             Repeater {
@@ -4192,12 +4232,12 @@ ShellRoot {
                                             Text { Layout.fillWidth: true; elide: Text.ElideRight; text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true }
                                             Text {
                                                 visible: !!modelData.advice
-                                                text: !modelData.advice ? "" : (modelData.advice.pick === "none" ? "no shaders possible"
+                                                text: !modelData.advice ? "" : (modelData.advice.pick === "none" ? win.t("no shaders possible")
                                                       : "★ " + (modelData.advice.pick === "reshade" ? "ReShade" : "vkBasalt"))
                                                 color: modelData.advice && modelData.advice.pick === "none" ? pal.dim : pal.amber
                                                 font.family: win.mono; font.pixelSize: 10
                                                 MouseArea { id: advMa; anchors.fill: parent; hoverEnabled: true }
-                                                Tip { visible: advMa.containsMouse && !!modelData.advice; text: modelData.advice ? modelData.advice.reasons.join("\n") : "" }
+                                                Tip { visible: advMa.containsMouse && !!modelData.advice; text: modelData.advice ? modelData.advice.reasons.map(win.t).join("\n") : "" }
                                             }
                                             Text {
                                                 visible: !!modelData.current
@@ -4205,17 +4245,17 @@ ShellRoot {
                                                 color: pal.ok; font.family: win.mono; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 260
                                             }
                                             MiniBtn {
-                                                width: 70; height: 28; primary: false; label: "OPEN"
+                                                width: 70; height: 28; primary: false; label: win.t("OPEN")
                                                 onClicked: {
                                                     var g = win.games.filter(function (x) { return x.key === modelData.key; })[0];
                                                     if (g) { win.selectGame(g); win.fxScope = "game"; win.openFx(); }
                                                 }
                                             }
                                             MiniBtn {
-                                                width: 80; height: 28; label: "SET UP"
+                                                width: 80; height: 28; label: win.t("SET UP")
                                                 visible: modelData.eligible
                                                 on: !win.gameBusy
-                                                onClicked: win.runGame(["fx", "autoinstall", modelData.key], "SETTING UP " + modelData.name.toUpperCase() + "…")
+                                                onClicked: win.runGame(["fx", "autoinstall", modelData.key], win.t("SETTING UP ") + modelData.name.toUpperCase() + "…")
                                             }
                                         }
                                         Text {
@@ -4224,15 +4264,15 @@ ShellRoot {
                                             color: modelData.sfx && modelData.sfx.count > 0 ? pal.text : pal.dim
                                             visible: modelData.eligible || (modelData.sfx && modelData.sfx.count > 0)
                                             text: modelData.sfx && modelData.sfx.count > 0
-                                                  ? "★ " + modelData.sfx.count + " presets · best: " + modelData.sfx.best.name + " (" + modelData.sfx.best.downloads + " downloads)"
-                                                  : "No ReShade presets on SweetFX DB → SET UP uses SHARPEN + AA"
+                                                  ? "★ " + modelData.sfx.count + win.t(" presets · best: ") + modelData.sfx.best.name + " (" + modelData.sfx.best.downloads + win.t(" downloads)")
+                                                  : win.t("No ReShade presets on SweetFX DB → SET UP uses SHARPEN + AA")
                                         }
                                         Text {
                                             Layout.fillWidth: true; wrapMode: Text.WordWrap
                                             visible: !!modelData.pcgw
                                             font.family: win.mono; font.pixelSize: 9; color: modelData.blocked ? pal.bad : pal.dim
                                             text: modelData.pcgw ? "PCGamingWiki: " + modelData.pcgw.status + " · " + modelData.pcgw.api
-                                                  + (modelData.defines.length ? " · depth: " + modelData.defines.join(", ") + " (set automatically)" : "")
+                                                  + (modelData.defines.length ? win.t(" · depth: ") + modelData.defines.join(", ") + win.t(" (set automatically)") : "")
                                                   + (modelData.pcgw.notes ? " — " + modelData.pcgw.notes : "") : ""
                                             maximumLineCount: 3; elide: Text.ElideRight
                                         }
@@ -4241,9 +4281,9 @@ ShellRoot {
                                             visible: modelData.blocked || (!!modelData.online && modelData.online.level !== "none")
                                             font.family: win.mono; font.pixelSize: 9
                                             color: modelData.blocked || modelData.online.level === "anticheat" ? pal.bad : pal.amber
-                                            text: modelData.blocked ? "✗ ReShade is banned or blocked in this game (PCGamingWiki): not touched"
-                                                  : (modelData.online.level === "anticheat" ? "✗ Anti-cheat (" + modelData.online.anticheats.join(", ") + "): not touched"
-                                                     : "⚠ Has online multiplayer/co-op: fine for single-player, check the game's rules online")
+                                            text: modelData.blocked ? win.t("✗ ReShade is banned or blocked in this game (PCGamingWiki): not touched")
+                                                  : (modelData.online.level === "anticheat" ? win.t("✗ Anti-cheat (") + modelData.online.anticheats.join(", ") + win.t("): not touched")
+                                                     : win.t("⚠ Has online multiplayer/co-op: fine for single-player, check the game's rules online"))
                                         }
                                         RowLayout {
                                             spacing: 6
@@ -4251,7 +4291,7 @@ ShellRoot {
                                                 visible: !!modelData.sfx
                                                 label: "PRESETS ↗"; onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/game/" + modelData.sfx.id + "/")
                                             }
-                                            Chip { label: "SEARCH NEXUS ↗"; tip: "Web search for ReShade presets of this game on Nexus Mods"; onClicked: Qt.openUrlExternally(modelData.nexus) }
+                                            Chip { label: win.t("SEARCH NEXUS ↗"); tip: win.t("Web search for ReShade presets of this game on Nexus Mods"); onClicked: Qt.openUrlExternally(modelData.nexus) }
                                             Chip {
                                                 visible: !!modelData.pcgw
                                                 label: "PCGW ↗"; onClicked: Qt.openUrlExternally("https://www.pcgamingwiki.com/wiki/ReShade#Compatibility_list")
@@ -4263,7 +4303,7 @@ ShellRoot {
                             EmptyHint {
                                 Layout.alignment: Qt.AlignHCenter; Layout.topMargin: 30; anchors.centerIn: undefined
                                 visible: win.fxScan.length === 0
-                                title: fxScanProc.running ? "SCANNING YOUR LIBRARY…" : "PRESS SCAN"
+                                title: fxScanProc.running ? win.t("SCANNING YOUR LIBRARY…") : win.t("PRESS SCAN")
                             }
                         }
                     }
@@ -4292,18 +4332,18 @@ ShellRoot {
                                     font.family: win.mono; font.pixelSize: 11; font.bold: true
                                     color: win.health.fail > 0 ? pal.bad : (win.health.warn > 0 ? pal.amber : pal.ok)
                                     text: win.health.fail > 0 || win.health.warn > 0
-                                          ? [win.health.fail > 0 ? win.health.fail + " problem" + (win.health.fail > 1 ? "s" : "") : "",
-                                             win.health.warn > 0 ? win.health.warn + " warning" + (win.health.warn > 1 ? "s" : "") : ""]
+                                          ? [win.health.fail > 0 ? win.health.fail + win.t(" problem") + (win.health.fail > 1 ? "s" : "") : "",
+                                             win.health.warn > 0 ? win.health.warn + win.t(" warning") + (win.health.warn > 1 ? "s" : "") : ""]
                                             .filter(function (x) { return x; }).join(" · ")
-                                            + "  —  nothing is changed from here: copy the command and run it in a terminal"
-                                          : "✓ Everything games need is in place (" + (win.health.vendors || []).join(", ").toUpperCase() + ")"
+                                            + win.t("  —  nothing is changed from here: copy the command and run it in a terminal")
+                                          : win.t("✓ Everything games need is in place (") + (win.health.vendors || []).join(", ").toUpperCase() + ")"
                                 }
-                                Chip { label: healthProc.running ? "CHECKING…" : "RECHECK"; on: !healthProc.running; onClicked: healthProc.running = true }
+                                Chip { label: healthProc.running ? win.t("CHECKING…") : win.t("RECHECK"); on: !healthProc.running; onClicked: healthProc.running = true }
                             }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 8
                                 visible: (win.health.installAll || "") !== ""
-                                Text { text: "ALL MISSING"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                Text { text: win.t("ALL MISSING"); color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                                 FixLine { Layout.fillWidth: true; cmd: win.health.installAll || "" }
                             }
                         }
@@ -4314,7 +4354,7 @@ ShellRoot {
                         radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
                         EmptyHint {
                             visible: !win.health.checks
-                            title: healthProc.running ? "CHECKING…" : "NO DATA"
+                            title: healthProc.running ? win.t("CHECKING…") : win.t("NO DATA")
                         }
                         ListView {
                             id: healthList
@@ -4331,7 +4371,7 @@ ShellRoot {
                                 Text {
                                     visible: index === 0 || healthList.model[index - 1].group !== modelData.group
                                     Layout.topMargin: index === 0 ? 2 : 8
-                                    text: ({ system: "SYSTEM", driver: "GPU DRIVER", vulkan: "VULKAN", libs: "32-BIT LIBRARIES" })[modelData.group] || modelData.group.toUpperCase()
+                                    text: ({ system: win.t("SYSTEM"), driver: win.t("GPU DRIVER"), vulkan: "VULKAN", libs: win.t("32-BIT LIBRARIES") })[modelData.group] || modelData.group.toUpperCase()
                                     color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 2; font.bold: true
                                 }
                                 Rectangle {
@@ -4350,13 +4390,13 @@ ShellRoot {
                                                 Layout.preferredWidth: 12; horizontalAlignment: Text.AlignHCenter
                                             }
                                             Text {
-                                                text: modelData.label; color: pal.text
+                                                text: win.t(modelData.label); color: pal.text
                                                 font.family: win.mono; font.pixelSize: 11
                                                 Layout.preferredWidth: Math.min(implicitWidth, 260); elide: Text.ElideRight
                                             }
                                             Text {
                                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                                text: modelData.detail
+                                                text: win.t(modelData.detail)
                                                 color: modelData.status === "ok" ? pal.dim : pal.text
                                                 font.family: win.mono; font.pixelSize: 10
                                             }
@@ -4381,8 +4421,8 @@ ShellRoot {
 
                     Hint {
                         text: !win.shaders.drivers ? "" :
-                              "Drivers: " + win.shaders.drivers.map(function (d) { return d.name + " " + d.version; }).join(" · ")
-                              + (win.shaders.lastDriverUpdate ? "  ·  last driver update " + win.dateOfEpoch(win.shaders.lastDriverUpdate) : "")
+                              win.t("Drivers: ") + win.shaders.drivers.map(function (d) { return d.name + " " + d.version; }).join(" · ")
+                              + (win.shaders.lastDriverUpdate ? win.t("  ·  last driver update ") + win.dateOfEpoch(win.shaders.lastDriverUpdate) : "")
                     }
                     // stale after a driver update / orphaned / Steam busy
                     Rectangle {
@@ -4396,21 +4436,21 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.amber; font.family: win.mono; font.pixelSize: 10
-                                text: (win.shaders.steamProcessing ? "Steam is compiling shaders right now; cleaning waits until it finishes. " : "")
-                                      + ((win.shaders.staleBytes || 0) > 0 ? win.human(win.shaders.staleBytes) + " of driver caches weren't used since the last driver update: they are stale. " : "")
-                                      + ((win.shaders.orphanBytes || 0) > 0 ? win.human(win.shaders.orphanBytes) + " belong to games that are no longer installed." : "")
+                                text: (win.shaders.steamProcessing ? win.t("Steam is compiling shaders right now; cleaning waits until it finishes. ") : "")
+                                      + ((win.shaders.staleBytes || 0) > 0 ? win.human(win.shaders.staleBytes) + win.t(" of driver caches weren't used since the last driver update: they are stale. ") : "")
+                                      + ((win.shaders.orphanBytes || 0) > 0 ? win.human(win.shaders.orphanBytes) + win.t(" belong to games that are no longer installed.") : "")
                             }
                             MiniBtn {
                                 visible: (win.shaders.staleBytes || 0) > 0
-                                width: 104; label: win.confirmShader === "stale" ? "CONFIRM?" : "CLEAN STALE"
+                                width: 104; label: win.confirmShader === "stale" ? win.t("CONFIRM?") : win.t("CLEAN STALE")
                                 on: !win.gameBusy && !win.shaders.steamProcessing
-                                onClicked: win.shaderAction(["shaderclean", "stale"], "stale", "CLEANING…")
+                                onClicked: win.shaderAction(["shaderclean", "stale"], "stale", win.t("CLEANING…"))
                             }
                             MiniBtn {
                                 visible: (win.shaders.orphanBytes || 0) > 0
-                                width: 112; label: win.confirmShader === "orphans" ? "CONFIRM?" : "CLEAN ORPHANS"
+                                width: 112; label: win.confirmShader === "orphans" ? win.t("CONFIRM?") : win.t("CLEAN ORPHANS")
                                 on: !win.gameBusy && !win.shaders.steamProcessing
-                                onClicked: win.shaderAction(["shaderclean", "orphans"], "orphans", "CLEANING…")
+                                onClicked: win.shaderAction(["shaderclean", "orphans"], "orphans", win.t("CLEANING…"))
                             }
                         }
                     }
@@ -4420,7 +4460,7 @@ ShellRoot {
                         radius: 8; color: pal.panel; border.color: pal.border; border.width: 1; clip: true
                         EmptyHint {
                             visible: !win.shaders.games || (win.shaders.games.length === 0 && win.shaders.global.length === 0)
-                            title: shaderProc.running ? "MEASURING CACHES…" : "NO SHADER CACHES"
+                            title: shaderProc.running ? win.t("MEASURING CACHES…") : win.t("NO SHADER CACHES")
                         }
                         ListView {
                             id: shaderList
@@ -4441,18 +4481,18 @@ ShellRoot {
                                         RowLayout {
                                             spacing: 8
                                             Text {
-                                                text: modelData.global ? "DRIVER" : (modelData.installed ? "STEAM" : "ORPHAN")
+                                                text: modelData.global ? win.t("DRIVER") : (modelData.installed ? "STEAM" : win.t("ORPHAN"))
                                                 color: modelData.global ? pal.sky : (modelData.installed ? pal.accent : pal.bad)
                                                 font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
                                             }
                                             Text {
-                                                text: modelData.name || ("uninstalled app " + modelData.id)
+                                                text: modelData.name || (win.t("uninstalled app ") + modelData.id)
                                                 color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true; elide: Text.ElideRight
                                                 Layout.maximumWidth: 330
                                             }
                                             Text { text: win.human(modelData.total); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
-                                            Text { visible: modelData.stale === true; text: "STALE"; color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
-                                            Text { visible: modelData.running === true; text: "RUNNING"; color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.stale === true; text: win.t("STALE"); color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                            Text { visible: modelData.running === true; text: win.t("RUNNING"); color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
                                         }
                                         Text {
                                             Layout.fillWidth: true; elide: Text.ElideRight
@@ -4462,7 +4502,7 @@ ShellRoot {
                                                      "driver " + (win.human(modelData.driver) || "0"),
                                                      modelData.video > 0 ? "videos " + win.human(modelData.video) : "",
                                                      modelData.dxvk > 0 ? "dxvk " + win.human(modelData.dxvk) : "",
-                                                     modelData.other > 0 ? "other " + win.human(modelData.other) : ""]
+                                                     modelData.other > 0 ? win.t("other ") + win.human(modelData.other) : ""]
                                                     .filter(function (x) { return x !== ""; }).join("  ·  ")
                                         }
                                     }
@@ -4470,24 +4510,24 @@ ShellRoot {
                                         visible: !modelData.global && modelData.driver > 0
                                         width: 92; primary: false
                                         property string key: "steam:" + modelData.id + ":driver"
-                                        label: win.confirmShader === key ? "CONFIRM?" : "DRIVER CACHE"
+                                        label: win.confirmShader === key ? win.t("CONFIRM?") : win.t("DRIVER CACHE")
                                         on: !win.gameBusy && !modelData.running && !win.shaders.steamProcessing
-                                        onClicked: win.shaderAction(["shaderclean", "steam:" + modelData.id, "driver"], key, "CLEANING…")
+                                        onClicked: win.shaderAction(["shaderclean", "steam:" + modelData.id, "driver"], key, win.t("CLEANING…"))
                                     }
                                     MiniBtn {
                                         width: 70; tint: pal.bad
                                         property string key: (modelData.global ? "global:" + modelData.id : "steam:" + modelData.id + ":all")
-                                        label: win.confirmShader === key ? "CONFIRM?" : (modelData.global ? "CLEAN" : "ALL")
+                                        label: win.confirmShader === key ? win.t("CONFIRM?") : (modelData.global ? win.t("CLEAN") : win.t("ALL"))
                                         on: !win.gameBusy && !modelData.running && (modelData.global || !win.shaders.steamProcessing)
                                         onClicked: win.shaderAction(modelData.global ? ["shaderclean", "global:" + modelData.id]
-                                                                                     : ["shaderclean", "steam:" + modelData.id, "all"], key, "CLEANING…")
+                                                                                     : ["shaderclean", "steam:" + modelData.id, "all"], key, win.t("CLEANING…"))
                                     }
                                 }
                             }
                         }
                     }
                     Hint {
-                        text: "pipelines = Steam's Fossilize recordings (driver-independent, used to pre-compile) · driver = the GPU driver's compiled cache (NVIDIA nvidiav1 / Mesa for AMD-Intel), rebuilt after every driver update. DRIVER CACHE clears only that; ALL clears the game's whole folder. Either way the next launches stutter a little while caches rebuild."
+                        text: win.t("pipelines = Steam's Fossilize recordings (driver-independent, used to pre-compile) · driver = the GPU driver's compiled cache (NVIDIA nvidiav1 / Mesa for AMD-Intel), rebuilt after every driver update. DRIVER CACHE clears only that; ALL clears the game's whole folder. Either way the next launches stutter a little while caches rebuild.")
                     }
                 }
 
@@ -4603,10 +4643,10 @@ ShellRoot {
                                     Layout.fillWidth: true; spacing: 4
                                     RowLayout {
                                         spacing: 8
-                                        Text { text: "RUNNING NOW"; color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
+                                        Text { text: win.t("RUNNING NOW"); color: pal.text; font.family: win.mono; font.pixelSize: 10; font.bold: true; font.letterSpacing: 2 }
                                         Text {
                                             visible: !(win.gstat.running || []).length
-                                            text: "no game  ·  Steam " + ((win.gstat.tools || {}).steam ? "open" : "closed")
+                                            text: win.t("no game  ·  Steam ") + ((win.gstat.tools || {}).steam ? "open" : "closed")
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 10
                                         }
                                     }
@@ -4623,7 +4663,7 @@ ShellRoot {
                                                 text: [modelData.uptime != null ? win.durationText(modelData.uptime) : "",
                                                        modelData.proton ? modelData.proton : "",
                                                        modelData.fx ? modelData.fx + " on" : "",
-                                                       win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode active" : "",
+                                                       win.gstat.gamemode && win.gstat.gamemode.active ? win.t("GameMode active") : "",
                                                        "pid " + modelData.pid].filter(function (x) { return x; }).join("  ·  ")
                                             }
                                         }
@@ -4643,7 +4683,7 @@ ShellRoot {
                                                 text: modelData.vrr ? "VRR on" : "VRR off"; color: modelData.vrr ? pal.ok : pal.dim
                                                 font.family: win.mono; font.pixelSize: 10
                                                 MouseArea { id: vrrMa; anchors.fill: parent; hoverEnabled: true }
-                                                Tip { visible: vrrMa.containsMouse; text: modelData.vrr ? "Variable refresh rate (FreeSync / G-Sync) is on." : "Variable refresh rate is off. In Hyprland, misc:vrr turns it on (2 = fullscreen apps only, good for games)." }
+                                                Tip { visible: vrrMa.containsMouse; text: modelData.vrr ? win.t("Variable refresh rate (FreeSync / G-Sync) is on.") : win.t("Variable refresh rate is off. In Hyprland, misc:vrr turns it on (2 = fullscreen apps only, good for games).") }
                                             }
                                         }
                                     }
@@ -4663,9 +4703,9 @@ ShellRoot {
                                 id: gpuCard
                                 Layout.preferredHeight: stRow1.cardH > 0 ? stRow1.cardH : implicitHeight
                                 title: "GPU"; sub: (win.gstat.gpu || {}).name || ""
-                                StatRow { label: "DRIVER"; value: (win.gstat.gpu || {}).driver || "?" }
+                                StatRow { label: win.t("DRIVER"); value: (win.gstat.gpu || {}).driver || "?" }
                                 Meter {
-                                    label: "LOAD"; value: (win.gstat.gpu || {}).load || 0; max: 100; warnAt: 2
+                                    label: win.t("LOAD"); value: (win.gstat.gpu || {}).load || 0; max: 100; warnAt: 2
                                     text: (win.gstat.gpu || {}).load != null ? win.gstat.gpu.load + " %" : "—"
                                 }
                                 Meter {
@@ -4673,27 +4713,27 @@ ShellRoot {
                                     text: (win.gstat.gpu || {}).vramTotal ? win.human(win.gstat.gpu.vramUsed) + " / " + win.human(win.gstat.gpu.vramTotal) : "—"
                                 }
                                 Meter {
-                                    label: "POWER"; value: (win.gstat.gpu || {}).power || 0; max: (win.gstat.gpu || {}).powerLimit || 0
+                                    label: win.t("POWER"); value: (win.gstat.gpu || {}).power || 0; max: (win.gstat.gpu || {}).powerLimit || 0
                                     text: (win.gstat.gpu || {}).power != null ? Math.round(win.gstat.gpu.power) + " W"
                                           + ((win.gstat.gpu || {}).powerLimit ? " / " + Math.round(win.gstat.gpu.powerLimit) + " W" : "") : "—"
                                 }
                                 StatRow {
-                                    label: "TEMPERATURE"; value: (win.gstat.gpu || {}).temp != null ? win.gstat.gpu.temp + " °C" : "—"
+                                    label: win.t("TEMPERATURE"); value: (win.gstat.gpu || {}).temp != null ? win.gstat.gpu.temp + " °C" : "—"
                                     tone: (win.gstat.gpu || {}).temp >= 85 ? pal.bad : ((win.gstat.gpu || {}).temp >= 75 ? pal.amber : pal.text)
                                 }
                                 StatRow {
-                                    label: "CLOCK"
+                                    label: win.t("CLOCK")
                                     value: (win.gstat.gpu || {}).clock != null ? win.gstat.gpu.clock + " MHz"
                                            + ((win.gstat.gpu || {}).clockMax ? " / " + win.gstat.gpu.clockMax : "") : "—"
-                                    note: (win.gstat.gpu || {}).pstate ? "state " + win.gstat.gpu.pstate : ""
+                                    note: (win.gstat.gpu || {}).pstate ? win.t("state ") + win.gstat.gpu.pstate : ""
                                 }
                                 StatRow {
                                     visible: ((win.gstat.gpu || {}).limits || []).length > 0
-                                    label: "HELD BACK BY"
+                                    label: win.t("HELD BACK BY")
                                     value: ((win.gstat.gpu || {}).limits || []).join(", ")
                                     tone: ((win.gstat.gpu || {}).limits || []).some(function (x) { return /thermal|slowdown|brake/.test(x); }) ? pal.amber : pal.text
-                                    note: ((win.gstat.gpu || {}).limits || []).indexOf("idle") >= 0 ? "nothing heavy to render right now"
-                                          : (((win.gstat.gpu || {}).limits || []).indexOf("power cap") >= 0 ? "at its power limit: normal under load, odd at idle" : "")
+                                    note: ((win.gstat.gpu || {}).limits || []).indexOf("idle") >= 0 ? win.t("nothing heavy to render right now")
+                                          : (((win.gstat.gpu || {}).limits || []).indexOf("power cap") >= 0 ? win.t("at its power limit: normal under load, odd at idle") : "")
                                 }
                                 Item { Layout.fillHeight: true }
                             }
@@ -4701,18 +4741,18 @@ ShellRoot {
                             Card {
                                 id: cpuCard
                                 Layout.preferredHeight: stRow1.cardH > 0 ? stRow1.cardH : implicitHeight
-                                title: "CPU · MEMORY"; sub: (win.gstat.system || {}).cpu || ""
+                                title: win.t("CPU · MEMORY"); sub: (win.gstat.system || {}).cpu || ""
                                 StatRow {
                                     label: "CPU"
-                                    value: ((win.gstat.system || {}).threads || "?") + " threads · " + ((win.gstat.system || {}).mhz || "?") + " MHz"
+                                    value: ((win.gstat.system || {}).threads || "?") + win.t(" threads · ") + ((win.gstat.system || {}).mhz || "?") + " MHz"
                                            + ((win.gstat.system || {}).temp != null ? " · " + win.gstat.system.temp + " °C" : "")
-                                    note: (win.gstat.system || {}).load != null ? "load " + win.gstat.system.load : ""
+                                    note: (win.gstat.system || {}).load != null ? win.t("load ") + win.gstat.system.load : ""
                                     tone: (win.gstat.system || {}).temp >= 85 ? pal.bad : ((win.gstat.system || {}).temp >= 75 ? pal.amber : pal.text)
                                 }
                                 StatRow {
                                     label: "GOVERNOR"
                                     value: (win.gstat.governor || "?") + " (" + (win.gstat.cpufreq_driver || "?") + ")"
-                                    note: win.gstat.gamemode && win.gstat.gamemode.active ? "GameMode has it on performance" : "GameMode switches it to performance while you play"
+                                    note: win.gstat.gamemode && win.gstat.gamemode.active ? win.t("GameMode has it on performance") : win.t("GameMode switches it to performance while you play")
                                 }
                                 Meter {
                                     label: "RAM"; value: (win.gstat.system || {}).memUsed || 0; max: (win.gstat.system || {}).memTotal || 0
@@ -4726,11 +4766,11 @@ ShellRoot {
                                 StatRow { label: "KERNEL"; value: (win.gstat.system || {}).kernel || "?" }
                                 StatRow {
                                     property var sc: win.gstat.sched || {}
-                                    label: "SCHEDULER"
-                                    value: sc.running && sc.current ? "sched-ext: " + sc.current : "kernel default (EEVDF)"
-                                    note: !win.gstat.sched ? "scx-tools not installed"
-                                          : [sc.whilePlaying ? "while playing: " + sc.whilePlaying.replace(":", " · ") : "",
-                                             sc.bootDefault ? "at boot: " + sc.bootDefault + (sc.bootMode ? " · " + sc.bootMode : "") : ""]
+                                    label: win.t("SCHEDULER")
+                                    value: sc.running && sc.current ? "sched-ext: " + sc.current : win.t("kernel default (EEVDF)")
+                                    note: !win.gstat.sched ? win.t("scx-tools not installed")
+                                          : [sc.whilePlaying ? win.t("while playing: ") + sc.whilePlaying.replace(":", " · ") : "",
+                                             sc.bootDefault ? win.t("at boot: ") + sc.bootDefault + (sc.bootMode ? " · " + sc.bootMode : "") : ""]
                                             .filter(function (x) { return x; }).join("  ·  ")
                                 }
                                 // lavd's Gaming mode: now, only while a game runs, or at every boot
@@ -4739,45 +4779,45 @@ ShellRoot {
                                     visible: !!win.gstat.sched
                                     property var sc: win.gstat.sched || {}
                                     Chip {
-                                        label: parent.sc.running ? "STOP" : "LAVD GAMING NOW"
+                                        label: parent.sc.running ? win.t("STOP") : win.t("LAVD GAMING NOW")
                                         on: !win.gameBusy
-                                        tip: parent.sc.running ? "Back to the kernel's scheduler (asks for your password)"
-                                             : "scx_lavd in Gaming mode until you stop it or reboot (asks for your password)"
-                                        onClicked: win.runGame(parent.sc.running ? ["sched", "stop"] : ["sched", "start", "lavd", "gaming"], "SCHEDULER…")
+                                        tip: parent.sc.running ? win.t("Back to the kernel's scheduler (asks for your password)")
+                                             : win.t("scx_lavd in Gaming mode until you stop it or reboot (asks for your password)")
+                                        onClicked: win.runGame(parent.sc.running ? ["sched", "stop"] : ["sched", "start", "lavd", "gaming"], win.t("SCHEDULER…"))
                                     }
                                     Chip {
-                                        label: "WHILE PLAYING"; tint: pal.ok; active: parent.sc.whilePlaying === "lavd:gaming"
+                                        label: win.t("WHILE PLAYING"); tint: pal.ok; active: parent.sc.whilePlaying === "lavd:gaming"
                                         on: !win.gameBusy
-                                        tip: "lavd Gaming starts with each game and stops when it closes (only if no scheduler was running)"
-                                        onClicked: win.runGame(["sched", "playing", parent.sc.whilePlaying ? "off" : "lavd:gaming"], "SAVING…")
+                                        tip: win.t("lavd Gaming starts with each game and stops when it closes (only if no scheduler was running)")
+                                        onClicked: win.runGame(["sched", "playing", parent.sc.whilePlaying ? "off" : "lavd:gaming"], win.t("SAVING…"))
                                     }
                                     Chip {
-                                        label: win.confirmSched === "boot" ? "CONFIRM?" : "AT BOOT"
+                                        label: win.confirmSched === "boot" ? win.t("CONFIRM?") : win.t("AT BOOT")
                                         tint: pal.ok; active: parent.sc.bootDefault === "lavd"
                                         on: !win.gameBusy
-                                        tip: "Writes default_sched in /etc/scx_loader.toml (password): lavd Gaming from every boot"
+                                        tip: win.t("Writes default_sched in /etc/scx_loader.toml (password): lavd Gaming from every boot")
                                         onClicked: {
                                             if (win.confirmSched !== "boot") { win.confirmSched = "boot"; return; }
                                             win.confirmSched = "";
-                                            win.runGame(parent.sc.bootDefault === "lavd" ? ["sched", "boot", "none"] : ["sched", "boot", "lavd", "Gaming"], "SCHEDULER…");
+                                            win.runGame(parent.sc.bootDefault === "lavd" ? ["sched", "boot", "none"] : ["sched", "boot", "lavd", "Gaming"], win.t("SCHEDULER…"));
                                         }
                                     }
                                     Chip {
-                                        label: win.confirmSched === "nopass" ? "CONFIRM?" : "NO PASSWORD"
+                                        label: win.confirmSched === "nopass" ? win.t("CONFIRM?") : win.t("NO PASSWORD")
                                         tint: pal.ok; active: parent.sc.noPassword === true
                                         on: !win.gameBusy
-                                        tip: "A polkit rule so your user switches schedulers without a password (needed for WHILE PLAYING without prompts)"
+                                        tip: win.t("A polkit rule so your user switches schedulers without a password (needed for WHILE PLAYING without prompts)")
                                         onClicked: {
                                             if (win.confirmSched !== "nopass") { win.confirmSched = "nopass"; return; }
                                             win.confirmSched = "";
-                                            win.runGame(["sched", "nopassword", parent.sc.noPassword ? "off" : "on"], "SCHEDULER…");
+                                            win.runGame(["sched", "nopassword", parent.sc.noPassword ? "off" : "on"], win.t("SCHEDULER…"));
                                         }
                                     }
                                 }
                                 StatRow {
                                     label: "MAX_MAP_COUNT"; value: String(win.gstat.max_map_count || "?")
                                     tone: win.gstat.max_map_count_ok ? pal.text : pal.amber
-                                    note: win.gstat.max_map_count_ok ? "≥ 1048576: enough for any game" : "below 1048576: some games crash (see HEALTH)"
+                                    note: win.gstat.max_map_count_ok ? win.t("≥ 1048576: enough for any game") : win.t("below 1048576: some games crash (see HEALTH)")
                                 }
                                 Item { Layout.fillHeight: true }
                             }
@@ -4786,19 +4826,19 @@ ShellRoot {
                         // last game sessions (recorded while each game ran)
                         Card {
                             Layout.fillWidth: true
-                            title: "LAST SESSIONS"
-                            sub: (win.gstat.sessions || []).length ? "" : "play a game: a summary appears here when it closes"
+                            title: win.t("LAST SESSIONS")
+                            sub: (win.gstat.sessions || []).length ? "" : win.t("play a game: a summary appears here when it closes")
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 6
                                 Text {
                                     Layout.fillWidth: true; color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                    text: "Temperatures, load and power are sampled every 5 s while a game runs (Steam through the deck, Umbral 0.10+)."
+                                    text: win.t("Temperatures, load and power are sampled every 5 s while a game runs (Steam through the deck, Umbral 0.10+).")
                                 }
                                 Chip {
-                                    label: win.gstat.sessionSummary === false ? "SUMMARY OFF" : "✓ SUMMARY"
+                                    label: win.gstat.sessionSummary === false ? win.t("SUMMARY OFF") : win.t("✓ SUMMARY")
                                     tint: pal.ok; active: win.gstat.sessionSummary !== false; on: !win.gameBusy
-                                    tip: "Record each game session and notify a summary when it ends"
-                                    onClicked: win.runGame(["sessions", win.gstat.sessionSummary === false ? "on" : "off"], "SAVING…")
+                                    tip: win.t("Record each game session and notify a summary when it ends")
+                                    onClicked: win.runGame(["sessions", win.gstat.sessionSummary === false ? "on" : "off"], win.t("SAVING…"))
                                 }
                             }
                             Repeater {
@@ -4817,7 +4857,7 @@ ShellRoot {
                                         color: (modelData.gpuTempMax || 0) >= 85 || (modelData.cpuTempMax || 0) >= 90 ? pal.amber : pal.text
                                         text: [modelData.gpuTempMax != null ? "GPU " + modelData.gpuTempMax + "°" : "",
                                                modelData.cpuTempMax != null ? "CPU " + modelData.cpuTempMax + "°" : "",
-                                               modelData.gpuLoadAvg != null ? "load " + Math.round(modelData.gpuLoadAvg) + "%" : "",
+                                               modelData.gpuLoadAvg != null ? win.t("load ") + Math.round(modelData.gpuLoadAvg) + "%" : "",
                                                modelData.gpuPowerMax != null ? Math.round(modelData.gpuPowerMax) + " W" : "",
                                                modelData.vramMax != null ? "VRAM " + (modelData.vramMax / 1024).toFixed(1) + " GB" : ""]
                                               .filter(function (x) { return x; }).join("  ·  ")
@@ -4855,37 +4895,37 @@ ShellRoot {
                             Layout.fillHeight: stRow2.columns === 2
                             spacing: 8
                             Card {
-                                title: "GAMING TOOLS"
+                                title: win.t("GAMING TOOLS")
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 8
                                     StatRow {
                                         label: "GAMEMODE"
-                                        value: !win.gstat.gamemode ? "" : (!win.gstat.gamemode.installed ? "not installed"
-                                               : ((win.gstat.tools || {}).gamemode || "") + (win.gstat.gamemode.active ? " · active" : " · idle"))
+                                        value: !win.gstat.gamemode ? "" : (!win.gstat.gamemode.installed ? win.t("not installed")
+                                               : ((win.gstat.tools || {}).gamemode || "") + (win.gstat.gamemode.active ? win.t(" · active") : win.t(" · idle")))
                                         tone: win.gstat.gamemode && win.gstat.gamemode.installed ? pal.text : pal.amber
-                                        note: !win.gstat.gamemode ? "" : (win.gstat.gamemode.ingroup ? "in the gamemode group"
-                                              : (win.gstat.gamemode.pending ? "group added: log out and back in" : "not in the gamemode group: it can't switch the governor"))
+                                        note: !win.gstat.gamemode ? "" : (win.gstat.gamemode.ingroup ? win.t("in the gamemode group")
+                                              : (win.gstat.gamemode.pending ? win.t("group added: log out and back in") : win.t("not in the gamemode group: it can't switch the governor")))
                                     }
                                     MiniBtn {
                                         visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup && !win.gstat.gamemode.pending
-                                        width: 96; height: 26; label: win.confirmJoin ? "CONFIRM?" : "JOIN GROUP"
+                                        width: 96; height: 26; label: win.confirmJoin ? win.t("CONFIRM?") : win.t("JOIN GROUP")
                                         on: !win.gameBusy
                                         onClicked: {
                                             if (!win.confirmJoin) { win.confirmJoin = true; return; }
                                             win.confirmJoin = false;
-                                            win.runGame(["gamejoin"], "JOINING…");
+                                            win.runGame(["gamejoin"], win.t("JOINING…"));
                                         }
                                     }
                                 }
-                                StatRow { label: "MANGOHUD"; value: win.gstat.mangohud ? ((win.gstat.tools || {}).mangohud || "installed") : "not installed"; tone: win.gstat.mangohud ? pal.text : pal.amber }
-                                StatRow { label: "GAMESCOPE"; value: win.gstat.gamescope ? ((win.gstat.tools || {}).gamescope || "installed") : "not installed (optional)" }
-                                StatRow { label: "STEAM"; value: (win.gstat.tools || {}).steam ? "running" : "closed"; note: ((win.gstat.tools || {}).protons || 0) + " Proton builds available" }
-                                StatRow { label: "NTSYNC"; value: (win.gstat.tools || {}).ntsync ? "available" : "not available"; note: "kernel sync for Wine/Proton" }
+                                StatRow { label: win.t("MANGOHUD"); value: win.gstat.mangohud ? ((win.gstat.tools || {}).mangohud || "installed") : win.t("not installed"); tone: win.gstat.mangohud ? pal.text : pal.amber }
+                                StatRow { label: "GAMESCOPE"; value: win.gstat.gamescope ? ((win.gstat.tools || {}).gamescope || "installed") : win.t("not installed (optional)") }
+                                StatRow { label: "STEAM"; value: (win.gstat.tools || {}).steam ? "running" : "closed"; note: ((win.gstat.tools || {}).protons || 0) + win.t(" Proton builds available") }
+                                StatRow { label: "NTSYNC"; value: (win.gstat.tools || {}).ntsync ? "available" : win.t("not available"); note: win.t("kernel sync for Wine/Proton") }
                                 StatRow {
                                     label: "SHADERS"
                                     value: [(win.gstat.tools || {}).reshade ? "ReShade " + win.gstat.tools.reshade : "",
                                             (win.gstat.tools || {}).vkbasalt ? "vkBasalt " + win.gstat.tools.vkbasalt.replace(/-[^-]*$/, "") : ""]
-                                           .filter(function (x) { return x; }).join(" · ") || "none installed"
+                                           .filter(function (x) { return x; }).join(" · ") || win.t("none installed")
                                     note: "GAMING → FX"
                                 }
                             }
@@ -4893,46 +4933,46 @@ ShellRoot {
                             Card {
                                 Layout.fillHeight: stRow2.columns === 2
                                 property var lib: win.gstat.library || {}
-                                title: "LIBRARY · STORAGE"
-                                sub: lib.games ? lib.games.steam + " Steam · " + lib.games.umbral + " Umbral · " + lib.games.wrapped + " through the deck · " + lib.games.fx + " with shaders" : ""
+                                title: win.t("LIBRARY · STORAGE")
+                                sub: lib.games ? lib.games.steam + " Steam · " + lib.games.umbral + " Umbral · " + lib.games.wrapped + win.t(" through the deck · ") + lib.games.fx + win.t(" with shaders") : ""
                                 Repeater {
                                     model: (win.gstat.library || {}).disks || []
                                     delegate: Meter {
                                         required property var modelData
-                                        label: "DISK " + modelData.mount
+                                        label: win.t("DISK ") + modelData.mount
                                         value: modelData.size - modelData.free; max: modelData.size; warnAt: 0.9
-                                        text: win.human(modelData.free) + " free of " + win.human(modelData.size)
+                                        text: win.human(modelData.free) + win.t(" free of ") + win.human(modelData.size)
                                     }
                                 }
                                 StatRow {
-                                    label: "SHADER CACHES"
+                                    label: win.t("SHADER CACHES")
                                     value: (win.gstat.library || {}).shaders ? win.human(win.gstat.library.shaders.total) : "—"
                                     note: (win.gstat.library || {}).shaders && (win.gstat.library.shaders.stale + win.gstat.library.shaders.orphan) > 0
-                                          ? win.human(win.gstat.library.shaders.stale + win.gstat.library.shaders.orphan) + " can be cleaned (SHADERS)" : "nothing to clean"
+                                          ? win.human(win.gstat.library.shaders.stale + win.gstat.library.shaders.orphan) + win.t(" can be cleaned (SHADERS)") : win.t("nothing to clean")
                                 }
                                 StatRow {
                                     label: "PREFIXES"
                                     value: (win.gstat.library || {}).prefixes ? win.human(win.gstat.library.prefixes.total) + " · " + win.gstat.library.prefixes.count : "—"
                                     note: (win.gstat.library || {}).prefixes && win.gstat.library.prefixes.orphans > 0
-                                          ? win.gstat.library.prefixes.orphans + " orphan(s) (PREFIXES)" : "no orphans"
+                                          ? win.gstat.library.prefixes.orphans + win.t(" orphan(s) (PREFIXES)") : win.t("no orphans")
                                 }
                                 StatRow {
-                                    label: "GPU DRIVER"
-                                    value: (win.gstat.library || {}).driverUpdate ? "updated " + win.dateOfEpoch(win.gstat.library.driverUpdate) : "—"
+                                    label: win.t("GPU DRIVER")
+                                    value: (win.gstat.library || {}).driverUpdate ? win.t("updated ") + win.dateOfEpoch(win.gstat.library.driverUpdate) : "—"
                                     note: (win.gstat.library || {}).driverPkgs || ""
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 8
                                     StatRow {
-                                        label: "HEALTH"
+                                        label: win.t("HEALTH")
                                         property var h: (win.gstat.library || {}).health || {}
-                                        value: h.fail === undefined ? "—" : (h.fail === 0 && h.warn === 0 ? "all good"
-                                               : [h.fail ? h.fail + " problem(s)" : "", h.warn ? h.warn + " warning(s)" : ""].filter(function (x) { return x; }).join(" · "))
+                                        value: h.fail === undefined ? "—" : (h.fail === 0 && h.warn === 0 ? win.t("all good")
+                                               : [h.fail ? h.fail + win.t(" problem(s)") : "", h.warn ? h.warn + win.t(" warning(s)") : ""].filter(function (x) { return x; }).join(" · "))
                                         tone: h.fail > 0 ? pal.bad : (h.warn > 0 ? pal.amber : pal.ok)
                                     }
-                                    Chip { label: "HEALTH →"; onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                                    Chip { label: win.t("HEALTH →"); onClicked: { win.gameView = "health"; healthProc.running = true; } }
                                 }
-                                Text { text: "RECENTLY PLAYED"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1; Layout.topMargin: 4 }
+                                Text { text: win.t("RECENTLY PLAYED"); color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1; Layout.topMargin: 4 }
                                 Repeater {
                                     model: (win.gstat.library || {}).recent || []
                                     delegate: RowLayout {
@@ -4949,12 +4989,12 @@ ShellRoot {
 
                             Card {
                                 Layout.fillHeight: true; Layout.minimumHeight: 230
-                                title: "LIVE"; sub: "last 5 minutes while STATUS is open"
+                                title: win.t("LIVE"); sub: win.t("last 5 minutes while STATUS is open")
                                 GridLayout {
                                     Layout.fillWidth: true; Layout.fillHeight: true
                                     columns: 2; columnSpacing: 10; rowSpacing: 8
                                     Spark {
-                                        label: "GPU LOAD"; values: win.stHist.gpuLoad; max: 100
+                                        label: win.t("GPU LOAD"); values: win.stHist.gpuLoad; max: 100
                                         current: (win.gstat.gpu || {}).load != null ? win.gstat.gpu.load + " %" : "—"
                                     }
                                     Spark {
@@ -4966,7 +5006,7 @@ ShellRoot {
                                         current: (win.gstat.system || {}).temp != null ? win.gstat.system.temp + " °C" : "—"
                                     }
                                     Spark {
-                                        label: "RAM · VRAM %"; values: win.stHist.ram; max: 100; tint: pal.sky
+                                        label: win.t("RAM · VRAM %"); values: win.stHist.ram; max: 100; tint: pal.sky
                                         current: Math.round(win.stHist.ram.length ? win.stHist.ram[win.stHist.ram.length - 1] : 0) + " % · "
                                                  + Math.round(win.stHist.vram.length ? win.stHist.vram[win.stHist.vram.length - 1] : 0) + " %"
                                     }
@@ -4987,7 +5027,7 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 0
                     ActBtn {
-                        glyph: ""; label: "REFRESH"
+                        glyph: ""; label: win.t("REFRESH")
                         on: !win.gameBusy
                         onClicked: { win.gameLog = ""; win.openGaming(); }
                     }

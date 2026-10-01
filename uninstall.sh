@@ -9,6 +9,7 @@ fi
 
 rm -f "$HOME/.local/bin/control-deck"
 rm -f "$HOME/.config/quickshell/control-deck/shell.qml"
+rm -f "$HOME/.config/quickshell/control-deck/es.js"
 rm -f "$HOME/.config/quickshell/control-deck-overlay/shell.qml"
 rmdir "$HOME/.config/quickshell/control-deck-overlay" 2>/dev/null || true
 rmdir "$HOME/.config/quickshell/control-deck" 2>/dev/null || true

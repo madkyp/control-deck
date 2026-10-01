@@ -1437,6 +1437,22 @@ eq "…and nothing added" "$("$CD" sessions | jq length)" 1
 CONTROL_DECK_SESSION_MIN=60 SteamAppId=100 "$CD" run "$T/fake/sgame" >/dev/null 2>&1
 eq "short runs (< 1 min) aren't kept" "$("$CD" sessions | jq length)" 1
 unset CONTROL_DECK_SESSION_MIN CONTROL_DECK_SESSION_EVERY CONTROL_DECK_GPU_VENDOR CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING
+section "Interface language (ESP/ENG)"
+rm -f "$HOME/.local/share/control-deck/ui.json"
+eq "default follows the locale (es_ES)" "$(LC_ALL= LC_MESSAGES= LANG=es_ES.UTF-8 "$CD" uilang)" es
+eq "default follows the locale (en_US)" "$(LC_ALL= LC_MESSAGES= LANG=en_US.UTF-8 "$CD" uilang)" en
+"$CD" uilang es >/dev/null
+eq "saved choice wins over the locale" "$(LANG=en_US.UTF-8 "$CD" uilang)" es
+"$CD" uilang fr >/dev/null 2>&1; eq "unknown language refused" "$?" 2
+eq "…and the saved one is kept" "$("$CD" uilang)" es
+# every key of es.js must still be a string of the GUI or the backend, or it is dead
+src="$(cat "$ROOT/quickshell/shell.qml" "$CD")"; src="${src//\'\"\'\"\'/\'}"
+dead=0
+while IFS= read -r k; do [[ "$src" == *"$k"* ]] || { dead=$((dead + 1)); echo "    dead key: $k"; }
+done < <(sed -n 's/^    "\(\([^"\\]\|\\.\)*\)": .*/\1/p' "$ROOT/quickshell/es.js")
+eq "no dead Spanish keys" "$dead" 0
+nkeys="$(grep -c '^    "' "$ROOT/quickshell/es.js")"
+yes "es.js has the keys" "(( nkeys > 600 ))"
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

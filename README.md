@@ -189,6 +189,7 @@ A running deck reloads its window by itself when the new UI is installed. Your h
 - From your app launcher: **"Control Deck"**.
 - From a terminal: `qs -c control-deck`
 - Open straight on a tab: `CONTROL_DECK_VIEW=updates qs -c control-deck` (`manage`, `store`, `updates`, `system`).
+- Language: the **ESP / ENG** switch next to the title changes the whole interface between English and Spanish. The first time it follows your system language; the choice is saved (`control-deck uilang es|en`). Logs and notifications stay in English.
 - Full CLI: `control-deck help` (e.g. `control-deck install <file>`, `control-deck updates`, `control-deck aurreview <pkg>`, `control-deck export`).
 
 ### Hyprland keybind (optional)
@@ -223,6 +224,7 @@ Type the repo (`github.com/user/repo` or `user/repo`) in **STORE** or in the **I
 
 - **`bin/control-deck`** — a bash script with all the logic, fully usable without the GUI (`control-deck help`).
 - **`quickshell/shell.qml`** — the UI, which only shows state and calls the backend through `Process`.
+- **`quickshell/es.js`** — the Spanish text: English string → Spanish, plus a few patterns for backend sentences that carry values. A missing entry just shows the English text, and `tests/run.sh` flags entries no longer used anywhere.
 
 Launchers created by the deck carry their own keys (`X-ControlDeck-Type`, `X-ControlDeck-File`, `X-ControlDeck-Github`, `X-ControlDeck-Version`…) so it knows where they came from, how to update them and how to remove them cleanly. History, launch logs and the launcher trash live in `~/.local/share/control-deck/`.
 

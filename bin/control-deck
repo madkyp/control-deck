@@ -4044,6 +4044,7 @@ Gaming
   fx link add|note|rm|get steam:<appid> <url> [label|notes]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
+  uilang [en|es]                The GUI's language (default: the system's)
   sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
   upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
@@ -5959,6 +5960,18 @@ cmd_sessions() {
     esac
 }
 
+# uilang [en|es] — the GUI's language (ESP/ENG in the header); first time: the system's
+UI_SETTINGS="$STATE_DIR/ui.json"
+cmd_uilang() {
+    case "${1:-}" in
+        en|es) mkdir -p "$STATE_DIR"; jq -n --arg l "$1" '{lang:$l}' > "$UI_SETTINGS"; echo "$1" ;;
+        "") local l; l="$(jq -r '.lang // empty' "$UI_SETTINGS" 2>/dev/null)"
+            if [[ -z "$l" ]]; then case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in es*) l=es ;; *) l=en ;; esac; fi
+            echo "$l" ;;
+        *) err "use: uilang [en|es]"; return 2 ;;
+    esac
+}
+
 main() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -6042,6 +6055,7 @@ main() {
         hook)        need "$1" "missing game key"; cmd_hook "$1" ;;
         session)     cmd_session "$1" "$2" ;;
         sched)       cmd_sched "$@" ;;
+        uilang)      cmd_uilang "${1:-}" ;;
         sessions)    cmd_sessions "${1:-}" ;;
         upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;
         gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;
