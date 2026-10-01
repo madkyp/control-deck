@@ -341,7 +341,7 @@ var ES = {
     "No ProtonDB report with launch options for this game yet.": "Aún no hay informes de ProtonDB con opciones de lanzamiento para este juego.",
     "No ReShade preset in that file (it needs a Techniques= line).": "No hay ningún preset de ReShade en ese archivo (necesita una línea Techniques=).",
     "No ReShade presets on SweetFX DB → SET UP uses SHARPEN + AA": "No hay presets de ReShade en SweetFX DB → CONFIGURAR usa NITIDEZ + AA",
-    "No game with that name on SweetFX Settings DB: try another name, or use a quick look.": "No hay ningún juego con ese nombre en SweetFX Settings DB: prueba otro nombre o usa un quick look.",
+    "No game with that name on SweetFX Settings DB: try another name, or use a quick look.": "No hay ningún juego con ese nombre en SweetFX Settings DB: prueba otro nombre o usa un look rápido.",
     "No key: effects stay on": "Sin tecla: los efectos quedan siempre activos",
     "No upscaler upgrade for this game ⓘ": "No hay mejoras de escalado para este juego ⓘ",
     "Nothing is used by enough similar players to recommend it. ": "Nada lo usan suficientes jugadores similares como para recomendarlo. ",

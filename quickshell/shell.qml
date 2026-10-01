@@ -49,6 +49,10 @@ ShellRoot {
             if (I18n.ES[s] !== undefined) return I18n.ES[s];
             for (var i = 0; i < I18n.PATTERNS.length; i++)
                 if (I18n.PATTERNS[i][0].test(s)) return s.replace(I18n.PATTERNS[i][0], I18n.PATTERNS[i][1]);
+            var m = /^([0-9][0-9\/]*)( .*)$/.exec(s);             // "6 GAMES", "2/3 READY"
+            if (m && I18n.ES[m[2]] !== undefined) return m[1] + I18n.ES[m[2]];
+            for (var k in I18n.ES)                                 // "REVIEWING foo…", "FAILED · 3"
+                if (/[ #:·] ?$/.test(k) && k.length > 3 && s.indexOf(k) === 0) return I18n.ES[k] + s.slice(k.length);
             return s;
         }
         Component.onCompleted: {
@@ -96,7 +100,7 @@ ShellRoot {
             { t: "URL",      e: "https://…  ·  github.com/user/repo" }
         ]
         property string logText: ""
-        property string status: win.t("AWAITING FILE")
+        property string status: "AWAITING FILE"
         property color  statusColor: pal.dim
         property bool   busy: installProc.running || detectManyProc.running || fetchProc.running
 
@@ -116,7 +120,7 @@ ShellRoot {
         }
         function reset() {
             queue = []; queuePaths = []; installPaths = []; logText = "";
-            status = win.t("AWAITING FILE"); statusColor = pal.dim;
+            status = "AWAITING FILE"; statusColor = pal.dim;
         }
         function pathFromUrl(u) {
             return decodeURIComponent(String(u).replace(/^file:\/\//, ""));
@@ -124,7 +128,7 @@ ShellRoot {
         function loadFiles(paths) {
             if (!paths || paths.length === 0) return;
             logText = ""; queue = []; queuePaths = paths;
-            status = win.t("ANALYZING…"); statusColor = pal.pink;
+            status = "ANALYZING…"; statusColor = pal.pink;
             detectManyProc.running = true;
         }
         function loadFile(p) { if (p) loadFiles([p]); }
@@ -140,7 +144,7 @@ ShellRoot {
                 view = "store"; queryField.text = t; runSearch(t);
             } else if (isUrl) {
                 fetchUrl = t; fetchedPath = ""; logText = ""; queue = [];
-                status = win.t("DOWNLOADING…"); statusColor = pal.pink;
+                status = "DOWNLOADING…"; statusColor = pal.pink;
                 fetchProc.running = true;
             } else {
                 loadFile(expandHome(t));
@@ -176,7 +180,7 @@ ShellRoot {
         property var    editArgs: []
         property var    uninstallArgs: []
         property string manageLog: ""
-        property string manageStatus: win.t("SELECT AN APP")
+        property string manageStatus: "SELECT AN APP"
         property bool confirmUninstall: false
         property bool manageBusy: editProc.running || uninstallProc.running
                                   || listProc.running || infoProc.running
@@ -215,7 +219,7 @@ ShellRoot {
             }
             return false;
         }
-        function applyFix(kind) { fixKind = kind; manageLog = ""; manageStatus = win.t("FIXING…"); fixProc.running = true; }
+        function applyFix(kind) { fixKind = kind; manageLog = ""; manageStatus = "FIXING…"; fixProc.running = true; }
         // Electron/Chromium flags for native Wayland, inserted before field codes
         function withWaylandFlags(e) {
             if (e.indexOf("ozone-platform") >= 0) return e;
@@ -229,7 +233,7 @@ ShellRoot {
         property var    results: []
         property var    installArgs: []
         property string storeLog: ""
-        property string storeStatus: win.t("SEARCH FOR AN APP")
+        property string storeStatus: "SEARCH FOR AN APP"
         property var    review: null        // AUR review shown before building
         property string reviewPkg: ""
         property bool   confirmRisky: false
@@ -238,20 +242,20 @@ ShellRoot {
         function runSearch(q) {
             if (!q || q.trim() === "") return;
             storeQuery = q.trim(); results = []; storeLog = ""; review = null;
-            storeStatus = win.t("SEARCHING…");
+            storeStatus = "SEARCHING…";
             searchProc.running = true;
         }
         function installPkg(src, id, remote) {
             if (src === "aur" && (!review || review.name !== id)) {
                 // AUR packages are reviewed before they are built
                 reviewPkg = id; review = null; confirmRisky = false; storeLog = "";
-                storeStatus = win.t("REVIEWING ") + id + "…";
+                storeStatus = "REVIEWING " + id + "…";
                 reviewProc.running = true;
                 return;
             }
             installArgs = [src, id, remote || ""];
             storeLog = ""; review = null;
-            storeStatus = win.t("INSTALLING ") + (src === "github" ? id.split("/").pop() : id) + "…";
+            storeStatus = "INSTALLING " + (src === "github" ? id.split("/").pop() : id) + "…";
             storeInstallProc.running = true;
         }
         function dateOf(epoch) { return epoch ? new Date(epoch * 1000).toISOString().substring(0, 10) : "?"; }
@@ -261,7 +265,7 @@ ShellRoot {
         property var    updArgs: []
         property var    timerArgs: []
         property string updLog: ""
-        property string updStatus: win.t("NOT CHECKED")
+        property string updStatus: "NOT CHECKED"
         property bool   updChecked: false
         property bool   autoCheck: false
         property bool   updBusy: checkProc.running || updProc.running || timerProc.running
@@ -276,7 +280,7 @@ ShellRoot {
         })
 
         function checkUpdates() {
-            updates = []; updStatus = win.t("CHECKING…"); newsAck = false;
+            updates = []; updStatus = "CHECKING…"; newsAck = false;
             checkProc.running = true; newsProc.running = true;
         }
         function runUpdate(args, label) {
@@ -287,7 +291,7 @@ ShellRoot {
         function guardedUpdate(args, label, touchesRepos) {
             if (touchesRepos && unreadNews.length > 0 && !newsAck) {
                 newsAck = true;
-                updStatus = win.t("READ THE ARCH NEWS FIRST · CLICK AGAIN");
+                updStatus = "READ THE ARCH NEWS FIRST · CLICK AGAIN";
                 return;
             }
             runUpdate(args, label);
@@ -398,7 +402,7 @@ ShellRoot {
             fxSearchProc.command = [scriptPath, "fx", "search", q]; fxSearchProc.running = true;
         }
         function fxLoadPresets(id) {
-            fxGameId = id; fxPresets = []; fxMsg = win.t("Loading presets…");
+            fxGameId = id; fxPresets = []; fxMsg = "Loading presets…";
             fxPresetsProc.command = [scriptPath, "fx", "presets", id]; fxPresetsProc.running = true;
         }
         function fxApply(k, label, cmd) {
@@ -582,7 +586,7 @@ ShellRoot {
             sysArgs = args; sysLog = ""; sysStatus = label;
             sysProc.running = true;
         }
-        function scanClean() { cleanItems = []; confirmClean = ""; sysStatus = win.t("SCANNING…"); scanProc.running = true; }
+        function scanClean() { cleanItems = []; confirmClean = ""; sysStatus = "SCANNING…"; scanProc.running = true; }
         function openSystem(sub) {
             sysView = sub;
             if (sub === "clean" && cleanItems.length === 0 && !scanProc.running) scanClean();
@@ -614,9 +618,9 @@ ShellRoot {
                     try { win.queue = JSON.parse(text); }
                     catch (e) { win.queue = []; }
                     var sup = win.supportedCount();
-                    if (win.queue.length === 0) { win.status = win.t("AWAITING FILE"); win.statusColor = pal.dim; }
-                    else if (sup === 0) { win.status = win.t("NONE INSTALLABLE"); win.statusColor = pal.bad; }
-                    else { win.status = sup + "/" + win.queue.length + win.t(" READY"); win.statusColor = pal.accent; }
+                    if (win.queue.length === 0) { win.status = "AWAITING FILE"; win.statusColor = pal.dim; }
+                    else if (sup === 0) { win.status = "NONE INSTALLABLE"; win.statusColor = pal.bad; }
+                    else { win.status = sup + "/" + win.queue.length + " READY"; win.statusColor = pal.accent; }
                 }
             }
         }
@@ -626,8 +630,8 @@ ShellRoot {
             stdout: SplitParser { onRead: (line) => win.logText += line + "\n" }
             stderr: SplitParser { onRead: (line) => win.logText += line + "\n" }
             onExited: (code, st) => {
-                if (code === 0) { win.status = win.t("DONE ✓"); win.statusColor = pal.ok; }
-                else            { win.status = win.t("DONE WITH ERRORS"); win.statusColor = pal.bad; }
+                if (code === 0) { win.status = "DONE ✓"; win.statusColor = pal.ok; }
+                else            { win.status = "DONE WITH ERRORS"; win.statusColor = pal.bad; }
                 win.apps = [];   // MANAGE reloads on next visit
             }
         }
@@ -643,7 +647,7 @@ ShellRoot {
             stderr: SplitParser { onRead: (l) => win.logText += l + "\n" }
             onExited: (c, s) => {
                 if (c === 0 && win.fetchedPath) win.loadFile(win.fetchedPath);
-                else { win.status = win.t("DOWNLOAD FAILED"); win.statusColor = pal.bad; }
+                else { win.status = "DOWNLOAD FAILED"; win.statusColor = pal.bad; }
             }
         }
         Process {
@@ -659,7 +663,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.apps = JSON.parse(text); }
                     catch (e) { win.apps = []; }
-                    win.manageStatus = win.apps.length + win.t(" APPS");
+                    win.manageStatus = win.apps.length + " APPS";
                     sizesProc.running = true;   // slower: fills in afterwards
                 }
             }
@@ -705,14 +709,14 @@ ShellRoot {
             command: [win.scriptPath, "edit"].concat(win.editArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("SAVED ✓") : win.t("SAVE FAILED"); win.refreshApps(); }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? "SAVED ✓" : "SAVE FAILED"; win.refreshApps(); }
         }
         Process {
             id: uninstallProc
             command: [win.scriptPath, "uninstall"].concat(win.uninstallArgs)
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("REMOVED ✓") : win.t("FAILED · ") + c; win.confirmUninstall = false; win.refreshApps(); }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? "REMOVED ✓" : "FAILED · " + c; win.confirmUninstall = false; win.refreshApps(); }
         }
         Process {
             id: pickProc
@@ -737,8 +741,8 @@ ShellRoot {
             command: [win.scriptPath, "launch", win.selPath]
             stdout: SplitParser { onRead: (l) => { if (!win.takeDiag(l)) win.manageLog += l + "\n"; } }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
-            onStarted: { win.selIssue = ""; win.selFixes = []; win.manageStatus = win.t("LAUNCHING…"); }
-            onExited: (c, s) => { win.manageStatus = c === 0 ? win.t("RUNNING ▶") : win.t("LAUNCH FAILED ✗"); }
+            onStarted: { win.selIssue = ""; win.selFixes = []; win.manageStatus = "LAUNCHING…"; }
+            onExited: (c, s) => { win.manageStatus = c === 0 ? "RUNNING ▶" : "LAUNCH FAILED ✗"; }
         }
         Process {
             id: fixProc
@@ -746,7 +750,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.manageLog += l + "\n" }
             onExited: (c, s) => {
-                win.manageStatus = c === 0 ? win.t("FIXED ✓") : win.t("FIX FAILED");
+                win.manageStatus = c === 0 ? "FIXED ✓" : "FIX FAILED";
                 infoProc.running = true;   // re-check the app
             }
         }
@@ -792,7 +796,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.results = JSON.parse(text); }
                     catch (e) { win.results = []; }
-                    win.storeStatus = win.results.length + win.t(" RESULTS");
+                    win.storeStatus = win.results.length + " RESULTS";
                 }
             }
         }
@@ -802,7 +806,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.review = JSON.parse(text); } catch (e) { win.review = null; }
-                    win.storeStatus = win.review ? win.t("RISK: ") + win.review.risk.toUpperCase() : win.t("REVIEW FAILED");
+                    win.storeStatus = win.review ? "RISK: " + win.review.risk.toUpperCase() : "REVIEW FAILED";
                 }
             }
             stderr: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
@@ -813,8 +817,8 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.storeLog += l + "\n" }
             onExited: (c, s) => {
-                if (c === 0) { win.storeStatus = win.t("DONE ✓"); }
-                else { win.storeStatus = win.t("FAILED · ") + c; }
+                if (c === 0) { win.storeStatus = "DONE ✓"; }
+                else { win.storeStatus = "FAILED · " + c; }
                 win.apps = [];
             }
         }
@@ -828,7 +832,7 @@ ShellRoot {
                     try { win.updates = JSON.parse(text); }
                     catch (e) { win.updates = []; }
                     win.updChecked = true;
-                    win.updStatus = win.updates.length === 0 ? win.t("UP TO DATE ✓") : win.updates.length + win.t(" PENDING");
+                    win.updStatus = win.updates.length === 0 ? "UP TO DATE ✓" : win.updates.length + " PENDING";
                 }
             }
         }
@@ -838,7 +842,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.updLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.updLog += l + "\n" }
             onExited: (c, s) => {
-                win.updStatus = c === 0 ? win.t("DONE ✓") : win.t("FAILED · ") + c;
+                win.updStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
                 // AUR builds keep going in their terminal; everything else is re-checked
                 if (!(win.updArgs[0] === "update" && win.updArgs[1] === "aur")) win.checkUpdates();
             }
@@ -882,7 +886,7 @@ ShellRoot {
                     try { win.cleanItems = JSON.parse(text); }
                     catch (e) { win.cleanItems = []; }
                     var n = win.cleanItems.filter(function (i) { return i.count > 0; }).length;
-                    win.sysStatus = n === 0 ? win.t("ALL CLEAN ✓") : n + win.t(" TO CLEAN");
+                    win.sysStatus = n === 0 ? "ALL CLEAN ✓" : n + " TO CLEAN";
                 }
             }
         }
@@ -892,7 +896,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
             onExited: (c, s) => {
-                win.sysStatus = c === 0 ? win.t("DONE ✓") : win.t("FAILED · ") + c;
+                win.sysStatus = c === 0 ? "DONE ✓" : "FAILED · " + c;
                 win.confirmRestore = false;
                 if (win.sysArgs[0] === "clean") scanProc.running = true;
                 if (win.sysArgs[0] === "restore") win.apps = [];
@@ -933,7 +937,7 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.snapshots = JSON.parse(text); } catch (e) { win.snapshots = []; }
                     win.selSnaps = [];
-                    if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + win.t(" SNAPSHOTS");
+                    if (win.sysView === "snapshots") win.sysStatus = win.snapshots.length + " SNAPSHOTS";
                 }
             }
             stderr: SplitParser { onRead: (l) => win.sysLog += l + "\n" }
@@ -963,7 +967,7 @@ ShellRoot {
                     try { win.games = JSON.parse(text); } catch (e) { win.games = []; }
                     if (win.fxScan.length === 0 && !fxScanProc.running) { fxScanProc.cached = true; fxScanProc.running = true; }
                     if (!gauditProc.running) gauditProc.running = true;
-                    win.gameStatus = win.games.length + win.t(" GAMES");
+                    win.gameStatus = win.games.length + " GAMES";
                     // keep the selection in sync (launch options / Proton may have changed)
                     var cur = win.games.filter(function (g) { return g.key === win.selGame; })[0];
                     if (cur) { win.selGameLaunch = cur.launch; win.selGameCompat = cur.compat; win.selGameWrapped = cur.wrapped; }
@@ -1017,7 +1021,7 @@ ShellRoot {
             stdout: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
             stderr: SplitParser { onRead: (l) => win.gameLog += l + "\n" }
             onExited: (c, s) => {
-                win.gameStatus = c === 0 ? win.t("DONE ✓") : (c === 3 ? win.t("CLOSE STEAM FIRST") : win.t("FAILED · ") + c);
+                win.gameStatus = c === 0 ? "DONE ✓" : (c === 3 ? "CLOSE STEAM FIRST" : "FAILED · " + c);
                 gamesProc.running = true; gstatProc.running = true; pdbStatProc.running = true;
                 if (win.gameArgs[0] === "pdbindex" && win.selGameId) sugProc.running = true;
                 if (win.gameArgs[0] === "shaderclean") shaderProc.running = true;
@@ -1120,7 +1124,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     var f = text.trim(); if (!f) return;
-                    win.fxImportFile = f; win.fxImportList = []; win.fxMsg = win.t("Reading ") + f.replace(/^.*\//, "") + "…";
+                    win.fxImportFile = f; win.fxImportList = []; win.fxMsg = "Reading " + f.replace(/^.*\//, "") + "…";
                     fxImpListProc.command = [win.scriptPath, "fx", "importlist", f]; fxImpListProc.running = true;
                 }
             }
@@ -1130,11 +1134,11 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     var l = []; try { l = JSON.parse(text); } catch (e) { }
-                    if (l.length === 0) { win.fxMsg = win.t("No ReShade preset in that file (it needs a Techniques= line)."); return; }
+                    if (l.length === 0) { win.fxMsg = "No ReShade preset in that file (it needs a Techniques= line)."; return; }
                     if (l.length === 1) {
                         win.fxMsg = "";
                         win.fxApply("file:" + win.fxImportFile, win.t("IMPORTING PRESET…"), ["fx", "import", win.selGame, win.fxImportFile]);
-                    } else { win.fxImportList = l; win.fxMsg = l.length + win.t(" presets in this file: pick one"); }
+                    } else { win.fxImportList = l; win.fxMsg = l.length + " presets in this file: pick one"; }
                 }
             }
         }
@@ -1149,7 +1153,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.fxGames = JSON.parse(text); } catch (e) { win.fxGames = []; }
-                    if (win.fxGames.length === 0) win.fxMsg = win.t("No game with that name on SweetFX Settings DB: try another name, or use a quick look.");
+                    if (win.fxGames.length === 0) win.fxMsg = "No game with that name on SweetFX Settings DB: try another name, or use a quick look.";
                     else win.fxLoadPresets(win.fxGames[0].id);
                 }
             }
@@ -1159,7 +1163,7 @@ ShellRoot {
             stdout: StdioCollector {
                 onStreamFinished: {
                     try { win.fxPresets = JSON.parse(text); } catch (e) { win.fxPresets = []; }
-                    win.fxMsg = win.fxPresets.length === 0 ? win.t("This game has no presets yet.") : win.fxPresets.length + win.t(" presets — newest first");
+                    win.fxMsg = win.fxPresets.length === 0 ? "This game has no presets yet." : win.fxPresets.length + " presets — newest first";
                     Qt.callLater(win.fxToTop);
                 }
             }
@@ -1749,7 +1753,7 @@ ShellRoot {
             }
 
             // status
-            Section { Layout.fillWidth: true; label: win.t("STATUS"); info: win.status }
+            Section { Layout.fillWidth: true; label: win.t("STATUS"); info: win.t(win.status) }
             Text {
                 Layout.fillWidth: true
                 visible: win.queue.length > 0 && win.supportedCount() < win.queue.length
@@ -1787,7 +1791,7 @@ ShellRoot {
                             .filter(function (q) { return q.supported === "yes"; })
                             .map(function (q) { return q.path; });
                         win.logText = "";
-                        win.status = win.t("INSTALLING…"); win.statusColor = pal.pink;
+                        win.status = "INSTALLING…"; win.statusColor = pal.pink;
                         installProc.running = true;
                     }
                 }
@@ -1888,7 +1892,7 @@ ShellRoot {
                     Layout.fillWidth: true; spacing: 10
                     visible: win.selPath !== ""
 
-                Section { Layout.fillWidth: true; label: win.t("EDIT"); info: win.manageStatus }
+                Section { Layout.fillWidth: true; label: win.t("EDIT"); info: win.t(win.manageStatus) }
 
                 // editor row: icon preview + fields
                 RowLayout {
@@ -2126,13 +2130,13 @@ ShellRoot {
                                 win.confirmUninstall = true;
                                 win.manageLog = "";
                                 if (win.selSource === "pacman") {
-                                    win.manageStatus = win.t("REVIEW AND CONFIRM");
+                                    win.manageStatus = "REVIEW AND CONFIRM";
                                     previewProc.running = true;   // pacman -Rns preview (+ leftovers)
                                 } else if (win.purge) {
-                                    win.manageStatus = win.t("REVIEW AND CONFIRM");
+                                    win.manageStatus = "REVIEW AND CONFIRM";
                                     leftoverProc.running = true;
                                 } else {
-                                    win.manageStatus = win.t("CLICK AGAIN TO CONFIRM");
+                                    win.manageStatus = "CLICK AGAIN TO CONFIRM";
                                 }
                             } else {
                                 win.uninstallArgs = win.purge ? [win.selPath, "--purge"] : [win.selPath];
@@ -2150,7 +2154,7 @@ ShellRoot {
                 visible: win.view === "store"
                 spacing: 12
 
-                Section { Layout.fillWidth: true; label: win.t("SEARCH"); info: win.storeStatus }
+                Section { Layout.fillWidth: true; label: win.t("SEARCH"); info: win.t(win.storeStatus) }
 
                 // query
                 RowLayout {
@@ -2325,7 +2329,7 @@ ShellRoot {
                             }
                             MiniBtn {
                                 width: 76; label: win.t("CANCEL"); primary: false
-                                onClicked: { win.review = null; win.storeStatus = win.results.length + win.t(" RESULTS"); }
+                                onClicked: { win.review = null; win.storeStatus = win.results.length + " RESULTS"; }
                             }
                             MiniBtn {
                                 width: 120
@@ -2362,7 +2366,7 @@ ShellRoot {
                 visible: win.view === "updates"
                 spacing: 12
 
-                Section { Layout.fillWidth: true; label: win.t("UPDATES"); info: win.updStatus }
+                Section { Layout.fillWidth: true; label: win.t("UPDATES"); info: win.t(win.updStatus) }
 
                 // opt-in background check
                 RowLayout {
@@ -2534,7 +2538,7 @@ ShellRoot {
                     Chip { label: "SNAPSHOTS"; active: win.sysView === "snapshots"; onClicked: win.openSystem("snapshots") }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
-                        text: win.sysStatus; color: pal.dim; font.family: win.mono
+                        text: win.t(win.sysStatus); color: pal.dim; font.family: win.mono
                         font.pixelSize: 12; font.letterSpacing: 2; elide: Text.ElideLeft
                     }
                 }
@@ -2927,7 +2931,7 @@ ShellRoot {
                     Chip { label: win.t("HEALTH");  active: win.gameView === "health";  onClicked: win.gameView = "health" }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
-                        text: win.gameStatus; color: pal.dim; font.family: win.mono
+                        text: win.t(win.gameStatus); color: pal.dim; font.family: win.mono
                         font.pixelSize: 12; font.letterSpacing: 2; elide: Text.ElideLeft
                     }
                 }
@@ -4156,7 +4160,7 @@ ShellRoot {
                                     Text {
                                         Layout.fillWidth: true; wrapMode: Text.WordWrap
                                         visible: win.fxMsg !== ""
-                                        text: win.fxMsg; color: pal.dim; font.family: win.mono; font.pixelSize: 10
+                                        text: win.t(win.fxMsg); color: pal.dim; font.family: win.mono; font.pixelSize: 10
                                     }
                                     ListView {
                                         id: fxList
