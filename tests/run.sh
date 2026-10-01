@@ -1383,6 +1383,25 @@ NG="$ST/steamapps/common/NativeGame"; mkdir -p "$NG"; man 7000 "Native Game" Nat
 eq "native Linux + Vulkan → vkBasalt" "$(CONTROL_DECK_STEAM_ROOT="$ST" ADV steam:7000 '[]' null null | jq -r .pick)" vkbasalt
 { printf '\x7fELF'; head -c 600000 /dev/zero; printf 'libGL.so.1'; } > "$NG/game.x86_64"
 eq "native Linux + OpenGL → none" "$(CONTROL_DECK_STEAM_ROOT="$ST" ADV steam:7000 '[]' null null | jq -r .pick)" none
+section "Upscaler upgrades (FSR 4 / DLSS / XeSS)"
+UP="$HOME/up-steam"; mkdir -p "$UP/steamapps/common/Up/bin" "$UP/compatibilitytools.d/GE-Test" "$UP/config"
+printf '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' "$UP" > "$UP/steamapps/libraryfolders.vdf"
+printf '"AppState"\n{\n\t"appid"\t\t"8000"\n\t"name"\t\t"Up Game"\n\t"installdir"\t\t"Up"\n}\n' > "$UP/steamapps/appmanifest_8000.acf"
+touch "$UP/steamapps/common/Up/bin/amd_fidelityfx_dx12.dll" "$UP/steamapps/common/Up/bin/nvngx_dlss.dll"
+printf '"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "GE-Test"\n    {\n    }\n  }\n}\n' > "$UP/compatibilitytools.d/GE-Test/compatibilitytool.vdf"
+printf 'check_environment("PROTON_FSR4_UPGRADE", "fsr4")\ncheck_environment("PROTON_DLSS_UPGRADE", "dlss")\ncheck_environment("PROTON_XESS_UPGRADE", "xess")\ncheck_environment("PROTON_FSR4_INDICATOR", "fsr4hud")\n' > "$UP/compatibilitytools.d/GE-Test/proton"
+UPS() { CONTROL_DECK_STEAM_ROOT="$UP" CONTROL_DECK_GPU_VENDOR="$1" CONTROL_DECK_GPU_NAME="$2" "$CD" upscale steam:8000; }
+eq "detects what the game ships" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c .ships)" '{"fsr31dx12":true,"fsr31vk":false,"dlss":true,"xess":false}'
+eq "Steam default Proton → no upgrades" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .why')" "This game's Proton can't do it: pick GE-Proton or Proton-CachyOS in PROTON."
+printf '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t"CompatToolMapping"\n\t\t\t\t{\n\t\t\t\t\t"8000"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t"GE-Test"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n' > "$UP/config/config.vdf"
+eq "RX 9070 XT + GE: FSR 4 available" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c '[.options[] | select(.id == "fsr4") | .available, .var]')" '[true,"PROTON_FSR4_UPGRADE"]'
+eq "…DLSS not (needs RTX)" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "dlss") | .why')" "DLSS needs an NVIDIA RTX card."
+eq "RTX 2070: DLSS yes, FSR 4 no" "$(UPS nvidia 'NVIDIA GeForce RTX 2070' | jq -c '[.options[] | select(.id != "xess") | .available]')" '[false,true]'
+eq "RX 7900 without GE's RDNA3 switch → explained" "$(UPS amd 'AMD Radeon RX 7900 XTX' | jq -r '.options[] | select(.id == "fsr4") | .why')" "RX 7000 (RDNA3) needs GE-Proton's RDNA3 variant."
+eq "XeSS: game doesn't ship it" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "xess") | .why')" "The game doesn't ship XeSS."
+CONTROL_DECK_STEAM_ROOT="$UP" "$CD" gprofile set steam:8000 'env=PROTON_FSR4_UPGRADE=1' >/dev/null
+eq "turned on → reported on" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .on')" true
+eq "FSR 4 flagged when the profile moves to an NVIDIA PC" "$(CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit | jq -c '[.issues[] | select(.key == "steam:8000") | .var]')" '["PROTON_FSR4_UPGRADE"]'
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]

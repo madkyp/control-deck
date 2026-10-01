@@ -605,6 +605,29 @@ VKBASALT ★, MY LIBRARY rows show the ★ pick (reasons on hover), and SET UP
 ALL follows it. It skips games with no possible route, and vkBasalt games
 until vkBasalt is installed.
 
+### Upscaler upgrades: FSR 4 / DLSS / XeSS (LIBRARY → UPSCALE)
+- Checked in the `proton` scripts installed here. GE-Proton 11-7 and
+  Proton-CachyOS read `PROTON_FSR4_UPGRADE`, `PROTON_DLSS_UPGRADE` and
+  `PROTON_XESS_UPGRADE` (GE also `PROTON_FSR4_RDNA3_UPGRADE`), plus the
+  `…_INDICATOR` watermarks. Proton Experimental and UMU-Proton don't.
+- What they do (GE's `protonfixes/upscalers.py`): they download DLLs from the
+  `loathingkernel.github.io/proton-upscalers` manifest. FSR 4 is
+  `amdxcffx64.dll` 4.1.x in system32, AMD's driver-side FSR 3.1 → FSR 4
+  upgrade. DLSS and XeSS get their newest `nvngx_dlss*` / `libxess*`, and Wine
+  swaps them in (`WINE_UPSCALER_REPLACE`).
+- `upscale steam:<id>` reports:
+  - what the game ships: `amd_fidelityfx_dx12.dll` (FSR 3.1 DX12),
+    `amd_fidelityfx_vk.dll`, `nvngx_dlss*.dll`, `libxess*.dll`;
+  - which Proton it runs: its CompatToolMapping entry, else the default "0";
+  - the GPU: FSR 4 needs RX 9000 (RDNA4), or RX 7000 with GE's RDNA3
+    switch; DLSS needs an RTX card.
+  Each option is offered only when all three fit; otherwise its reason is
+  shown. FSR 2 or 3.0 built into an `.exe` can't be swapped. FSR 3.1 for
+  Vulkan isn't covered by the FSR 4 upgrade (Deadlock here).
+- The chips add or remove `VAR=1` in the profile's ENV; SAVE or PLAY applies
+  it. ON-SCREEN CHECK turns the watermark on to confirm the upgrade in game.
+  CHECK FOR THIS PC flags `PROTON_FSR4_*` on NVIDIA and `PROTON_DLSS_*` on AMD.
+
 ## Compatibility report
 
 | Area | Verified on the reference system | Pending |

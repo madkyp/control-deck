@@ -4030,6 +4030,7 @@ Gaming
   fx link add|note|rm|get steam:<appid> <url> [label|notes]   Save a preset page (Nexus…) for a game, even before installing it
   fx scan [--cached] / fx autoinstall [key…]   Every game: best preset + ReShade compatibility; set up ReShade for the eligible ones
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
+  upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
   gaming-import <backup.json>   Add the game profiles, looks and settings of a backup (only what's missing here)
   gaudit [fix <key|all>]        Check game profiles for this PC (other GPU vendor's variables, shaders not set up here)
@@ -5719,8 +5720,8 @@ game_crashed() {   # key rc started(epoch)
 # nothing on this GPU, and shaders that aren't set up on this PC yet.
 env_vendor() {   # VAR → nvidia|amd|mesa|""
     case "$1" in
-        __GL_*|__NV*|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX*|DXVK_NVAPI*) echo nvidia ;;
-        RADV_*|AMD_*|ACO_*|RADEONSI*) echo amd ;;
+        __GL_*|__NV*|PROTON_ENABLE_NVAPI|DXVK_ENABLE_NVAPI|PROTON_ENABLE_NGX*|DXVK_NVAPI*|PROTON_DLSS_*) echo nvidia ;;
+        RADV_*|AMD_*|ACO_*|RADEONSI*|PROTON_FSR4_*) echo amd ;;
         MESA_*|ENABLE_LAYER_MESA*) echo mesa ;;
         *) echo "" ;;
     esac
@@ -5780,6 +5781,71 @@ cmd_gaudit_fix() {
             && log "  $k: vkBasalt isn't installed here — FX → INSTALL"
     done <<<"$keys"
     log "✔ $n change(s)."
+}
+
+# --- upscaler upgrades (GE-Proton / Proton-CachyOS) -----------------------------
+# Their `proton` reads PROTON_FSR4_UPGRADE (amdxcffx64.dll 4.x: a game's FSR 3.1
+# DX12 runs as FSR 4 — RDNA4; GE also has PROTON_FSR4_RDNA3_UPGRADE),
+# PROTON_DLSS_UPGRADE (newest nvngx_dlss*) and PROTON_XESS_UPGRADE (newest
+# libxess*), downloading the DLLs from the proton-upscalers manifest. Only DLLs a
+# game ships can be swapped: FSR 2/3.0 built into the .exe can't.
+compat_tool_dir() {   # internal tool name → folder with its `proton`
+    local r f
+    for r in "$(steam_root)/compatibilitytools.d" "$HOME/.steam/root/compatibilitytools.d" /usr/share/steam/compatibilitytools.d; do
+        for f in "$r"/*/compatibilitytool.vdf; do
+            [[ -f "$f" ]] || continue
+            [[ "$(compat_tool_name "$f")" == "$1" ]] && { dirname "$f"; return 0; }
+        done
+    done
+    return 1
+}
+
+# upscale <steam:id> → what the game ships, what this GPU/Proton allow, what's on
+cmd_upscale() {
+    local key="$1" id dir cfg tool tdir="" vars="" gen name p
+    [[ "$key" == steam:* ]] || { err "use: upscale steam:<appid>"; return 2; }
+    id="${key#steam:}"; dir="$(steam_game_dir "$id")"
+    cfg="$(steam_root)/config/config.vdf"
+    tool="$( [[ -f "$cfg" ]] && vdf_get "$cfg" "$COMPAT_MAPPING/$id" name)"
+    [[ -z "$tool" && -f "$cfg" ]] && tool="$(vdf_get "$cfg" "$COMPAT_MAPPING/0" name)"
+    [[ -n "$tool" ]] && tdir="$(compat_tool_dir "$tool")"
+    [[ -n "$tdir" && -f "$tdir/proton" ]] && vars="$(grep -oE 'PROTON_(FSR4_UPGRADE|FSR4_RDNA3_UPGRADE|DLSS_UPGRADE|XESS_UPGRADE|FSR4_INDICATOR|DLSS_INDICATOR)' "$tdir/proton" | sort -u | paste -sd ' ')"
+    name="$(gpu_name)"; gen="$(jq -rn --arg g "$name" "$JQ_GPU_GEN"' $g | gpu_gen')"
+    p="$(profile_get "$key")"
+    jq -nc --arg tool "$tool" --arg vars "$vars" --arg gpu "$name" --arg gen "$gen" --arg vendor "$(gpu_vendor)" \
+        --argjson env "$(jq -c '.env // {}' <<<"$p")" \
+        --argjson ships "$(
+            f() { [[ -d "$dir" ]] && find "$dir" -maxdepth 6 -type f -iname "$1" 2>/dev/null | head -1 | grep -q . && echo true || echo false; }
+            jq -nc --argjson fsrdx "$(f amd_fidelityfx_dx12.dll)" --argjson fsrvk "$(f amd_fidelityfx_vk.dll)" \
+                   --argjson dlss "$(f 'nvngx_dlss*.dll')" --argjson xess "$(f 'libxess*.dll')" \
+                   '{fsr31dx12:$fsrdx, fsr31vk:$fsrvk, dlss:$dlss, xess:$xess}')" '
+        ($vars | split(" ")) as $v
+        | ($gpu | ascii_downcase | test("rtx")) as $rtx
+        | {proton:{tool:(if $tool == "" then null else $tool end),
+                   supports:($v | map(select(endswith("_UPGRADE")) | sub("^PROTON_"; "") | sub("_UPGRADE$"; "") | ascii_downcase))},
+           gpu:{name:$gpu, vendor:$vendor, gen:$gen}, ships:$ships}
+        | .options = [
+            {id:"fsr4", var:"PROTON_FSR4_UPGRADE", label:"FSR 4",
+             why:(if (.ships.fsr31dx12 | not) and .ships.fsr31vk then "The game ships FSR 3.1 for Vulkan; the FSR 4 upgrade is DirectX 12 only."
+                  elif (.ships.fsr31dx12 | not) then "The game doesn'"'"'t ship FSR 3.1 as a DLL (FSR 2/3.0 inside the .exe can'"'"'t be swapped)."
+                  elif $vendor != "amd" then "FSR 4 runs on AMD Radeon RX 9000 (RDNA4) — not on this GPU."
+                  elif ($gen == "amd:4") and ($v | index("PROTON_FSR4_RDNA3_UPGRADE") | not) then "RX 7000 (RDNA3) needs GE-Proton'"'"'s RDNA3 variant."
+                  elif ($gen != "amd:5" and $gen != "amd:4") then "FSR 4 needs a Radeon RX 9000 (RDNA4) or RX 7000 with GE-Proton."
+                  elif ($v | index("PROTON_FSR4_UPGRADE") | not) then "This game'"'"'s Proton can'"'"'t do it: pick GE-Proton or Proton-CachyOS in PROTON."
+                  else null end)},
+            {id:"dlss", var:"PROTON_DLSS_UPGRADE", label:"DLSS (newest)",
+             why:(if (.ships.dlss | not) then "The game doesn'"'"'t ship DLSS."
+                  elif ($rtx | not) then "DLSS needs an NVIDIA RTX card."
+                  elif ($v | index("PROTON_DLSS_UPGRADE") | not) then "This game'"'"'s Proton can'"'"'t do it: pick GE-Proton or Proton-CachyOS in PROTON."
+                  else null end)},
+            {id:"xess", var:"PROTON_XESS_UPGRADE", label:"XeSS (newest)",
+             why:(if (.ships.xess | not) then "The game doesn'"'"'t ship XeSS."
+                  elif ($v | index("PROTON_XESS_UPGRADE") | not) then "This game'"'"'s Proton can'"'"'t do it: pick GE-Proton or Proton-CachyOS in PROTON."
+                  else null end)}]
+        | .options |= map(. + {available:(.why == null),
+                               var:(if .id == "fsr4" and $gen == "amd:4" then "PROTON_FSR4_RDNA3_UPGRADE" else .var end)}
+                          | . + {on:($env[.var] == "1")})
+        | .indicators = {fsr4:($v | index("PROTON_FSR4_INDICATOR") != null), dlss:($v | index("PROTON_DLSS_INDICATOR") != null)}'
 }
 
 main() {
@@ -5865,6 +5931,7 @@ main() {
         hook)        need "$1" "missing game key"; cmd_hook "$1" ;;
         session)     cmd_session "$1" "$2" ;;
         sched)       cmd_sched "$@" ;;
+        upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;
         gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;
         gaudit)      if [[ "${1:-}" == fix ]]; then cmd_gaudit_fix "${2:-all}"; else cmd_gaudit; fi ;;
         fx)          cmd_fx "$@" ;;

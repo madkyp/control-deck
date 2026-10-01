@@ -307,6 +307,7 @@ ShellRoot {
         property var    pdbStat: ({})       // local ProtonDB index status
         property var    shaders: ({})       // shader caches (per game + driver)
         property var    health: ({})        // gaming health checks
+        property var    ups: ({})           // upscaler upgrades for the selected game
         property var    gaudit: ({})        // profiles vs this PC
         property var    fx: ({})            // visual shaders: install state + selected game
         property var    fxGames: []         // SweetFX DB games matching the search
@@ -415,6 +416,7 @@ ShellRoot {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
             selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped; selGameObj = g;
             gameLog = ""; if (g.source === "steam" || g.source === "umbral") gprofProc.running = true;
+            ups = {}; if (g.source === "steam") upsProc.running = true;
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
             fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
@@ -428,6 +430,12 @@ ShellRoot {
             return (" " + gPrefix.text + " ").indexOf(" " + x.token + " ") >= 0;
         }
         // value this profile already gives to a suggested env var ("" if unset)
+        // add/remove VAR=1 in the ENV field (saved with SAVE / PLAY)
+        function toggleEnv(name) {
+            var rest = gEnv.text.split(/\s+/).filter(function (e) { return e && e.split("=")[0] !== name; });
+            if (envValue(name) !== "1") rest.push(name + "=1");
+            gEnv.text = rest.join(" ");
+        }
         function envValue(name) {
             var hit = gEnv.text.split(/\s+/).filter(function (e) { return e.split("=")[0] === name; })[0];
             return hit === undefined ? null : hit.substring(name.length + 1);
@@ -994,6 +1002,7 @@ ShellRoot {
                 }
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
+                if (win.gameArgs[0] === "steamcompat") upsProc.running = true;
                 if (win.gameArgs[0] === "fx" || (win.gameArgs[0] === "steamwrap" && win.gameView === "fx")) fxStatProc.running = true;
                 if (win.gameArgs[0] === "fx" && win.fxScope === "library") { fxScanProc.cached = false; fxScanProc.running = true; }
                 if (win.selGame) gprofProc.running = true;
@@ -1038,6 +1047,11 @@ ShellRoot {
                     benchChart.requestPaint();
                 }
             }
+        }
+        Process {
+            id: upsProc
+            command: [win.scriptPath, "upscale", win.selGame]
+            stdout: StdioCollector { onStreamFinished: { try { win.ups = JSON.parse(text); } catch (e) { win.ups = {}; } } }
         }
         Process {
             id: gauditProc
@@ -3103,6 +3117,47 @@ ShellRoot {
                                         on: !win.gameBusy; tip: "Steam must be closed to change it"
                                         onClicked: win.runGame(["steamcompat", win.selGameId, modelData.name], "SETTING PROTON…")
                                     }
+                                }
+                            }
+                            // FSR 4 / DLSS / XeSS upgrades (GE-Proton, Proton-CachyOS)
+                            Text { text: "UPSCALE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1
+                                   Layout.alignment: Qt.AlignTop; Layout.topMargin: 6 }
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 4
+                                Flow {
+                                    Layout.fillWidth: true; spacing: 6
+                                    Repeater {
+                                        model: win.ups.options || []
+                                        delegate: Chip {
+                                            required property var modelData
+                                            property bool isOn: win.envValue(modelData.var) === "1"
+                                            label: (isOn ? "✓ " : "") + modelData.label
+                                            tint: pal.ok; active: isOn
+                                            on: modelData.available || isOn
+                                            tip: modelData.available
+                                                 ? (modelData.id === "fsr4" ? "The game's FSR 3.1 runs as FSR 4 (AMD's ML upscaler). Proton downloads the DLL. SAVE to apply."
+                                                    : "Proton swaps in the newest " + modelData.label.replace(" (newest)", "") + " DLL. SAVE to apply.")
+                                                 : modelData.why
+                                            onClicked: win.toggleEnv(modelData.var)
+                                        }
+                                    }
+                                    Chip {
+                                        visible: (win.ups.options || []).some(function (o) { return o.available && (o.id === "fsr4" || o.id === "dlss"); })
+                                        property string iv: (win.ups.options || []).some(function (o) { return o.id === "fsr4" && o.available; }) ? "PROTON_FSR4_INDICATOR" : "PROTON_DLSS_INDICATOR"
+                                        label: (win.envValue(iv) === "1" ? "✓ " : "") + "ON-SCREEN CHECK"; active: win.envValue(iv) === "1"
+                                        tip: "Shows the upscaler's own watermark in game, to confirm the upgrade is active"
+                                        onClicked: win.toggleEnv(iv)
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                    text: !win.ups.ships ? "" :
+                                          "Ships: " + ([win.ups.ships.fsr31dx12 ? "FSR 3.1 (DX12)" : "", win.ups.ships.fsr31vk ? "FSR 3.1 (Vulkan)" : "",
+                                                        win.ups.ships.dlss ? "DLSS" : "", win.ups.ships.xess ? "XeSS" : ""]
+                                                       .filter(function (x) { return x; }).join(" · ") || "no swappable upscaler DLL")
+                                          + "  ·  Proton: " + (win.ups.proton && win.ups.proton.tool ? win.ups.proton.tool : "Steam default")
+                                          + ((win.ups.proton || {}).supports && win.ups.proton.supports.length ? " (supports upgrades)" : " (no upgrades: GE-Proton or Proton-CachyOS do)")
                                 }
                             }
                         }
