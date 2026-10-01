@@ -285,6 +285,14 @@ ShellRoot {
 
         // ---- gaming state -----------------------------------------------
         property string gameView: "library"
+        onGameViewChanged: loadGameView()
+        function loadGameView() {
+            if (gameView === "status") gstatProc.running = true;
+            else if (gameView === "shaders") shaderProc.running = true;
+            else if (gameView === "bench") { if (selGame && selGameSource === "steam") benchProc.running = true; }
+            else if (gameView === "prefixes") { pfxProc.running = true; pfxBakProc.running = true; }
+            else if (gameView === "health") healthProc.running = true;
+        }
         property var    games: []
         property var    gstat: ({})
         property var    pdb: ({})           // ProtonDB summaries by appid
@@ -416,6 +424,7 @@ ShellRoot {
         }
         function openGaming() {
             gamesProc.running = true; gstatProc.running = true; toolsProc.running = true; pdbStatProc.running = true;
+            loadGameView();
         }
         function selectGame(g) {
             selGame = g.key; selGameId = g.id; selGameName = g.name; selGameSource = g.source;
@@ -2870,12 +2879,12 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
                     Chip { label: "LIBRARY"; active: win.gameView === "library"; onClicked: win.gameView = "library" }
-                    Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: { win.gameView = "status"; gstatProc.running = true; } }
-                    Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: { win.gameView = "shaders"; shaderProc.running = true; } }
-                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: { win.gameView = "bench"; if (win.selGame && win.selGameSource === "steam") benchProc.running = true; } }
-                    Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: { win.gameView = "prefixes"; pfxProc.running = true; pfxBakProc.running = true; } }
+                    Chip { label: "STATUS";  active: win.gameView === "status";  onClicked: win.gameView = "status" }
+                    Chip { label: "SHADERS"; active: win.gameView === "shaders"; onClicked: win.gameView = "shaders" }
+                    Chip { label: "BENCH";   active: win.gameView === "bench";   onClicked: win.gameView = "bench" }
+                    Chip { label: "PREFIXES"; active: win.gameView === "prefixes"; onClicked: win.gameView = "prefixes" }
                     Chip { label: "FX";      active: win.gameView === "fx";      onClicked: win.openFx() }
-                    Chip { label: "HEALTH";  active: win.gameView === "health";  onClicked: { win.gameView = "health"; healthProc.running = true; } }
+                    Chip { label: "HEALTH";  active: win.gameView === "health";  onClicked: win.gameView = "health" }
                     Text {
                         Layout.fillWidth: true; horizontalAlignment: Text.AlignRight
                         text: win.gameStatus; color: pal.dim; font.family: win.mono
@@ -3138,6 +3147,7 @@ ShellRoot {
                                 Layout.fillWidth: true; spacing: 4
                                 Flow {
                                     Layout.fillWidth: true; spacing: 6
+                                    visible: (win.ups.options || []).some(function (o) { return o.available || o.on; })
                                     Repeater {
                                         model: win.ups.options || []
                                         delegate: Chip {
@@ -3168,7 +3178,11 @@ ShellRoot {
                                 Text {
                                     Layout.fillWidth: true; wrapMode: Text.WordWrap
                                     color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                    text: !win.ups.ships ? "" :
+                                    // nothing applies: one line, the reasons on hover
+                                    property bool none: !(win.ups.options || []).some(function (o) { return o.available || o.on; })
+                                    MouseArea { id: upsMa; anchors.fill: parent; hoverEnabled: true; visible: parent.none }
+                                    Tip { visible: upsMa.containsMouse; text: (win.ups.options || []).map(function (o) { return o.label + ": " + o.why; }).join("\n") }
+                                    text: !win.ups.ships ? "" : none ? "No upscaler upgrade for this game ⓘ" :
                                           "Ships: " + ([win.ups.ships.fsr31dx12 ? "FSR 3.1 (DX12)" : "", win.ups.ships.fsr31vk ? "FSR 3.1 (Vulkan)" : "",
                                                         win.ups.ships.dlss ? "DLSS" : "", win.ups.ships.xess ? "XeSS" : ""]
                                                        .filter(function (x) { return x; }).join(" · ") || "no swappable upscaler DLL")
