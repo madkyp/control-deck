@@ -3361,7 +3361,7 @@ ShellRoot {
 
                     Hint {
                         text: !win.pfx.prefixes ? "" : win.pfx.prefixes.length + win.t(" prefixes · ") + win.human(win.pfx.total)
-                              + ((win.pfx.orphanBytes || 0) > 0 ? " · " + win.human(win.pfx.orphanBytes) + win.t(" in orphans (games no longer installed)") : "")
+                              + ((win.pfx.orphanBytes || 0) > 0 ? " · " + win.human(win.pfx.orphanBytes) + win.t(" in orphans (no game uses them)") : "")
                               + " · " + win.pfxBackups.length + win.t(" backups in ~/control-deck-backups/prefixes")
                     }
                     Rectangle {
@@ -3390,7 +3390,7 @@ ShellRoot {
                                             spacing: 8
                                             Text { text: modelData.owner.toUpperCase(); color: win.srcColor(modelData.owner === "steam" ? "flatpak" : "aur")
                                                    font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1 }
-                                            Text { text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true
+                                            Text { text: win.t(modelData.name); color: pal.text; font.family: win.mono; font.pixelSize: 12; font.bold: true
                                                    elide: Text.ElideRight; Layout.maximumWidth: 300 }
                                             Text { text: win.human(modelData.size); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
                                             Text { visible: modelData.orphan; text: win.t("ORPHAN"); color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }

@@ -2457,9 +2457,9 @@ clean_items() {
 
     pfx="$(cmd_prefixes 2>/dev/null)"; [[ -n "$pfx" ]] || pfx='{"prefixes":[]}'
     printf '%s\n' prefixes "Orphan prefixes" "Wine prefixes of uninstalled Steam games (each one is backed up first)." \
-        "$(jq '[.prefixes[] | select(.orphan and (.running | not))] | length' <<<"$pfx")" \
-        "$(jq '[.prefixes[] | select(.orphan and (.running | not)) | .size] | add // 0' <<<"$pfx")" \
-        "$(jq -r '[.prefixes[] | select(.orphan and (.running | not)) | .name] | join(" · ")' <<<"$pfx")"
+        "$(jq '[.prefixes[] | select(.orphan and .owner == "steam" and (.running | not))] | length' <<<"$pfx")" \
+        "$(jq '[.prefixes[] | select(.orphan and .owner == "steam" and (.running | not)) | .size] | add // 0' <<<"$pfx")" \
+        "$(jq -r '[.prefixes[] | select(.orphan and .owner == "steam" and (.running | not)) | .name] | join(" · ")' <<<"$pfx")"
 
     list="$(unused_compat_tools "$pfx")"
     n=0; bytes=0
@@ -2531,7 +2531,7 @@ clean_one() {
             while IFS= read -r p; do
                 [[ -n "$p" ]] || continue
                 cmd_prefix delete "$p" || rc=$?
-            done < <(cmd_prefixes | jq -r '.prefixes[] | select(.orphan and (.running | not)) | .path')
+            done < <(cmd_prefixes | jq -r '.prefixes[] | select(.orphan and .owner == "steam" and (.running | not)) | .path')
             ((rc == 0)) && log "✔ Orphan prefixes removed (backups in ${PREFIX_BACKUPS/#$HOME/\~})."
             return $rc ;;
         protons)
@@ -3867,6 +3867,10 @@ cmd_prefixes() {
     local games p owner id name kind root size used arch ver fdir
     games="$(steam_games | awk 'NR % 5 == 1 { id = $0 } NR % 5 == 2 { print id "\t" $0 }')"
     fdir="$(faugus_prefix_dir)"
+    # Umbral: path → the games using that prefix (its own name can be the .exe's, e.g. "Game")
+    local uprefixes
+    uprefixes="$(umbral_json | jq -c '(.games // []) as $g | [(.prefixes // [])[] | . as $p
+        | {path:(.path | rtrimstr("/")), name, games:[$g[] | select(.prefix_id == $p.id and (.hidden | not)) | .name]}]' 2>/dev/null)"
     while IFS= read -r p; do
         owner=wine; id=""; name="${p##*/}"; kind=game; root="$p"
         if [[ "$p" =~ /steamapps/compatdata/([0-9]+)/pfx$ ]]; then
@@ -3881,8 +3885,12 @@ cmd_prefixes() {
             fi
             ver="$(cat "$root/version" 2>/dev/null)"
         else
-            local un; un="$(umbral_json | jq -r --arg p "$p" '(.prefixes // [])[] | select((.path | rtrimstr("/")) == $p) | .name' 2>/dev/null | head -1)"
-            [[ -n "$un" ]] && { owner=umbral; name="$un"; }
+            local un; un="$(jq -c --arg p "$p" 'first(.[] | select(.path == $p)) // empty' <<<"${uprefixes:-[]}" 2>/dev/null)"
+            if [[ -n "$un" ]]; then
+                owner=umbral
+                name="$(jq -r 'if (.games | length) > 0 then .games | join(" · ") else .name end' <<<"$un")"
+                [[ "$(jq '.games | length' <<<"$un")" == 0 ]] && kind=orphan
+            fi
             [[ -z "$un" ]] && case "$p" in
                 */Heroic/Prefixes/*) owner=heroic ;;
                 */bottles/bottles/*) owner=bottles ;;

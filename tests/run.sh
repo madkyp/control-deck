@@ -854,7 +854,12 @@ eq "key keeps Umbral's id (with colons)" "$(jq -r '.[] | select(.name == "WoW") 
 eq "prefix and Proton from Umbral's config" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.prefixName)/\(.compat)"' <<<"$G")" "Game/GE-Proton"
 eq "game folder size" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | .size' <<<"$G")" 5000
 eq "playtime and last play" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.playtime) \(.lastPlayed)"' <<<"$G")" "145 2026-09-30T11:34:25"
-eq "Umbral prefix named from Umbral's config" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/game-2" '.prefixes[] | select(.path == $p) | "\(.owner)/\(.name)"')" "umbral/Game"
+eq "Umbral prefix shown with the game using it (its own name was the .exe's)" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/game-2" '.prefixes[] | select(.path == $p) | "\(.owner)/\(.name)/\(.orphan)"')" "umbral/Pokemon Iberia/false"
+mkpfx "$HOME/Games/umbral/old"; cp "$T/umbral.json" "$T/umbral.json.bak"
+jq --arg p "$HOME/Games/umbral/old" '.prefixes += [{id:"p-old", name:"Old", path:$p, runner:"GE-Proton"}]' "$T/umbral.json.bak" > "$T/umbral.json"
+eq "Umbral prefix no game uses → orphan" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/old" '.prefixes[] | select(.path == $p) | "\(.name)/\(.orphan)"')" "Old/true"
+eq "…but CLEAN leaves it (Umbral still lists it): only Steam orphans" "$("$CD" cleanscan | jq -r '.[] | select(.id == "prefixes") | .details' | grep -c Old)" 0
+mv "$T/umbral.json.bak" "$T/umbral.json"; rm -rf "$HOME/Games/umbral/old"
 mkdir -p "$T/proc2/6000" "$T/proc2/6001"
 printf '%s\0%s\0' "/usr/bin/umu-run" 'C:\games\Poke\Game.exe' > "$T/proc2/6000/cmdline"
 printf '%s\0%s\0' "grep" "WowB.exe.bak" > "$T/proc2/6001/cmdline"
