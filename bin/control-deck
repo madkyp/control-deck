@@ -4526,7 +4526,7 @@ cmd_fx_shotkey() {
         dir="$(jq -r .dir "$f")"
         [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyScreenshot "$(fx_vk "$k"),0,0,0"
     done
-    log "✔ ReShade screenshot key: $k"
+    log "✔ ReShade screenshot key: $k (a game already open keeps the old one until it restarts)"
 }
 # ReShade's effects on/off switch (KeyEffects); End by default, "None" = no key
 fx_effects_key() { local k; k="$(jq -r '.effectsKey // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-End}"; }
@@ -4543,7 +4543,7 @@ cmd_fx_key() {
         dir="$(jq -r .dir "$f")"
         [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyOverlay "$(fx_vk "$k"),0,0,0"
     done
-    log "✔ In-game shader key: $k"
+    log "✔ In-game shader key: $k (a game already open keeps the old one until it restarts)"
 }
 
 # fx effectskey <End|F9|None> — ReShade's "all effects on/off" key, every game
@@ -4556,7 +4556,7 @@ cmd_fx_effectskey() {
         dir="$(jq -r .dir "$f")"
         [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyEffects "$(fx_vk "$k"),0,0,0"
     done
-    log "✔ Effects on/off key: $k"
+    log "✔ Effects on/off key: $k (a game already open keeps the old one until it restarts)"
 }
 
 # cached download: fx_cached <file> <max age s> <url>  (stale copy beats nothing)

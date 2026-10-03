@@ -86,6 +86,7 @@ var ES = {
     " · confidence ": " · confianza ",
     " · depth: ": " · profundidad: ",
     " · idle": " · en reposo",
+    " · keys apply the next time the game starts": " · las teclas se aplican la próxima vez que abras el juego",
     " · trending ": " · tendencia ",
     " · you =": " · tú =",
     " — in vkBasalt, effects that need the depth buffer are skipped": " — en vkBasalt se omiten los efectos que necesitan el buffer de profundidad",

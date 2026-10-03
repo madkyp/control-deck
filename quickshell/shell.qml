@@ -4116,6 +4116,7 @@ ShellRoot {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                             text: win.t("saves a screenshot with the effects to ") + (win.fx.shotsDir || "~/Pictures/ReShade")
+                                                  + win.t(" · keys apply the next time the game starts")
                                         }
                                     }
                                     // must launch through the wrapper
