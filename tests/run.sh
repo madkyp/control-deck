@@ -736,14 +736,14 @@ eq "global NVIDIA cache found and stale" "$(jq -r '.global[] | select(.id == "nv
 eq "stale bytes (game driver cache + global)" "$(jq -r .staleBytes <<<"$SC")" 2700
 FAKE_FOSSILIZE=1 "$CD" shaderclean orphans >/dev/null 2>&1; eq "refuses while Steam compiles shaders" "$?" 3
 PROC_ROOT="$T/proc" "$CD" shaderclean steam:100 driver >/dev/null 2>&1; eq "refuses while that game runs" "$?" 3
-"$CD" shaderclean steam:100 driver >/dev/null
+mkdir -p "$T/noproc"; PROC_ROOT="$T/noproc" "$CD" shaderclean steam:100 driver >/dev/null   # never this PC's running games
 yes "driver part emptied, pipelines kept" "[[ -z \"\$(ls -A '$SCD/100/nvidiav1')\" && -f '$SCD/100/fozpipelinesv6/steam_pipeline_cache.foz' ]]"
-"$CD" shaderclean orphans >/dev/null
+PROC_ROOT="$T/noproc" "$CD" shaderclean orphans >/dev/null
 yes "orphan cache removed" "[[ ! -e '$SCD/999' ]]"
-"$CD" shaderclean stale >/dev/null
+PROC_ROOT="$T/noproc" "$CD" shaderclean stale >/dev/null
 yes "stale global cache emptied, folder kept" "[[ -d '$HOME/.cache/nvidia/GLCache' && -z \"\$(ls -A '$HOME/.cache/nvidia/GLCache')\" ]]"
 yes "fresh driver cache kept" "[[ -f '$SCD/200/nvidiav1/GLCache/fresh.bin' ]]"
-"$CD" shaderclean steam:200 all >/dev/null
+PROC_ROOT="$T/noproc" "$CD" shaderclean steam:200 all >/dev/null
 yes "all: every part of that game gone" "[[ -d '$SCD/200' && -z \"\$(ls -A '$SCD/200')\" ]]"
 "$CD" shaderclean 'steam:../x' >/dev/null 2>&1; eq "bad target refused" "$?" 2
 unset CONTROL_DECK_STEAM_ROOT CONTROL_DECK_STEAM_RUNNING CONTROL_DECK_PACMAN_LOG

@@ -3047,7 +3047,9 @@ cmd_run() {
             else echo "  ReShade on but not installed in the game folder" >> "$rlog"; fi
         else
             local fxc; fxc="$(fx_key_dir "$key")/vkBasalt.conf"
-            if [[ -s "$fxc" ]]; then export ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE="$fxc"
+            # vkBasalt's own log (it writes to the game's stderr otherwise, which Steam keeps)
+            if [[ -s "$fxc" ]]; then mkdir -p "$STATE_DIR/logs"
+                export ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE="$fxc" VKBASALT_LOG_LEVEL=info VKBASALT_LOG_FILE="$STATE_DIR/logs/vkbasalt-${key//[:\/]/_}.log"
             else echo "  visual shaders on but no config at $fxc" >> "$rlog"; fi
         fi
     fi
@@ -5235,7 +5237,7 @@ cmd_hook() {
                 env="$(jq -nc --arg o "d3dcompiler_47=n;$api=n,b" '{WINEDLLOVERRIDES:$o}')"; fi
         else
             fxc="$(fx_key_dir "$key")/vkBasalt.conf"
-            [[ -s "$fxc" ]] && env="$(jq -nc --arg c "$fxc" '{ENABLE_VKBASALT:"1", VKBASALT_CONFIG_FILE:$c}')"
+            [[ -s "$fxc" ]] && { mkdir -p "$STATE_DIR/logs"; env="$(jq -nc --arg c "$fxc" --arg l "$STATE_DIR/logs/vkbasalt-${key//[:\/]/_}.log" '{ENABLE_VKBASALT:"1", VKBASALT_CONFIG_FILE:$c, VKBASALT_LOG_LEVEL:"info", VKBASALT_LOG_FILE:$l}')"; }
         fi
     fi
     jq -nc --argjson env "$env" --argjson overlay "$(jq '.overlay == true' <<<"$p")" \
