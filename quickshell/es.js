@@ -351,6 +351,7 @@ var ES = {
     "No key: effects stay on": "Sin tecla: los efectos quedan siempre activos",
     "No upscaler upgrade for this game ⓘ": "No hay mejoras de escalado para este juego ⓘ",
     "Nothing is used by enough similar players to recommend it. ": "Nada lo usan suficientes jugadores similares como para recomendarlo. ",
+    "Nothing to clean in: ": "Nada que limpiar en: ",
     "ON-SCREEN CHECK": "MARCA EN PANTALLA",
     "ON/OFF KEY": "TECLA ON/OFF",
     "OPEN ": "ABRIR ",

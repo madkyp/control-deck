@@ -2565,8 +2565,16 @@ ShellRoot {
                         id: cleanList
                         anchors.fill: parent; anchors.margins: 4
                         clip: true; spacing: 3
-                        model: win.cleanItems
+                        // only what can be cleaned gets a row; the rest is one line below
+                        model: win.cleanItems.filter(function (x) { return x.count > 0; })
                         ScrollBar.vertical: ScrollBar {}
+                        footer: Text {
+                            width: cleanList.width - 8; topPadding: 10; leftPadding: 12; rightPadding: 12
+                            property var clean: win.cleanItems.filter(function (x) { return x.count === 0; })
+                            visible: clean.length > 0
+                            text: "✓ " + win.t("Nothing to clean in: ") + clean.map(function (x) { return win.t(x.title); }).join("  ·  ")
+                            color: pal.dim; font.family: win.mono; font.pixelSize: 10; wrapMode: Text.WordWrap
+                        }
                         delegate: Rectangle {
                             required property var modelData
                             width: cleanList.width - 8; height: 62; radius: 8
@@ -2598,10 +2606,9 @@ ShellRoot {
                                 }
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: win.confirmClean === modelData.id ? 84 : 68
-                                    label: modelData.count === 0 ? "OK ✓" : (win.confirmClean === modelData.id ? win.t("CONFIRM?") : win.t("CLEAN"))
-                                    primary: modelData.count > 0
-                                    on: modelData.count > 0 && !win.sysBusy
+                                    width: Math.max(win.confirmClean === modelData.id ? 84 : 68, implicitWidth)
+                                    label: win.confirmClean === modelData.id ? win.t("CONFIRM?") : win.t("CLEAN")
+                                    on: !win.sysBusy
                                     onClicked: {
                                         if (["shaders", "prefixes", "protons"].indexOf(modelData.id) >= 0 && win.confirmClean !== modelData.id) {
                                             win.confirmClean = modelData.id; return;
