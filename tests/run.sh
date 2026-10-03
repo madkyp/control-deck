@@ -859,6 +859,9 @@ eq "Umbral games listed next to Steam's (hidden ones skipped)" "$(jq '[.[] | sel
 eq "key keeps Umbral's id (with colons)" "$(jq -r '.[] | select(.name == "WoW") | .key' <<<"$G")" "umbral:battlenet:wow"
 eq "prefix and Proton from Umbral's config" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.prefixName)/\(.compat)"' <<<"$G")" "Game/GE-Proton"
 eq "game folder size" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | .size' <<<"$G")" 5000
+BN="$HOME/Games/umbral/battlenet/drive_c/Program Files (x86)/Battle.net"; mkdir -p "$BN"; head -c 3000 /dev/zero > "$BN/Battle.net.exe"
+eq "Battle.net (no .exe in Umbral): its client folder's size" "$("$CD" games | jq -r '.[] | select(.name == "Battle.net") | .size')" 3000
+rm -rf "$BN"
 eq "playtime and last play" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.playtime) \(.lastPlayed)"' <<<"$G")" "145 2026-09-30T11:34:25"
 eq "Umbral prefix shown with the game using it (its own name was the .exe's)" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/game-2" '.prefixes[] | select(.path == $p) | "\(.owner)/\(.name)/\(.orphan)"')" "umbral/Pokemon Iberia/false"
 mkpfx "$HOME/Games/umbral/old"; cp "$T/umbral.json" "$T/umbral.json.bak"

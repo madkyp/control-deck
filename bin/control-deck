@@ -3137,11 +3137,17 @@ umbral_json() { if [[ -s "$UMBRAL_CONFIG" ]]; then cat "$UMBRAL_CONFIG"; else ec
 # JSON list of Umbral's (non-hidden) games, in the same shape as cmd_games entries
 umbral_games() {
     [[ -s "$UMBRAL_CONFIG" ]] || { echo '[]'; return; }
-    local g sizes="" exe
-    # size of each game's folder (the .exe's directory); none for the Battle.net client itself
-    while IFS=$'\t' read -r g exe; do
-        [[ -n "$exe" && -f "$exe" ]] && sizes+="$g"$'\t'"$(dir_bytes "$(dirname "$exe")")"$'\n'
-    done < <(jq -r '.games[]? | select(.hidden != true) | [.id, (.exe // "")] | @tsv' "$UMBRAL_CONFIG")
+    local g sizes="" exe kind pfx d
+    # size of each game's folder (the .exe's directory); the Battle.net client: its
+    # own folder in the prefix (the games it installs are listed on their own)
+    # \x1f between fields: with tabs, read would merge the empty .exe of Battle.net
+    while IFS=$'\x1f' read -r g exe kind pfx; do
+        d=""
+        if [[ -n "$exe" && -f "$exe" ]]; then d="$(dirname "$exe")"
+        elif [[ "$kind" == battlenet && -n "$pfx" ]]; then d="$pfx/drive_c/Program Files (x86)/Battle.net"; fi
+        [[ -n "$d" && -d "$d" ]] && sizes+="$g"$'\t'"$(dir_bytes "$d")"$'\n'
+    done < <(jq -r '(.prefixes // []) as $px | .games[]? | select(.hidden != true) | . as $g
+                    | [.id, (.exe // ""), (.kind // ""), (($px | map(select(.id == $g.prefix_id)) | first // {}).path // "")] | join("\u001f")' "$UMBRAL_CONFIG")
     jq -c --arg sizes "$sizes" '
         ($sizes | split("\n") | map(select(. != "") | split("\t") | {key:.[0], value:(.[1]|tonumber)}) | from_entries) as $sz
         | (.prefixes // []) as $px
