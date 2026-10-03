@@ -1422,13 +1422,20 @@ ShellRoot {
             property bool primary: true
             property color tint: pal.accent
             signal clicked
-            width: 76; height: 30; radius: 6
+            // never narrower than its text (Spanish labels are longer); a fixed width
+            // given by a layout still fits: the text shrinks a little as a last resort
+            implicitWidth: Math.max(76, mbTxt.implicitWidth + 18)
+            width: implicitWidth; height: 30; radius: 6
             color: primary && on ? pal.cardHi : "transparent"
             border.color: primary && on ? tint : pal.border
             border.width: 1
             opacity: on ? 1.0 : 0.4
             Text {
+                id: mbTxt
                 anchors.centerIn: parent
+                width: Math.min(implicitWidth, mb.width - 8)
+                horizontalAlignment: Text.AlignHCenter
+                fontSizeMode: Text.HorizontalFit; minimumPixelSize: 6
                 text: mb.label
                 color: mb.primary && mb.on ? pal.accentHi : pal.dim
                 font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
@@ -2168,7 +2175,7 @@ ShellRoot {
                         onAccepted: win.runSearch(text)
                     }
                     MiniBtn {
-                        width: 78; height: 34
+                        width: Math.max(78, implicitWidth); height: 34
                         label: win.storeBusy ? "…" : win.t("SEARCH")
                         on: !win.storeBusy
                         onClicked: win.runSearch(queryField.text)
@@ -2229,7 +2236,7 @@ ShellRoot {
                                 }
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: 68
+                                    width: Math.max(68, implicitWidth)
                                     label: modelData.installed ? win.t("INSTALLED") : (modelData.source === "aur" ? win.t("REVIEW") : win.t("INSTALL"))
                                     primary: !modelData.installed
                                     on: !modelData.installed && !win.storeBusy
@@ -2328,11 +2335,11 @@ ShellRoot {
                                 text: win.t("Building runs the PKGBUILD on your machine. Read it if anything is flagged.")
                             }
                             MiniBtn {
-                                width: 76; label: win.t("CANCEL"); primary: false
+                                width: Math.max(76, implicitWidth); label: win.t("CANCEL"); primary: false
                                 onClicked: { win.review = null; win.storeStatus = win.results.length + " RESULTS"; }
                             }
                             MiniBtn {
-                                width: 120
+                                width: Math.max(120, implicitWidth)
                                 tint: win.review ? win.riskColor(win.review.risk) : pal.accent
                                 label: !win.review ? "" : (win.review.risk === "high"
                                        ? (win.confirmRisky ? win.t("REALLY BUILD?") : win.t("BUILD ANYWAY"))
@@ -2479,7 +2486,7 @@ ShellRoot {
                                 }
                                 MiniBtn {
                                     Layout.alignment: Qt.AlignVCenter
-                                    width: 68
+                                    width: Math.max(68, implicitWidth)
                                     label: modelData.source === "repo" ? win.t("SYSTEM") : win.t("UPDATE")
                                     primary: modelData.source !== "repo"
                                     on: !win.updBusy
@@ -2619,7 +2626,7 @@ ShellRoot {
                         text: win.t("Saves your packages (repos and AUR), Flatpaks, GitHub AppImages and the launchers you edited (with their icons) to ~/control-deck-backup-<date>.json.")
                     }
                     MiniBtn {
-                        width: 120; height: 34
+                        width: Math.max(120, implicitWidth); height: 34
                         label: win.t("EXPORT BACKUP")
                         on: !win.sysBusy
                         onClicked: win.runSys(["export"], win.t("EXPORTING…"))
@@ -2647,7 +2654,7 @@ ShellRoot {
                             }
                         }
                         MiniBtn {
-                            width: 92; height: 34
+                            width: Math.max(92, implicitWidth); height: 34
                             label: win.confirmRestore ? win.t("CONFIRM?") : win.t("RESTORE")
                             on: restoreField.text.trim() !== "" && !win.sysBusy
                             onClicked: {
@@ -2656,7 +2663,7 @@ ShellRoot {
                             }
                         }
                         MiniBtn {
-                            width: 120; height: 34; label: win.t("GAMING ONLY"); primary: false
+                            width: Math.max(120, implicitWidth); height: 34; label: win.t("GAMING ONLY"); primary: false
                             on: restoreField.text.trim() !== "" && !win.sysBusy
                             onClicked: win.runSys(["gaming-import", win.expandHome(restoreField.text.trim())], win.t("IMPORTING…"))
                         }
@@ -2741,8 +2748,8 @@ ShellRoot {
                             }
                             RowLayout {
                                 spacing: 8
-                                MiniBtn { width: 130; label: win.t("LOAD (PASSWORD)"); on: !win.sysBusy; onClicked: win.loadSnapshots(true) }
-                                MiniBtn { width: 120; label: win.t("ALLOW MY USER"); primary: false; on: !win.sysBusy
+                                MiniBtn { width: Math.max(130, implicitWidth); label: win.t("LOAD (PASSWORD)"); on: !win.sysBusy; onClicked: win.loadSnapshots(true) }
+                                MiniBtn { width: Math.max(120, implicitWidth); label: win.t("ALLOW MY USER"); primary: false; on: !win.sysBusy
                                           onClicked: win.runSys(["snapallow"], win.t("ALLOWING…")) }
                             }
                         }
@@ -2815,12 +2822,12 @@ ShellRoot {
                             placeholderText: win.t("description for a new snapshot…")
                         }
                         MiniBtn {
-                            width: 84; height: 34; label: win.t("CREATE")
+                            width: Math.max(84, implicitWidth); height: 34; label: win.t("CREATE")
                             on: !win.sysBusy
                             onClicked: { win.runSys(["snapcreate", snapDescField.text.trim() || win.t("manual snapshot")], win.t("SNAPSHOTTING…")); snapDescField.text = ""; }
                         }
                         MiniBtn {
-                            width: 110; height: 34; primary: false
+                            width: Math.max(110, implicitWidth); height: 34; primary: false
                             label: win.selSnaps.length === 1 ? "DIFF #" + win.selSnaps[0] + win.t(" → NOW") : win.t("DIFF → NOW")
                             on: win.selSnaps.length === 1 && !win.sysBusy
                             onClicked: win.runSys(["snapdiff", String(win.selSnaps[0])], win.t("COMPARING…"))
@@ -2842,7 +2849,7 @@ ShellRoot {
                             }
                         }
                         MiniBtn {
-                            width: 116; height: 34; primary: false
+                            width: Math.max(116, implicitWidth); height: 34; primary: false
                             label: win.confirmSnapCleanup ? win.t("CONFIRM?") : win.t("CLEANUP NOW")
                             on: !win.sysBusy
                             onClicked: {
@@ -2851,7 +2858,7 @@ ShellRoot {
                             }
                         }
                         MiniBtn {
-                            width: 112; height: 34
+                            width: Math.max(112, implicitWidth); height: 34
                             tint: pal.bad
                             label: win.selSnaps.length === 0 ? win.t("DELETE")
                                  : (win.confirmSnapDelete ? win.t("CONFIRM ") + win.selSnaps.length + "?" : win.t("DELETE (") + win.selSnaps.length + ")")
@@ -2955,7 +2962,7 @@ ShellRoot {
                                       + String(win.gaudit.vendor || "").toUpperCase() + win.t(" GPU or aren't set up here yet")
                             }
                             MiniBtn {
-                                width: 90; height: 28; label: win.t("FIX ALL"); on: !win.gameBusy
+                                width: Math.max(90, implicitWidth); height: 28; label: win.t("FIX ALL"); on: !win.gameBusy
                                 onClicked: win.runGame(["gaudit", "fix", "all"], win.t("ADJUSTING PROFILES…"))
                             }
                         }
@@ -3326,13 +3333,13 @@ ShellRoot {
                             MouseArea { id: stMa; anchors.fill: parent; hoverEnabled: true }
                         }
                         MiniBtn {
-                            width: 70; height: 32; primary: false; label: win.t("RESET")
+                            width: Math.max(70, implicitWidth); height: 32; primary: false; label: win.t("RESET")
                             visible: win.selGameSource === "steam" && win.gp.custom === true
                             on: !win.gameBusy
                             onClicked: win.runGame(["gprofile", "reset", win.selGame], win.t("RESETTING…"))
                         }
                         MiniBtn {
-                            width: 120; height: 32; primary: false
+                            width: Math.max(120, implicitWidth); height: 32; primary: false
                             visible: win.selGameSource === "steam"
                             label: win.selGameWrapped ? win.t("RESTORE STEAM") : win.t("USE IN STEAM")
                             on: !win.gameBusy
@@ -3340,13 +3347,13 @@ ShellRoot {
                                                    win.selGameWrapped ? win.t("RESTORING…") : win.t("WRAPPING…"))
                         }
                         MiniBtn {
-                            width: 76; height: 32; label: win.t("SAVE")
+                            width: Math.max(76, implicitWidth); height: 32; label: win.t("SAVE")
                             visible: win.selGameSource === "steam"
                             on: !win.gameBusy
                             onClicked: win.saveGameProfile()
                         }
                         MiniBtn {
-                            width: 76; height: 32; label: win.t("▶ PLAY"); tint: pal.ok
+                            width: Math.max(76, implicitWidth); height: 32; label: win.t("▶ PLAY"); tint: pal.ok
                             on: !win.gameBusy
                             onClicked: win.playGame()
                         }
@@ -3405,12 +3412,12 @@ ShellRoot {
                                                   + "  ·  " + modelData.path.replace(win.home, "~")
                                         }
                                     }
-                                    MiniBtn { width: 64; label: win.t("BACKUP"); primary: false; on: !win.gameBusy && !modelData.running
+                                    MiniBtn { width: Math.max(64, implicitWidth); label: win.t("BACKUP"); primary: false; on: !win.gameBusy && !modelData.running
                                               onClicked: win.runGame(["prefix", "backup", modelData.path], win.t("BACKING UP…")) }
-                                    MiniBtn { width: 60; label: win.t("CLONE"); primary: false; on: !win.gameBusy && !modelData.running
+                                    MiniBtn { width: Math.max(60, implicitWidth); label: win.t("CLONE"); primary: false; on: !win.gameBusy && !modelData.running
                                               onClicked: win.runGame(["prefix", "clone", modelData.path], win.t("CLONING…")) }
                                     MiniBtn {
-                                        width: 80; tint: pal.bad
+                                        width: Math.max(80, implicitWidth); tint: pal.bad
                                         property string key: "pfx:" + modelData.path
                                         label: win.confirmShader === key ? win.t("CONFIRM?") : win.t("DELETE")
                                         on: !win.gameBusy && !modelData.running && modelData.kind !== "tool" && modelData.kind !== "shared"
@@ -3425,7 +3432,7 @@ ShellRoot {
                         Hint {
                             text: win.t("DELETE always makes a backup first (a Steam game's prefix is recreated on its next launch — saves kept only in the prefix would be lost without it). CLONE copies the Wine prefix to ~/Games/prefixes (instant on Btrfs). Restore a backup: control-deck prefix restore <backup> <folder>.")
                         }
-                        MiniBtn { width: 100; label: win.t("BACKUPS ↗"); primary: false; onClicked: pfxOpenProc.running = true }
+                        MiniBtn { width: Math.max(100, implicitWidth); label: win.t("BACKUPS ↗"); primary: false; onClicked: pfxOpenProc.running = true }
                     }
                 }
 
@@ -3469,10 +3476,10 @@ ShellRoot {
                                                  onClicked: win.saveBench(["delay=" + modelData]) }
                             }
                             Item { Layout.fillWidth: true }
-                            MiniBtn { width: 70; label: win.t("SAVE"); on: !win.gameBusy; onClicked: win.saveBench([]) }
-                            MiniBtn { width: 70; label: win.t("RUN A"); tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
+                            MiniBtn { width: Math.max(70, implicitWidth); label: win.t("SAVE"); on: !win.gameBusy; onClicked: win.saveBench([]) }
+                            MiniBtn { width: Math.max(70, implicitWidth); label: win.t("RUN A"); tint: pal.accent; on: !win.gameBusy && win.selGameWrapped
                                       onClicked: win.runBench("A") }
-                            MiniBtn { width: 70; label: win.t("RUN B"); tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
+                            MiniBtn { width: Math.max(70, implicitWidth); label: win.t("RUN B"); tint: pal.pink; on: !win.gameBusy && win.selGameWrapped
                                       onClicked: win.runBench("B") }
                         }
                         Hint {
@@ -3563,10 +3570,10 @@ ShellRoot {
                         RowLayout {
                             Layout.fillWidth: true; spacing: 8
                             Item { Layout.fillWidth: true }
-                            MiniBtn { width: 110; label: win.t("REFRESH RESULTS"); primary: false; on: !win.gameBusy; onClicked: benchProc.running = true }
-                            MiniBtn { width: 110; label: win.t("RESTORE PROTON"); primary: false; visible: !!win.bench.originalProton; on: !win.gameBusy
+                            MiniBtn { width: Math.max(110, implicitWidth); label: win.t("REFRESH RESULTS"); primary: false; on: !win.gameBusy; onClicked: benchProc.running = true }
+                            MiniBtn { width: Math.max(110, implicitWidth); label: win.t("RESTORE PROTON"); primary: false; visible: !!win.bench.originalProton; on: !win.gameBusy
                                       onClicked: win.runGame(["bench", "restore", win.selGame], win.t("RESTORING…")) }
-                            MiniBtn { width: 70; label: win.t("CLEAR"); tint: pal.bad; primary: false; on: !win.gameBusy
+                            MiniBtn { width: Math.max(70, implicitWidth); label: win.t("CLEAR"); tint: pal.bad; primary: false; on: !win.gameBusy
                                       onClicked: win.runGame(["bench", "clear", win.selGame], win.t("CLEARING…")) }
                         }
                     }
@@ -3714,7 +3721,7 @@ ShellRoot {
                                             // the pending step's own button
                                             MiniBtn {
                                                 visible: next && index === 0
-                                                width: 140; height: 28; label: win.fx.recommended === "vkbasalt" ? win.t("USE VKBASALT ★") : win.t("USE RESHADE ★")
+                                                width: Math.max(140, implicitWidth); height: 28; label: win.fx.recommended === "vkbasalt" ? win.t("USE VKBASALT ★") : win.t("USE RESHADE ★")
                                                 on: !win.gameBusy
                                                 onClicked: win.fx.recommended === "vkbasalt"
                                                            ? win.fxApply("mode:vkbasalt", win.t("SWITCHING…"), ["fx", "mode", win.selGame, "vkbasalt"])
@@ -3722,12 +3729,12 @@ ShellRoot {
                                             }
                                             MiniBtn {
                                                 visible: next && index === 1
-                                                width: 90; height: 28; label: win.t("INSTALL"); on: !win.gameBusy
+                                                width: Math.max(90, implicitWidth); height: 28; label: win.t("INSTALL"); on: !win.gameBusy
                                                 onClicked: win.runGame(win.fxReshade ? ["fx", "reshade", "install"] : ["fx", "install"], win.t("INSTALLING…"))
                                             }
                                             MiniBtn {
                                                 visible: next && index === 2 && !win.fxUmbral
-                                                width: 120; height: 28; label: win.t("USE IN STEAM")
+                                                width: Math.max(120, implicitWidth); height: 28; label: win.t("USE IN STEAM")
                                                 on: !win.gameBusy && !win.fx.steamRunning
                                                 onClicked: win.runGame(["steamwrap", win.selGameId, "on"], win.t("WRAPPING…"))
                                             }
@@ -3739,7 +3746,7 @@ ShellRoot {
                                             }
                                             MiniBtn {
                                                 visible: next && index === 3 && (win.fx.links || []).length > 0
-                                                width: 90; height: 28; label: win.t("IMPORT…")
+                                                width: Math.max(90, implicitWidth); height: 28; label: win.t("IMPORT…")
                                                 on: !win.gameBusy && win.fxReady && !fxPickProc.running
                                                 onClicked: fxPickProc.running = true
                                             }
@@ -3883,7 +3890,7 @@ ShellRoot {
                                         }
                                         MiniBtn {
                                             visible: !win.fxUmbral
-                                            width: 120; height: 28; label: win.t("USE IN STEAM")
+                                            width: Math.max(120, implicitWidth); height: 28; label: win.t("USE IN STEAM")
                                             on: !win.gameBusy && !win.fx.steamRunning
                                             onClicked: win.runGame(["steamwrap", win.selGameId, "on"], win.t("WRAPPING…"))
                                         }
@@ -3908,7 +3915,7 @@ ShellRoot {
                                               : win.t("One-time setup, no password: ReShade ") + ((win.fx.reshade || {}).latest || "") + win.t(" from reshade.me, d3dcompiler_47 (Mozilla's Firefox installer, checksum-verified, like winetricks) and the standard shaders.")
                                     }
                                     MiniBtn {
-                                        width: 96; height: 32; label: win.fx.reshade && win.fx.reshade.update ? win.t("UPDATE") : win.t("INSTALL")
+                                        width: Math.max(96, implicitWidth); height: 32; label: win.fx.reshade && win.fx.reshade.update ? win.t("UPDATE") : win.t("INSTALL")
                                         on: !win.gameBusy
                                         onClicked: win.runGame(["fx", "reshade", "install"], win.t("DOWNLOADING RESHADE…"))
                                     }
@@ -3935,7 +3942,7 @@ ShellRoot {
                                     }
                                     MiniBtn {
                                         visible: win.fx.chaotic !== false || win.fx.vkbasalt
-                                        width: 96; height: 32; label: win.t("INSTALL")
+                                        width: Math.max(96, implicitWidth); height: 32; label: win.t("INSTALL")
                                         on: !win.gameBusy
                                         onClicked: win.runGame(["fx", "install"], win.t("INSTALLING SHADERS…"))
                                     }
@@ -3994,7 +4001,7 @@ ShellRoot {
                                         }
                                         MiniBtn {
                                             visible: win.fxActive
-                                            width: 60; height: 28; primary: false; label: "OFF"
+                                            width: Math.max(60, implicitWidth); height: 28; primary: false; label: "OFF"
                                             on: !win.gameBusy
                                             onClicked: win.runGame(["fx", "set", win.selGame, "off"], win.t("TURNING OFF…"))
                                         }
@@ -4214,7 +4221,7 @@ ShellRoot {
                                 }
                                 Chip { label: fxScanProc.running ? win.t("SCANNING…") : win.t("SCAN"); on: !fxScanProc.running; onClicked: { fxScanProc.cached = false; fxScanProc.running = true; } }
                                 MiniBtn {
-                                    width: 150; height: 32; label: win.t("SET UP ALL (") + win.fxEligible + ")"
+                                    width: Math.max(150, implicitWidth); height: 32; label: win.t("SET UP ALL (") + win.fxEligible + ")"
                                     on: !win.gameBusy && win.fxEligible > 0
                                     onClicked: win.runGame(["fx", "autoinstall"].concat(win.fxScan.filter(function (r) { return r.eligible && !r.current; }).map(function (r) { return r.key; })), win.t("SETTING UP ") + win.fxEligible + win.t(" GAME(S)…"))
                                 }
@@ -4249,14 +4256,14 @@ ShellRoot {
                                                 color: pal.ok; font.family: win.mono; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 260
                                             }
                                             MiniBtn {
-                                                width: 70; height: 28; primary: false; label: win.t("OPEN")
+                                                width: Math.max(70, implicitWidth); height: 28; primary: false; label: win.t("OPEN")
                                                 onClicked: {
                                                     var g = win.games.filter(function (x) { return x.key === modelData.key; })[0];
                                                     if (g) { win.selectGame(g); win.fxScope = "game"; win.openFx(); }
                                                 }
                                             }
                                             MiniBtn {
-                                                width: 80; height: 28; label: win.t("SET UP")
+                                                width: Math.max(80, implicitWidth); height: 28; label: win.t("SET UP")
                                                 visible: modelData.eligible
                                                 on: !win.gameBusy
                                                 onClicked: win.runGame(["fx", "autoinstall", modelData.key], win.t("SETTING UP ") + modelData.name.toUpperCase() + "…")
@@ -4446,13 +4453,13 @@ ShellRoot {
                             }
                             MiniBtn {
                                 visible: (win.shaders.staleBytes || 0) > 0
-                                width: 104; label: win.confirmShader === "stale" ? win.t("CONFIRM?") : win.t("CLEAN STALE")
+                                width: Math.max(104, implicitWidth); label: win.confirmShader === "stale" ? win.t("CONFIRM?") : win.t("CLEAN STALE")
                                 on: !win.gameBusy && !win.shaders.steamProcessing
                                 onClicked: win.shaderAction(["shaderclean", "stale"], "stale", win.t("CLEANING…"))
                             }
                             MiniBtn {
                                 visible: (win.shaders.orphanBytes || 0) > 0
-                                width: 112; label: win.confirmShader === "orphans" ? win.t("CONFIRM?") : win.t("CLEAN ORPHANS")
+                                width: Math.max(112, implicitWidth); label: win.confirmShader === "orphans" ? win.t("CONFIRM?") : win.t("CLEAN ORPHANS")
                                 on: !win.gameBusy && !win.shaders.steamProcessing
                                 onClicked: win.shaderAction(["shaderclean", "orphans"], "orphans", win.t("CLEANING…"))
                             }
@@ -4512,14 +4519,14 @@ ShellRoot {
                                     }
                                     MiniBtn {
                                         visible: !modelData.global && modelData.driver > 0
-                                        width: 92; primary: false
+                                        width: Math.max(92, implicitWidth); primary: false
                                         property string key: "steam:" + modelData.id + ":driver"
                                         label: win.confirmShader === key ? win.t("CONFIRM?") : win.t("DRIVER CACHE")
                                         on: !win.gameBusy && !modelData.running && !win.shaders.steamProcessing
                                         onClicked: win.shaderAction(["shaderclean", "steam:" + modelData.id, "driver"], key, win.t("CLEANING…"))
                                     }
                                     MiniBtn {
-                                        width: 70; tint: pal.bad
+                                        width: Math.max(70, implicitWidth); tint: pal.bad
                                         property string key: (modelData.global ? "global:" + modelData.id : "steam:" + modelData.id + ":all")
                                         label: win.confirmShader === key ? win.t("CONFIRM?") : (modelData.global ? win.t("CLEAN") : win.t("ALL"))
                                         on: !win.gameBusy && !modelData.running && (modelData.global || !win.shaders.steamProcessing)
@@ -4941,7 +4948,7 @@ ShellRoot {
                                     }
                                     MiniBtn {
                                         visible: !!win.gstat.gamemode && !win.gstat.gamemode.ingroup && !win.gstat.gamemode.pending
-                                        width: 96; height: 26; label: win.confirmJoin ? win.t("CONFIRM?") : win.t("JOIN GROUP")
+                                        width: Math.max(96, implicitWidth); height: 26; label: win.confirmJoin ? win.t("CONFIRM?") : win.t("JOIN GROUP")
                                         on: !win.gameBusy
                                         onClicked: {
                                             if (!win.confirmJoin) { win.confirmJoin = true; return; }
