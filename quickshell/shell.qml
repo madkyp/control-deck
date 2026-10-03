@@ -3409,7 +3409,7 @@ ShellRoot {
                                             Text { text: win.human(modelData.size); color: pal.amber; font.family: win.mono; font.pixelSize: 10 }
                                             Text { visible: modelData.orphan; text: win.t("ORPHAN"); color: pal.amber; font.family: win.mono; font.pixelSize: 8; font.bold: true }
                                             Text { visible: modelData.running; text: win.t("IN USE"); color: pal.ok; font.family: win.mono; font.pixelSize: 8; font.bold: true }
-                                            Text { visible: modelData.kind === "tool" || modelData.kind === "shared"; text: modelData.kind.toUpperCase()
+                                            Text { visible: modelData.kind === "tool" || modelData.kind === "shared"; text: modelData.kind === "tool" ? win.t("TOOL") : win.t("SHARED")
                                                    color: pal.dim; font.family: win.mono; font.pixelSize: 8; font.bold: true }
                                         }
                                         Text {
@@ -3426,6 +3426,8 @@ ShellRoot {
                                     MiniBtn {
                                         width: Math.max(80, implicitWidth); tint: pal.bad
                                         property string key: "pfx:" + modelData.path
+                                        // stands out only where deleting is the suggestion (orphans) or being confirmed
+                                        primary: modelData.orphan || win.confirmShader === key
                                         label: win.confirmShader === key ? win.t("CONFIRM?") : win.t("DELETE")
                                         on: !win.gameBusy && !modelData.running && modelData.kind !== "tool" && modelData.kind !== "shared"
                                         onClicked: win.shaderAction(["prefix", "delete", modelData.path], key, win.t("BACKING UP + DELETING…"))
