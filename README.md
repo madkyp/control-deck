@@ -7,10 +7,13 @@
 ![Arch / CachyOS](https://img.shields.io/badge/Arch%20%2F%20CachyOS-Hyprland-1793d1)
 ![QuickShell 0.3+](https://img.shields.io/badge/QuickShell-0.3%2B-b9a3e3)
 ![Wayland](https://img.shields.io/badge/Wayland-1c1b2e)
+[![Umbral compatible](https://img.shields.io/badge/Umbral-compatible-8b5cf6)](https://github.com/madkyp/umbral-project)
 
 **A one-click app installer and manager for Arch / CachyOS**, with a [QuickShell](https://quickshell.outfoxxed.me/) UI (Wayland / Hyprland) and a *CONTROL DECK* look.
 
 Drop a package and it installs itself; manage, edit and uninstall the apps in your menu; search and install by name from the repos, the AUR, Flatpak or GitHub releases; keep everything updated and your system clean — all from one window.
+
+🎮 Its GAMING tab works with your Steam games and with **[Umbral](https://github.com/madkyp/umbral-project)**, a launcher for Battle.net and games from no store. See [Umbral compatibility](#-umbral-compatibility).
 
 > Inspired by the [r/unixporn post](https://www.reddit.com/r/unixporn/comments/1ugobnt/oc_install_any_app_with_just_one_click/) *"install any app with just one click"*.
 
@@ -107,6 +110,21 @@ The window has six tabs, in English or Spanish (**ESP / ENG** next to the title)
 
 ---
 
+## 🌑 Umbral compatibility
+
+Control Deck is compatible with **[Umbral](https://github.com/madkyp/umbral-project)** (`github.com/madkyp/umbral-project`), a GTK launcher for Battle.net (World of Warcraft…) and for Windows games from no store, running with Proton. Install both and they work together: Umbral's games show up in GAMING next to Steam's.
+
+| Umbral | What Control Deck does with its games |
+|---|---|
+| any | LIBRARY lists them (size, playtime, prefix and Proton) and ▶ PLAY starts them through Umbral; PREFIXES shows their prefixes with the game using each one, and flags the ones no game uses |
+| ≥ 0.10 | Umbral asks the deck for **FX** (ReShade / vkBasalt) and **TEMPS** when it starts a game; the CPU scheduler *while playing*, *while playing* quiet notifications / lighter Hyprland and the **session summary** follow the game |
+| ≥ 0.11 | Exact **running games** from Umbral's `running.json` (pids with their start time, no guessing by `.exe` name) and **■ STOP** in STATUS |
+| ≥ 0.12 | A game's **options edited from LIBRARY** (GameMode, MangoHud, Wayland, FPS limit, variables) through `umbral --get / --set`, and **CHECK FOR THIS PC** fixing them after moving to another PC |
+
+Nothing is needed on Control Deck's side: it finds `umbral` in your `PATH` and reads `~/.config/umbral/config.json`. With an older Umbral, the features it doesn't support yet stay read-only. How the two talk to each other is described in Umbral's README ("Integration") and in [`docs/gaming.md`](docs/gaming.md).
+
+---
+
 ## 📸 Screenshots
 
 | INSTALL | MANAGE | STORE |
@@ -153,6 +171,7 @@ The window has six tabs, in English or Spanish (**ESP / ENG** next to the title)
 - `snapper` (+ `snap-pac`, `grub-btrfs`, `btrfs-assistant`) — SNAPSHOTS tab and snapshots before pacman changes
 - `git` — the deck updating itself from your clone
 - `gamemode` (+ `lib32-gamemode`), `mangohud` (+ `lib32-mangohud`), `gamescope` — GAMING profiles
+- [Umbral](https://github.com/madkyp/umbral-project) — Battle.net and non-Steam Windows games in GAMING (see [Umbral compatibility](#-umbral-compatibility))
 
 ---
 
