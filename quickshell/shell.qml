@@ -315,6 +315,17 @@ ShellRoot {
         }
         property var    games: []
         property var    ioInfo: ({})        // the selected game's disk + I/O scheduler (IO PRIORITY)
+        property var    uopts: ({})         // an Umbral game's options (Umbral 0.12+: umbral --get); {} = read-only
+        function uset(args) { runGame(["uset", selGame].concat(args), "SAVING…"); }
+        // the variables of an Umbral game as "A=1 B=2" ↔ the env.X=… arguments that turn one into the other
+        function uenvArgs(text) {
+            var want = {}, args = [];
+            text.trim().split(/\s+/).forEach(function (w) { var i = w.indexOf("="); if (i > 0) want[w.substring(0, i)] = w.substring(i + 1); });
+            var have = uopts.env || {};
+            Object.keys(have).forEach(function (k) { if (!(k in want)) args.push("env." + k + "="); });
+            Object.keys(want).forEach(function (k) { if (have[k] !== want[k]) args.push("env." + k + "=" + want[k]); });
+            return args;
+        }
         property var    gstat: ({})
         property var    pdb: ({})           // ProtonDB summaries by appid
         property var    tools: []           // Proton versions Steam can use
@@ -453,6 +464,7 @@ ShellRoot {
             gameLog = ""; if (g.source === "steam" || g.source === "umbral") gprofProc.running = true;
             ups = {}; if (g.source === "steam") upsProc.running = true;
             ioInfo = {}; if (g.source === "steam" || g.source === "umbral") { ioProc.command = [scriptPath, "iosched", g.key]; ioProc.running = true; }
+            uopts = {}; if (g.source === "umbral") uoptsProc.running = true;
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
             fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
@@ -1059,6 +1071,7 @@ ShellRoot {
                 if (win.gameArgs[0] === "bench") benchProc.running = true;
                 if (win.gameArgs[0] === "prefix") { pfxProc.running = true; pfxBakProc.running = true; }
                 if (win.gameArgs[0] === "steamcompat") upsProc.running = true;
+                if ((win.gameArgs[0] === "uset" || win.gameArgs[0] === "gaudit") && win.selGameSource === "umbral") uoptsProc.running = true;
                 if (win.gameArgs[0] === "fx" || (win.gameArgs[0] === "steamwrap" && win.gameView === "fx")) fxStatProc.running = true;
                 if (win.gameArgs[0] === "fx" && win.fxScope === "library") { fxScanProc.cached = false; fxScanProc.running = true; }
                 if (win.selGame) gprofProc.running = true;
@@ -1127,6 +1140,11 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { var l = text.trim(); if (l === "es" || l === "en") win.lang = l; } }
         }
         Process { id: langSaveProc }
+        Process {
+            id: uoptsProc
+            command: [win.scriptPath, "uopts", win.selGame]
+            stdout: StdioCollector { onStreamFinished: { try { win.uopts = JSON.parse(text); } catch (e) { win.uopts = {}; } } }
+        }
         Process {
             id: ioProc
             stdout: StdioCollector { onStreamFinished: { try { win.ioInfo = JSON.parse(text); } catch (e) { win.ioInfo = {}; } } }
@@ -3117,7 +3135,7 @@ ShellRoot {
                         }
                     }
 
-                    // Umbral games: info only; their options live in Umbral
+                    // Umbral games: their options live in Umbral (edited here with Umbral 0.12+)
                     Rectangle {
                         Layout.fillWidth: true
                         visible: win.selGameSource === "umbral"
@@ -3143,7 +3161,51 @@ ShellRoot {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.dim; font.family: win.mono; font.pixelSize: 9
-                                text: win.t("Launch options are set in Umbral. Control Deck adds TEMPS and shaders when Umbral 0.10.0+ starts the game.")
+                                text: win.uopts.effective
+                                      ? win.t("Saved in Umbral itself (it applies them at once if it's open). A · means it comes from the prefix; Battle.net's options are its prefix's.")
+                                      : win.t("Launch options are set in Umbral. Control Deck adds TEMPS and shaders when Umbral 0.10.0+ starts the game.")
+                            }
+                            // Umbral 0.12+: its options, edited here (umbral --set)
+                            RowLayout {
+                                visible: !!win.uopts.effective; spacing: 6
+                                Repeater {
+                                    model: [["gamemode", "GAMEMODE"], ["mangohud", "MANGOHUD"], ["wayland", "WAYLAND"]]
+                                    delegate: Chip {
+                                        required property var modelData
+                                        property var own: (win.uopts.options || {})[modelData[0]]
+                                        property bool eff: (win.uopts.effective || {})[modelData[0]] === true
+                                        label: modelData[1] + (own === null && eff ? " ·" : "")
+                                        tint: pal.ok; active: eff; on: !win.gameBusy
+                                        tip: own === null ? win.t("Inherited from the prefix. Click to set it on this game.") : win.t("Set on this game. Click to switch it.")
+                                        onClicked: win.uset([modelData[0] + "=" + (eff ? "off" : "on")])
+                                    }
+                                }
+                                Item { Layout.fillWidth: true }
+                                Text { text: win.t("FPS LIMIT"); color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
+                                Repeater {
+                                    model: [0, 60, 120, 144]
+                                    delegate: Chip {
+                                        required property var modelData
+                                        property var cur: (win.uopts.effective || {}).fps_limit
+                                        label: modelData === 0 ? win.t("NONE") : String(modelData)
+                                        active: modelData === 0 ? !cur : cur === modelData; on: !win.gameBusy
+                                        onClicked: win.uset(["fps_limit=" + (modelData === 0 ? "default" : modelData)])
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                visible: !!win.uopts.effective; spacing: 6; Layout.fillWidth: true
+                                Text { text: "ENV"; Layout.preferredWidth: 30; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                Field {
+                                    id: uEnv; Layout.fillWidth: true; font.pixelSize: 11
+                                    placeholderText: win.t("VAR=value VAR2=value (this game)")
+                                    property string loaded: Object.keys(win.uopts.env || {}).map(function (k) { return k + "=" + win.uopts.env[k]; }).join(" ")
+                                    onLoadedChanged: text = loaded
+                                }
+                                MiniBtn {
+                                    label: win.t("SAVE"); on: !win.gameBusy && win.uenvArgs(uEnv.text).length > 0
+                                    onClicked: win.uset(win.uenvArgs(uEnv.text))
+                                }
                             }
                             RowLayout {
                                 spacing: 6

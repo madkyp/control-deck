@@ -551,6 +551,22 @@ reports:
   wineserver, also when its window is closed. Checked here with Pokémon
   Iberia: gone from the file and no process left.
 
+### Umbral ≥ 0.12: a game's options from LIBRARY
+- `uopts umbral:<id>` → `umbral --get <id>`: `options` set on the game (null =
+  inherited), `env`, and `effective` / `effective_env` (what the launch uses,
+  prefix included). `uset umbral:<id> k=v …` → `umbral --set`. It is all or
+  nothing, and the running Umbral applies and saves the change itself, so it
+  doesn't overwrite it on its next save. The deck checks each argument's shape
+  (`key=` or `env.NAME=`) before calling it; Umbral validates the values (exit 2).
+- LIBRARY → an Umbral game: GAMEMODE / MANGOHUD / WAYLAND chips (a `·` marks a
+  value inherited from the prefix; a click sets it on the game), FPS LIMIT
+  (NONE = `default`), and ENV. SAVE sends only the difference (`env.X=` removes).
+  With an older Umbral, `uopts` fails (4) and the panel stays read-only.
+- CHECK FOR THIS PC also reads Umbral games' variables from its config (for
+  Battle.net, its prefix's, which `--set battlenet` edits). FIX ALL removes the
+  other vendor's ones with `umbral --set <id> env.X=`. Checked here with
+  RADV_PERFTEST on Pokémon Iberia (NVIDIA): flagged, removed, config as before.
+
 ### CPU scheduler (STATUS → CPU · MEMORY)
 - `scxctl` (scx-tools) talks to `scx_loader` over D-Bus. Starting, switching
   and stopping are allowed by polkit action `org.scx.loader.manage-schedulers`

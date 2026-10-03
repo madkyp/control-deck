@@ -894,6 +894,28 @@ rm -f "$T/umbral.log"; "$CD" gstop umbral:1484d426be >/dev/null
 has "STOP closes an Umbral game through Umbral" "$(cat "$T/umbral.log")" "umbral --stop 1484d426be"
 "$CD" gstop umbral:other >/dev/null 2>&1; eq "…not running → 3" "$?" 3
 "$CD" gstop steam:100 >/dev/null 2>&1; eq "…Steam games aren't stopped from here" "$?" 2
+# Umbral ≥ 0.12: a game's options from outside (--get / --set)
+stub umbral 'echo "umbral $*" >> "'"$T"'/umbral.log"
+case "$1" in
+  --get) [ "$2" = 1484d426be ] || exit 1
+         echo "{\"options\":{\"gamemode\":null,\"fps_limit\":60},\"env\":{\"A\":\"1\"},\"effective\":{\"gamemode\":true,\"fps_limit\":60},\"effective_env\":{\"A\":\"1\"},\"prefix\":{\"id\":\"p-game-2\"},\"keys\":[]}" ;;
+  --set) case "$*" in *maybe*) echo "«gamemode» espera on, off o default" >&2; exit 2;; esac; exit 0 ;;
+esac'
+eq "uopts: Umbral's options, set and effective" "$("$CD" uopts umbral:1484d426be | jq -c '[.options.gamemode, .effective.gamemode, .env.A]')" '[null,true,"1"]'
+rm -f "$T/umbral.log"; "$CD" uset umbral:1484d426be gamemode=on env.DXVK_HUD=fps >/dev/null
+has "uset passes the options to umbral --set" "$(cat "$T/umbral.log")" "umbral --set 1484d426be gamemode=on env.DXVK_HUD=fps"
+"$CD" uset umbral:1484d426be gamemode=maybe >/dev/null 2>&1; eq "…a value Umbral refuses → 2" "$?" 2
+"$CD" uset umbral:1484d426be 'bad key=1' >/dev/null 2>&1; eq "…a key that isn't an option is refused before Umbral" "$?" 2
+stub umbral 'exit 2'
+"$CD" uopts umbral:1484d426be >/dev/null 2>&1; eq "older Umbral (no --get) → 4, the GUI stays read-only" "$?" 4
+# CHECK FOR THIS PC: an Umbral game's other-vendor variable is removed through Umbral
+stub umbral 'echo "umbral $*" >> "'"$T"'/umbral.log"; exit 0'
+cp "$T/umbral.json" "$T/umbral.json.bak"
+jq '(.games[] | select(.id == "1484d426be") | .options) = {env:{RADV_PERFTEST:"gpl", DXVK_HUD:"fps"}}' "$T/umbral.json.bak" > "$T/umbral.json"
+eq "gaudit flags an AMD-only variable of an Umbral game on NVIDIA" "$(CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit | jq -c '[.issues[] | select(.key == "umbral:1484d426be") | .var]')" '["RADV_PERFTEST"]'
+rm -f "$T/umbral.log"; CONTROL_DECK_GPU_VENDOR=nvidia "$CD" gaudit fix all >/dev/null
+has "…and FIX ALL removes it through umbral --set" "$(cat "$T/umbral.log")" "umbral --set 1484d426be env.RADV_PERFTEST="
+mv "$T/umbral.json.bak" "$T/umbral.json"
 rm -f "$T/umbral.log" "$T/steam.log"
 "$CD" gplay umbral:1484d426be >/dev/null
 has "PLAY starts an Umbral game through Umbral" "$(cat "$T/umbral.log")" "umbral --launch 1484d426be"
