@@ -3363,7 +3363,10 @@ ShellRoot {
                                         model: win.ups.options || []
                                         delegate: Chip {
                                             required property var modelData
-                                            property bool isOn: win.envValue(modelData.var) === "1"
+                                            // OptiScaler sets PROTON_FSR4_UPGRADE too: then it's OptiScaler's, not the plain FSR 4 chip's
+                                            property bool isOn: modelData.id === "fsr4"
+                                                ? win.envValue(modelData.var) === "1" && win.envValue("PROTON_USE_OPTISCALER") !== "1"
+                                                : win.envValue(modelData.var) === "1"
                                             label: (isOn ? "✓ " : "") + win.t(modelData.label)
                                             tint: pal.ok; active: isOn
                                             on: modelData.available || isOn
