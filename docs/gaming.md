@@ -646,6 +646,23 @@ until vkBasalt is installed.
 - STATUS lists the last 8 sessions with a small temperature graph.
   `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
 
+### IO PRIORITY and the disk scheduler
+- The chip runs the game under `ionice -c2 -n0` (best-effort, highest level).
+  The level is honoured by BFQ only: mq-deadline and kyber honour the class,
+  not the level, and `none` (usual on NVMe) ignores priorities.
+- `iosched <key>` finds the game's folder (Steam library, or Umbral's .exe /
+  prefix), its disk (`df` → `lsblk -s`, so partitions, LUKS and LVM resolve
+  to the disk) and `/sys/block/<disk>/queue/scheduler`. When the chip is on and
+  the scheduler isn't BFQ, it turns amber with a ⚠ and the tooltip says why.
+  Here: `sda` with mq-deadline → no effect.
+
+### Umbral prefixes in PREFIXES
+- Each Umbral prefix shows the games using it (Umbral could name a game's own
+  prefix after its .exe, e.g. "Game"; Umbral 0.10.1 renames it after the game).
+- A prefix no Umbral game uses is an orphan: DELETE (with a backup) is offered,
+  but CLEAN never sweeps it, since Umbral still lists it. Umbral 0.10.1 drops
+  list entries whose folder is gone and that no game uses.
+
 ### While playing: notifications and Hyprland (STATUS → WHILE PLAYING)
 - `playing quiet|lite on|off`, saved in `gaming/playing.json`. Both act on the
   game session (Steam wrapper, Umbral `session`): the first game that starts
