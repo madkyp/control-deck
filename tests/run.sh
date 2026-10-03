@@ -849,6 +849,12 @@ cat > "$T/umbral.json" <<EOF
           {"id":"hid","name":"Hidden one","kind":"custom","prefix_id":"p-game-2","exe":"","hidden":true}]}
 EOF
 G="$("$CD" games)"
+HF="$HOME/.local/share/control-deck/history.tsv"; cp "$HF" "$HF.bak" 2>/dev/null || :
+printf '%s\t%s\t%s\t%s\t%s\n' "2026-10-01 10:00:00" play umbral "umbral:1484d426be" ok "2026-10-01 10:01:00" "reshade on" gaming "steam:100 dxgi" ok \
+    "2026-10-01 10:02:00" "steam launch on" steam 100 ok "2026-10-01 10:03:00" install appimage "steam:x.AppImage" ok >> "$HF"
+eq "history: game keys show the game's name (Umbral, Steam key + extra, bare Steam id)" \
+   "$("$CD" history | jq -c '[.[0:4][] | .name]')" '["steam:x.AppImage","Game \"Quoted\" One","Game \"Quoted\" One dxgi","Pokemon Iberia"]'
+mv "$HF.bak" "$HF" 2>/dev/null || rm -f "$HF"
 eq "Umbral games listed next to Steam's (hidden ones skipped)" "$(jq '[.[] | select(.source == "umbral")] | length' <<<"$G")" 3
 eq "key keeps Umbral's id (with colons)" "$(jq -r '.[] | select(.name == "WoW") | .key' <<<"$G")" "umbral:battlenet:wow"
 eq "prefix and Proton from Umbral's config" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.prefixName)/\(.compat)"' <<<"$G")" "Game/GE-Proton"

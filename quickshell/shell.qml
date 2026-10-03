@@ -572,6 +572,19 @@ ShellRoot {
         property var    cleanItems: []
         property string confirmClean: ""    // gaming rows delete big things: second click confirms
         property var    history: []
+        // one row per burst of actions on the same thing (e.g. PLAY ×3 + GAME PROFILE on a game)
+        property var histRows: {
+            var out = [];
+            history.forEach(function (h) {
+                var tm = Date.parse(h.date.replace(" ", "T")), name = h.name || h.target, last = out[out.length - 1];
+                if (last && last.name === name && last.source === h.source && last.result === h.result && last.t0 - tm <= 600000) {
+                    var a = last.acts.filter(function (x) { return x.a === h.action; })[0];
+                    if (a) a.n++; else last.acts.push({ a: h.action, n: 1 });
+                    last.t0 = tm;
+                } else out.push({ date: h.date, name: name, source: h.source, result: h.result, t0: tm, acts: [{ a: h.action, n: 1 }] });
+            });
+            return out;
+        }
         property var    sysArgs: []
         property string sysLog: ""
         property string sysStatus: ""
@@ -2693,7 +2706,7 @@ ShellRoot {
                         id: histList
                         anchors.fill: parent; anchors.margins: 6
                         clip: true; spacing: 1
-                        model: win.history
+                        model: win.histRows
                         ScrollBar.vertical: ScrollBar {}
                         delegate: RowLayout {
                             required property var modelData
@@ -2703,8 +2716,9 @@ ShellRoot {
                                 font.family: win.mono; font.pixelSize: 10
                             }
                             Text {
-                                Layout.preferredWidth: 110
-                                text: modelData.action.toUpperCase(); elide: Text.ElideRight
+                                Layout.preferredWidth: 220
+                                text: modelData.acts.map(function (a) { return win.t(a.a).toUpperCase() + (a.n > 1 ? " ×" + a.n : ""); }).join(" + ")
+                                elide: Text.ElideRight
                                 color: modelData.result === "ok" ? pal.accent : pal.bad
                                 font.family: win.mono; font.pixelSize: 9; font.bold: true; font.letterSpacing: 1
                             }
@@ -2715,7 +2729,7 @@ ShellRoot {
                             }
                             Text {
                                 Layout.fillWidth: true
-                                text: modelData.target; color: pal.text
+                                text: modelData.name; color: pal.text
                                 font.family: win.mono; font.pixelSize: 11; elide: Text.ElideMiddle
                             }
                             Text {

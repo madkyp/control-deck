@@ -2719,8 +2719,16 @@ cmd_restore() {
 # --- history: JSON, newest first --------------------------------------------
 cmd_history() {
     [[ -f "$HISTORY_FILE" ]] || { echo "[]"; return; }
-    tail -n 300 "$HISTORY_FILE" | jq -Rn '[inputs | split("\t") |
-        {date:.[0], action:.[1], source:.[2], target:.[3], result:.[4]}] | reverse'
+    # game keys (steam:<id>, umbral:<id>, or a bare Steam id) get the game's name in .name
+    local names
+    names="$( { steam_games | awk 'NR % 5 == 1 { id = $0 } NR % 5 == 2 { print "steam:" id "\t" $0 }'
+               umbral_json | jq -r '(.games // [])[] | "umbral:\(.id)\t\(.name)"' 2>/dev/null; } \
+             | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}')"; [[ -n "$names" ]] || names='{}'
+    tail -n 300 "$HISTORY_FILE" | jq -Rn --argjson n "$names" '[inputs | split("\t") |
+        {date:.[0], action:.[1], source:.[2], target:.[3], result:.[4]}
+        | (.target | split(" ")) as $w
+        | (if $n[$w[0]] then $w[0] elif .source == "steam" and ($w[0] | test("^[0-9]+$")) and $n["steam:" + $w[0]] then "steam:" + $w[0] else null end) as $k
+        | .name = (if $k then ([$n[$k]] + $w[1:] | join(" ")) else .target end)] | reverse'
 }
 
 # ===========================================================================
