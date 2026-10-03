@@ -3209,8 +3209,11 @@ ShellRoot {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: pal.text; font.family: win.mono; font.pixelSize: 11
                                 text: (win.selGameObj.umbralKind === "battlenet" ? win.t("Battle.net client")
-                                       : (win.selGameObj.umbralKind === "blizzard" ? win.t("Battle.net game") : win.t("Own game")))
-                                      + "  ·  " + (win.selGameObj.prefixName || "?") + " prefix (" + (win.selGameObj.compat || "?") + ")"
+                                       : win.selGameObj.umbralKind === "blizzard" ? win.t("Battle.net game")
+                                       : win.selGameObj.umbralKind === "emulator" ? win.t("ROM (emulator)")
+                                       : win.selGameObj.umbralKind === "scummvm" ? win.t("ScummVM game") : win.t("Own game"))
+                                      // emulators and ScummVM run natively: no Wine prefix
+                                      + (win.selGameObj.prefixName ? "  ·  " + win.selGameObj.prefixName + " prefix (" + (win.selGameObj.compat || "?") + ")" : "")
                                       + "  ·  " + win.playtimeText(win.selGameObj.playtime)
                                       + (win.selGameObj.lastPlayed ? win.t("  ·  last ") + String(win.selGameObj.lastPlayed).substring(0, 10) : "")
                             }
@@ -4091,6 +4094,28 @@ ShellRoot {
                                             Layout.fillWidth: true; elide: Text.ElideRight
                                             color: pal.dim; font.family: win.mono; font.pixelSize: 9
                                             text: win.t("switches all effects on/off in game — compare, or drop them in heavy scenes")
+                                        }
+                                    }
+                                    // ReShade's screenshot key: the desktop may keep PrtSc for itself
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 6
+                                        visible: win.fxReshade && win.fxDetails
+                                        Text { text: win.t("SCREENSHOT KEY"); Layout.preferredWidth: 92; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                                        Repeater {
+                                            model: ["PrtSc", "F8", "F10", "F11"]
+                                            delegate: Chip {
+                                                required property var modelData
+                                                label: modelData === "PrtSc" ? win.t("PRT SC") : modelData
+                                                active: (win.fx.shotKey || "PrtSc") === modelData
+                                                on: !win.gameBusy && modelData !== win.fx.key && modelData !== win.fx.effectsKey
+                                                tip: modelData === "PrtSc" ? win.t("Hyprland/HyDE and most desktops take PrtSc for their own screenshots: then the game never gets it") : ""
+                                                onClicked: win.runGame(["fx", "shotkey", modelData], win.t("SETTING KEY…"))
+                                            }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true; elide: Text.ElideRight
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            text: win.t("saves a screenshot with the effects to ") + (win.fx.shotsDir || "~/Pictures/ReShade")
                                         }
                                     }
                                     // must launch through the wrapper

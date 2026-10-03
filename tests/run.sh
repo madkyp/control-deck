@@ -863,6 +863,10 @@ eq "game folder size" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | .size'
 BN="$HOME/Games/umbral/battlenet/drive_c/Program Files (x86)/Battle.net"; mkdir -p "$BN"; head -c 3000 /dev/zero > "$BN/Battle.net.exe"
 eq "Battle.net (no .exe in Umbral): its client folder's size" "$("$CD" games | jq -r '.[] | select(.name == "Battle.net") | .size')" 3000
 rm -rf "$BN"
+mkdir -p "$HOME/Games/umbral/games/Scumm"; head -c 4000 /dev/zero > "$HOME/Games/umbral/games/Scumm/data.001"; cp "$T/umbral.json" "$T/umbral.json.bak"
+jq --arg d "$HOME/Games/umbral/games/Scumm" '.games += [{id:"sc", name:"Scumm Game", kind:"scummvm", prefix_id:"", exe:$d}]' "$T/umbral.json.bak" > "$T/umbral.json"
+eq "ScummVM game (Umbral keeps its folder): the folder's size" "$("$CD" games | jq -r '.[] | select(.name == "Scumm Game") | .size')" 4000
+mv "$T/umbral.json.bak" "$T/umbral.json"
 eq "playtime and last play" "$(jq -r '.[] | select(.name == "Pokemon Iberia") | "\(.playtime) \(.lastPlayed)"' <<<"$G")" "145 2026-09-30T11:34:25"
 eq "Umbral prefix shown with the game using it (its own name was the .exe's)" "$("$CD" prefixes | jq -r --arg p "$HOME/Games/umbral/game-2" '.prefixes[] | select(.path == $p) | "\(.owner)/\(.name)/\(.orphan)"')" "umbral/Pokemon Iberia/false"
 mkpfx "$HOME/Games/umbral/old"; cp "$T/umbral.json" "$T/umbral.json.bak"
@@ -1576,6 +1580,13 @@ mkgpu card1 17095983104 55 61000 250000000     # RX 9070 XT
 eq "picks the card with the most VRAM" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_dev)" "$G2/card1/device"
 eq "…its own temperature sensor" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_temp)" 61
 eq "session samples read it: GPU °C, load, W" "$(CONTROL_DECK_SYSFS="$T/sys2" CONTROL_DECK_GPU_VENDOR=amd fn session_sample | awk '{print $3, $4, $5}')" "61 55 250"
+section "ReShade screenshot key"
+eq "PrtSc by default" "$("$CD" fx status | jq -r .shotKey)" PrtSc
+"$CD" fx shotkey F10 >/dev/null; eq "changed and kept" "$("$CD" fx status | jq -c '[.shotKey, .key, .effectsKey]')" "[\"F10\",$("$CD" fx status | jq -c .key),$("$CD" fx status | jq -c .effectsKey)]"
+"$CD" fx shotkey Home >/dev/null 2>&1; eq "only the offered keys" "$?" 2
+"$CD" fx shotkey "$("$CD" fx status | jq -r .effectsKey)" >/dev/null 2>&1; eq "not the on/off key" "$?" 2
+"$CD" fx key F11 >/dev/null; eq "changing the menu key keeps the screenshot key" "$("$CD" fx status | jq -r .shotKey)" F10
+"$CD" fx shotkey PrtSc >/dev/null
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
 eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es

@@ -3194,6 +3194,7 @@ umbral_games() {
     while IFS=$'\x1f' read -r g exe kind pfx; do
         d=""
         if [[ -n "$exe" && -f "$exe" ]]; then d="$(dirname "$exe")"
+        elif [[ -n "$exe" && -d "$exe" ]]; then d="$exe"          # ScummVM: Umbral keeps the game's folder
         elif [[ "$kind" == battlenet && -n "$pfx" ]]; then d="$pfx/drive_c/Program Files (x86)/Battle.net"; fi
         [[ -n "$d" && -d "$d" ]] && sizes+="$g"$'\t'"$(dir_bytes "$d")"$'\n'
     done < <(jq -r '(.prefixes // []) as $px | .games[]? | select(.hidden != true) | . as $g
@@ -4503,7 +4504,29 @@ fx_key_dir() { echo "$FX_PROFILES/${1//:/_}"; }
 FX_SETTINGS="$GAMING_DIR/fx.json"
 fx_key() { local k; k="$(jq -r '.key // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-Home}"; }
 fx_vk() {   # key name → Windows virtual-key code (ReShade.ini)
-    case "$1" in Home) echo 36 ;; End) echo 35 ;; Insert) echo 45 ;; F9) echo 120 ;; F10) echo 121 ;; F11) echo 122 ;; F12) echo 123 ;; None) echo 0 ;; *) echo 36 ;; esac
+    case "$1" in Home) echo 36 ;; End) echo 35 ;; Insert) echo 45 ;; PrtSc) echo 44 ;; F8) echo 119 ;; F9) echo 120 ;; F10) echo 121 ;; F11) echo 122 ;; F12) echo 123 ;; None) echo 0 ;; *) echo 36 ;; esac
+}
+# one setting of fx.json changed, the others kept
+fx_settings_set() {   # name value
+    local cur; cur="$(jq -c 'objects' "$FX_SETTINGS" 2>/dev/null)"; [[ -n "$cur" ]] || cur='{}'
+    mkdir -p "$GAMING_DIR"
+    jq -n --argjson c "$cur" --arg k "$1" --arg v "$2" '$c + {($k): $v}' > "$FX_SETTINGS"
+}
+# ReShade's screenshot key (KeyScreenshot). PrtSc by default, but desktops often take
+# it for their own screenshots (HyDE/Hyprland binds Print), so the game never sees it.
+fx_shot_key() { local k; k="$(jq -r '.shotKey // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-PrtSc}"; }
+# fx shotkey <PrtSc|F8|F10|F11> — saved and pushed to every game set up with ReShade
+cmd_fx_shotkey() {
+    local k="$1" f dir
+    [[ "$k" =~ ^(PrtSc|F8|F10|F11)$ ]] || { err "use: fx shotkey PrtSc|F8|F10|F11"; return 2; }
+    [[ "$k" == "$(fx_key)" || "$k" == "$(fx_effects_key)" ]] && { err "$k is already the menu or the on/off key"; return 2; }
+    fx_settings_set shotKey "$k"
+    for f in "$FX_PROFILES"/*/reshade.json; do
+        [[ -f "$f" ]] || continue
+        dir="$(jq -r .dir "$f")"
+        [[ -f "$dir/ReShade.ini" ]] && ini_set "$dir/ReShade.ini" INPUT KeyScreenshot "$(fx_vk "$k"),0,0,0"
+    done
+    log "✔ ReShade screenshot key: $k"
 }
 # ReShade's effects on/off switch (KeyEffects); End by default, "None" = no key
 fx_effects_key() { local k; k="$(jq -r '.effectsKey // empty' "$FX_SETTINGS" 2>/dev/null)"; echo "${k:-End}"; }
@@ -4511,8 +4534,7 @@ fx_effects_key() { local k; k="$(jq -r '.effectsKey // empty' "$FX_SETTINGS" 2>/
 cmd_fx_key() {
     local k="$1" f st dir
     [[ "$k" =~ ^(Home|Insert|F10|F11|F12)$ ]] || { err "use: fx key Home|Insert|F10|F11|F12"; return 2; }
-    mkdir -p "$GAMING_DIR"
-    jq -n --arg k "$k" --arg e "$(fx_effects_key)" '{key:$k, effectsKey:$e}' > "$FX_SETTINGS"
+    fx_settings_set key "$k"
     for f in "$FX_PROFILES"/*/vkBasalt.conf; do
         [[ -f "$f" ]] && sed -i "s/^toggleKey = .*/toggleKey = $k/" "$f"
     done
@@ -4528,8 +4550,7 @@ cmd_fx_key() {
 cmd_fx_effectskey() {
     local k="$1" f dir
     [[ "$k" =~ ^(End|F9|None)$ ]] || { err "use: fx effectskey End|F9|None"; return 2; }
-    mkdir -p "$GAMING_DIR"
-    jq -n --arg k "$(fx_key)" --arg e "$k" '{key:$k, effectsKey:$e}' > "$FX_SETTINGS"
+    fx_settings_set effectsKey "$k"
     for f in "$FX_PROFILES"/*/reshade.json; do
         [[ -f "$f" ]] || continue
         dir="$(jq -r .dir "$f")"
@@ -4713,7 +4734,7 @@ cmd_fx_status() {
     jq -nc --arg v64 "$v64" --arg v32 "$v32" --argjson n "$n" --arg vendor "$(gpu_vendor)" --arg gpu "$(gpu_name)" \
         --argjson cur "$cur" --argjson route "$route" --argjson online "$online" \
         --argjson rs "$rs" --argjson exes "$exes" --arg mode "$mode" --argjson wrapped "$wrapped" --arg wrappedKey "${key%%:*}" \
-        --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" \
+        --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" --arg skey "$(fx_shot_key)" \
         --arg shots "$(if [[ -n "$key" ]]; then reshade_shots_dir "$key" | sed "s|^$HOME|~|"; fi)" \
         --argjson advice "$(if [[ -n "$key" ]]; then fx_advice "$key" "$exes" "$online" "$cur"; else echo null; fi)" \
         --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" --arg a "$(jq -r '.archive // ""' <<<"$cur" 2>/dev/null)" '
@@ -4726,7 +4747,7 @@ cmd_fx_status() {
         vkbasalt:($v64 != ""), vkbasalt32:($v32 != ""), version:$v64, effects:$n, shadersInstalled:($n > 0),
         chaotic:($chaotic == "1"), vendor:$vendor, gpu:$gpu, current:$cur, route:$route, online:$online,
         installCmd:(if $v64 != "" and $v32 != "" then "" else "sudo pacman -S --needed vkbasalt lib32-vkbasalt" end),
-        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, links:$links, shotsDir:$shots,
+        mode:$mode, wrapped:$wrapped, steamRunning:$steamRunning, key:$key, effectsKey:$ekey, shotKey:$skey, links:$links, shotsDir:$shots,
         reshade:{version:$rver, latest:$rlatest, ready:($rver != "" and $d3dc == "1"),
                  update:($rver != "" and $rlatest != "" and $rver != $rlatest), game:$rs, exes:$exes},
         recommended:(($advice // {}).pick // "reshade"), advice:$advice,
@@ -5279,6 +5300,7 @@ cmd_reshade_on() {
     fi
     ini_set "$ini" INPUT KeyOverlay "$(fx_vk "$(fx_key)"),0,0,0"
     ini_set "$ini" INPUT KeyEffects "$(fx_vk "$(fx_effects_key)"),0,0,0"
+    ini_set "$ini" INPUT KeyScreenshot "$(fx_vk "$(fx_shot_key)"),0,0,0"
     ini_set "$ini" GENERAL EffectSearchPaths "$(winpath "$FX_DIR/Shaders")\\**"
     ini_set "$ini" GENERAL TextureSearchPaths "$(winpath "$FX_DIR/Textures")\\**"
     ini_set "$ini" GENERAL PresetPath "$(winpath "$d/ReShadePreset.ini")"
@@ -5605,6 +5627,7 @@ cmd_fx() {
                              && log "→ $(game_label "$k"): screenshots to $(reshade_shots_dir "$k" | sed "s|^$HOME|~|")"
                      done ;;
         effectskey) cmd_fx_effectskey "${1:-}" ;;
+        shotkey)  cmd_fx_shotkey "${1:-}" ;;
         scan)     if [[ "${1:-}" == --cached ]]; then
                       if [[ -s "$FX_CACHE/scan.json" ]]; then cat "$FX_CACHE/scan.json"; else echo '[]'; fi
                   else cmd_fx_scan; fi ;;
