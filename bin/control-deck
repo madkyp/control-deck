@@ -4063,6 +4063,7 @@ Gaming
      fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off   Visual shaders (vkBasalt)
   uilang [en|es]                The GUI's language (default: the system's)
   playing [quiet|lite on|off]   While playing: hold notifications · Hyprland without animations/blur/shadows
+  iosched <key>                 The game's disk and I/O scheduler (does IO PRIORITY do anything there?)
   sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
   upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
@@ -4908,6 +4909,24 @@ PY
 
 steam_game_dir() {   # appid → install folder
     steam_games | awk -v i="$1" 'NR % 5 == 1 { id = $0 } NR % 5 == 3 { d = $0 } NR % 5 == 0 && id == i { print $0 "/steamapps/common/" d; exit }'
+}
+
+# iosched <key> — the disk a game lives on and its I/O scheduler. IO PRIORITY
+# (ionice best-effort level 0) only changes anything under BFQ: mq-deadline and
+# kyber honour the class but not the level, none ignores priorities.
+cmd_iosched() {
+    local key="$1" dir dev disk s
+    valid_game_key "$key" || { err "not a game key: $key"; return 2; }
+    case "$key" in
+        steam:*)  dir="$(steam_game_dir "${key#steam:}")" ;;
+        umbral:*) dir="$(umbral_game_exe "$key")"; dir="${dir%/*}"
+                  [[ -d "$dir" ]] || dir="$(umbral_json | jq -r --arg i "${key#umbral:}" '(.games[]? | select(.id == $i) | .prefix_id) as $p | .prefixes[]? | select(.id == $p) | .path' | head -1)" ;;
+    esac
+    [[ -d "$dir" ]] || { jq -nc '{disk:null, scheduler:null, levels:null}'; return 0; }
+    dev="$(df --output=source "$dir" 2>/dev/null | tail -1)"
+    disk="$(lsblk -sno NAME,TYPE "$dev" 2>/dev/null | awk '$2 == "disk" { gsub(/^[^[:alnum:]]+/, "", $1); print $1; exit }')"
+    s="$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$SYSFS/block/$disk/queue/scheduler" 2>/dev/null)"
+    jq -nc --arg d "$disk" --arg s "$s" '{disk:($d | select(. != "")), scheduler:($s | select(. != "")), levels:(if $s == "" then null else $s == "bfq" end)}'
 }
 
 # fx exes <key> → the game's .exe candidates, best first, with arch and the API
@@ -6162,6 +6181,7 @@ main() {
         sched)       cmd_sched "$@" ;;
         uilang)      cmd_uilang "${1:-}" ;;
         playing)     cmd_playing "$@" ;;
+        iosched)     cmd_iosched "${1:-}" ;;
         sessions)    cmd_sessions "${1:-}" ;;
         upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;
         gaming-import) need "$1" "missing backup file"; cmd_gaming_import "$1" ;;

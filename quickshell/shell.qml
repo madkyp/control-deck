@@ -314,6 +314,7 @@ ShellRoot {
             else if (gameView === "health") healthProc.running = true;
         }
         property var    games: []
+        property var    ioInfo: ({})        // the selected game's disk + I/O scheduler (IO PRIORITY)
         property var    gstat: ({})
         property var    pdb: ({})           // ProtonDB summaries by appid
         property var    tools: []           // Proton versions Steam can use
@@ -451,6 +452,7 @@ ShellRoot {
             selGameLaunch = g.launch; selGameCompat = g.compat; selGameWrapped = g.wrapped; selGameObj = g;
             gameLog = ""; if (g.source === "steam" || g.source === "umbral") gprofProc.running = true;
             ups = {}; if (g.source === "steam") upsProc.running = true;
+            ioInfo = {}; if (g.source === "steam" || g.source === "umbral") { ioProc.command = [scriptPath, "iosched", g.key]; ioProc.running = true; }
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
             fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
@@ -1125,6 +1127,10 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { var l = text.trim(); if (l === "es" || l === "en") win.lang = l; } }
         }
         Process { id: langSaveProc }
+        Process {
+            id: ioProc
+            stdout: StdioCollector { onStreamFinished: { try { win.ioInfo = JSON.parse(text); } catch (e) { win.ioInfo = {}; } } }
+        }
         Process {
             id: fxStatProc
             command: [win.scriptPath, "fx", "status", win.selGame]
@@ -3174,8 +3180,16 @@ ShellRoot {
                                        tip: win.t("Visual shaders (vkBasalt): sharpening, anti-aliasing, ReShade presets") }
                                 Chip { label: "TEMPS"; tint: pal.ok; active: win.gp.overlay === true; onClicked: win.gpSet("overlay", !win.gp.overlay)
                                        tip: win.t("A CPU · GPU temperature line at the top right while the game runs (click-through, closes with the game)") }
-                                Chip { label: win.t("IO PRIORITY"); tint: pal.ok; active: win.gp.ionice === true; onClicked: win.gpSet("ionice", !win.gp.ionice)
-                                       tip: win.t("ionice best-effort level 0 for the game") }
+                                Chip {
+                                    // ⚠ when on but the game's disk ignores the level (only BFQ honours it)
+                                    label: win.t("IO PRIORITY") + (win.gp.ionice === true && win.ioInfo.levels === false ? " ⚠" : "")
+                                    tint: win.ioInfo.levels === false ? pal.amber : pal.ok; active: win.gp.ionice === true
+                                    onClicked: win.gpSet("ionice", !win.gp.ionice)
+                                    tip: win.t("The game reads and writes the disk ahead of other programs (ionice best-effort, level 0). It helps when something else uses the disk while you play: downloads, updates, copies.")
+                                         + (!win.ioInfo.scheduler ? ""
+                                            : win.ioInfo.levels ? "\n\n" + win.t("This game's disk honours it: ") + win.ioInfo.disk + " (" + win.ioInfo.scheduler + ")."
+                                            : "\n\n" + win.t("No effect here: this game's disk ") + win.ioInfo.disk + win.t(" uses ") + win.ioInfo.scheduler + win.t(", which ignores the level (only BFQ honours it)."))
+                                }
                                 Item { Layout.fillWidth: true }
                                 Text { text: "NICE"; color: pal.dim; font.family: win.mono; font.pixelSize: 9 }
                                 Repeater {

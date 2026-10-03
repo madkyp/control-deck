@@ -1477,6 +1477,16 @@ eq "hook asks Umbral for a session when they're on" "$("$CD" hook umbral:x 2>/de
 rm -f "$T/dunst.log" "$T/hypr.log"; SteamAppId=100 "$CD" run "$T/fake/okgame" >/dev/null 2>&1
 yes "both off → nothing touched" "[[ ! -s '$T/dunst.log' && ! -s '$T/hypr.log' ]]"
 rm -f "$T/bin/dunstctl" "$T/bin/hyprctl"
+section "IO priority: does the game's disk honour it?"
+eq "unknown game → nothing to say" "$("$CD" iosched steam:424242)" '{"disk":null,"scheduler":null,"levels":null}'
+stub df 'printf "Filesystem\n/dev/fake1\n"'; stub lsblk 'printf "fake1 part\n└─fake disk\n"'
+mkdir -p "$T/iosys/block/fake/queue"; UG2="$HOME/Games/umbral/games/io"; mkdir -p "$UG2"; head -c 10 /dev/zero > "$UG2/g.exe"
+echo '{"prefixes":[],"games":[{"id":"io","name":"IO","kind":"custom","prefix_id":"x","exe":"'"$UG2"'/g.exe"}]}' > "$T/umbral-io.json"
+echo 'none [mq-deadline] kyber bfq' > "$T/iosys/block/fake/queue/scheduler"
+eq "mq-deadline: the level is ignored" "$(CONTROL_DECK_SYSFS="$T/iosys" CONTROL_DECK_UMBRAL_CONFIG="$T/umbral-io.json" "$CD" iosched umbral:io | jq -c '[.disk, .scheduler, .levels]')" '["fake","mq-deadline",false]'
+echo 'none mq-deadline kyber [bfq]' > "$T/iosys/block/fake/queue/scheduler"
+eq "BFQ: honoured" "$(CONTROL_DECK_SYSFS="$T/iosys" CONTROL_DECK_UMBRAL_CONFIG="$T/umbral-io.json" "$CD" iosched umbral:io | jq -c '[.scheduler, .levels]')" '["bfq",true]'
+rm -f "$T/bin/df" "$T/bin/lsblk"
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
 eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es
