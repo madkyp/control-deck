@@ -1533,6 +1533,31 @@ eq "mq-deadline: the level is ignored" "$(CONTROL_DECK_SYSFS="$T/iosys" CONTROL_
 echo 'none mq-deadline kyber [bfq]' > "$T/iosys/block/fake/queue/scheduler"
 eq "BFQ: honoured" "$(CONTROL_DECK_SYSFS="$T/iosys" CONTROL_DECK_UMBRAL_CONFIG="$T/umbral-io.json" "$CD" iosched umbral:io | jq -c '[.scheduler, .levels]')" '["bfq",true]'
 rm -f "$T/bin/df" "$T/bin/lsblk"
+section "STORE: trust tags and one recommendation"
+NOW=$(date +%s)
+R="$(jq -nc --argjson now "$NOW" '[
+  {source:"repo", name:"tool", id:"tool", remote:"extra"},
+  {source:"repo", name:"tool-git", id:"tool-git", remote:"chaotic-aur"},
+  {source:"repo", name:"odd", id:"odd", remote:"someones-repo"},
+  {source:"aur", name:"tool-bin", id:"tool-bin", votes:250, popularity:3, maintainer:"me", outOfDate:false, firstSubmitted:1500000000},
+  {source:"aur", name:"tool-new", id:"tool-new", votes:2, popularity:0.1, maintainer:"x", outOfDate:false, firstSubmitted:($now - 86400)},
+  {source:"aur", name:"tool-old", id:"tool-old", votes:40, popularity:0.2, maintainer:null, outOfDate:true, firstSubmitted:1500000000},
+  {source:"flatpak", name:"Tool", id:"org.example.Tool", remote:"flathub", installs:123456, verified:true}]')"
+TR="$(bash -c 'source "$1"; store_trust tool' _ "$CD" <<<"$R")"
+tags() { jq -r --arg i "$1" '.[] | select(.id == $i) | [.tags[].t] | join(",")' <<<"$TR"; }
+eq "official repo" "$(tags tool)" "★ RECOMMENDED,OFFICIAL"
+eq "…the exact-name official package is the one recommended, listed first" "$(jq -r '[.[] | select(.recommended)] | length, .[0].id' <<<"$TR" | paste -sd,)" "1,tool"
+eq "chaotic-aur = prebuilt AUR" "$(tags tool-git)" "PREBUILT AUR"
+eq "other repos = third party" "$(tags odd)" "THIRD-PARTY REPO"
+eq "AUR with many votes" "$(tags tool-bin)" "▲250,POPULAR"
+eq "AUR new with few votes = the risky shape" "$(tags tool-new)" "▲2,NEW · FEW VOTES"
+eq "AUR orphan + out of date" "$(tags tool-old)" "▲40,ORPHAN,OUT OF DATE"
+eq "Flathub verified + installs (below an official package of the same name)" "$(tags org.example.Tool)" "VERIFIED,123K/mo"
+eq "no exact name → nothing recommended" "$(bash -c 'source "$1"; store_trust zzz' _ "$CD" <<<"$R" | jq '[.[] | select(.recommended)] | length')" 0
+mkdir -p "$T/fh"; echo '{"hits":[{"app_id":"org.a.A","installs_last_month":50,"verification_verified":false},{"app_id":"org.b.B","installs_last_month":9000,"verification_verified":true}]}' > "$T/fh/search"
+FS="$(printf '%s\n' '{"source":"flatpak","id":"org.a.A","remote":"flathub"}' '{"source":"flatpak","id":"org.b.B","remote":"flathub"}' '{"source":"flatpak","id":"org.c.C","remote":"other"}' \
+      | CONTROL_DECK_FLATHUB_API="file://$T/fh" bash -c 'source "$1"; flathub_stats q' _ "$CD" | jq -sc 'map([.id, .installs, .verified])')"
+eq "Flathub stats merged, most installed first, other remotes untouched" "$FS" '[["org.b.B",9000,true],["org.a.A",50,false],["org.c.C",null,null]]'
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
 eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es

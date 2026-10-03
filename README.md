@@ -68,6 +68,13 @@ The window has six tabs, in English or Spanish (**ESP / ENG** next to the title)
 
 ### 🛒 STORE — install by name
 - Searches the **official repos (pacman)**, the **AUR** and **Flatpak** at once.
+- **Filter by source** (ALL · REPO · AUR · FLATPAK, with counts).
+- **Trust tags** tell good results from suspicious ones; hover a tag to see what it means:
+  - repos: **OFFICIAL** (Arch / CachyOS), **PREBUILT AUR** (chaotic-aur) or **THIRD-PARTY REPO**;
+  - AUR: votes (▲276), **POPULAR**, **FEW VOTES**, **ORPHAN**, **OUT OF DATE**, and **NEW · FEW VOTES** in red (the usual shape of malicious AUR packages);
+  - Flatpak: **VERIFIED** developer and installs last month, from Flathub's API.
+
+  The most trustworthy result named like your search is marked **★ RECOMMENDED** and listed first: an official package beats a Flatpak, which beats the AUR.
 - Type `github.com/user/repo` to see the installable files of its **latest release** (filtered for your architecture). Things installed from GitHub stay linked to their repo so they can be updated.
 - **AUR packages are reviewed before they are built**: maintainer, votes, age and the full PKGBUILD (+ `.install`), with a **risk level** and findings such as `curl | sh`, base64-decoded payloads, `sudo` in the build, reverse-shell patterns, downloads from raw IPs / paste sites / plain HTTP, skipped checksums, `.install` scripts that download things, orphaned or brand-new packages. High-risk packages need a second confirmation.
 - One click to install: repos → `pkexec pacman -S` · Flatpak → `flatpak install --user` · AUR → review, then a terminal with `paru`/`yay` · GitHub → download + install.

@@ -245,8 +245,26 @@ ShellRoot {
         property bool   confirmRisky: false
         property bool   storeBusy: searchProc.running || storeInstallProc.running || reviewProc.running
 
+        // STORE: which source to show (all | repo | aur | flatpak | github)
+        property string storeFilter: "all"
+        function tagTone(tone) { return tone === "ok" ? pal.ok : (tone === "bad" ? pal.bad : (tone === "warn" ? pal.amber : pal.sky)); }
+        function tagTip(t) {
+            if (t.indexOf("▲") === 0) return win.t("AUR votes: users who vouch for the package");
+            if (/\/mo$/.test(t)) return win.t("Flathub installs last month");
+            return ({ "★ RECOMMENDED": win.t("The most trustworthy result named like your search"),
+                      "OFFICIAL": win.t("Official Arch / CachyOS repository: built and signed by the distribution"),
+                      "PREBUILT AUR": win.t("chaotic-aur: AUR packages built by a third party; trust is the AUR package's"),
+                      "THIRD-PARTY REPO": win.t("A repository that isn't Arch's or CachyOS's"),
+                      "POPULAR": win.t("100+ votes on the AUR"),
+                      "FEW VOTES": win.t("Under 10 votes: few people have checked it"),
+                      "NEW · FEW VOTES": win.t("Uploaded under 30 days ago with few votes: the usual shape of malicious AUR packages. Read its review carefully."),
+                      "ORPHAN": win.t("No maintainer: nobody updates or checks it"),
+                      "OUT OF DATE": win.t("Flagged out of date on the AUR"),
+                      "VERIFIED": win.t("Flathub verified the developer: it comes from the app's own authors") })[t] || "";
+        }
         function runSearch(q) {
             if (!q || q.trim() === "") return;
+            storeFilter = "all";
             storeQuery = q.trim(); results = []; storeLog = ""; review = null;
             storeStatus = "SEARCHING…";
             searchProc.running = true;
@@ -2222,6 +2240,29 @@ ShellRoot {
                     }
                 }
 
+                // filter by source (only the sources the search found)
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 6
+                    visible: win.review === null && !reviewProc.running && win.results.length > 0
+                    Repeater {
+                        model: ["all", "repo", "aur", "flatpak", "github"].filter(function (s) {
+                            return s === "all" || win.results.some(function (r) { return r.source === s; });
+                        })
+                        delegate: Chip {
+                            required property var modelData
+                            property int n: modelData === "all" ? win.results.length : win.results.filter(function (r) { return r.source === modelData; }).length
+                            label: (modelData === "all" ? win.t("ALL") : modelData.toUpperCase()) + "  " + n
+                            active: win.storeFilter === modelData
+                            onClicked: win.storeFilter = modelData
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Text {
+                        text: win.t("hover a tag to see what it means"); color: pal.dim
+                        font.family: win.mono; font.pixelSize: 9
+                    }
+                }
+
                 // results
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
@@ -2241,12 +2282,13 @@ ShellRoot {
                         id: resultList
                         anchors.fill: parent; anchors.margins: 4
                         clip: true; spacing: 3
-                        model: win.results
+                        model: win.storeFilter === "all" ? win.results : win.results.filter(function (r) { return r.source === win.storeFilter; })
                         ScrollBar.vertical: ScrollBar {}
                         delegate: Rectangle {
                             required property var modelData
                             width: resultList.width - 8; height: 56; radius: 8
-                            color: pal.card; border.color: pal.border; border.width: 1
+                            color: pal.card; border.width: 1
+                            border.color: modelData.recommended ? pal.ok : pal.border
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 10
@@ -2261,8 +2303,26 @@ ShellRoot {
                                         Text {
                                             text: modelData.name; color: pal.text; font.family: win.mono
                                             font.pixelSize: 12; font.bold: true; elide: Text.ElideRight
-                                            Layout.fillWidth: true
+                                            Layout.maximumWidth: 260
                                         }
+                                        // trust tags: official, votes, installs, verified… and the risky ones
+                                        Repeater {
+                                            model: modelData.tags || []
+                                            delegate: Rectangle {
+                                                required property var modelData
+                                                implicitWidth: tagTxt.implicitWidth + 10; implicitHeight: 15; radius: 3
+                                                color: "transparent"; border.width: 1; border.color: win.tagTone(modelData.tone)
+                                                Text {
+                                                    id: tagTxt; anchors.centerIn: parent
+                                                    text: win.t(modelData.t.replace(/\/mo$/, "")) + (/\/mo$/.test(modelData.t) ? win.t("/mo") : "")
+                                                    color: win.tagTone(modelData.tone)
+                                                    font.family: win.mono; font.pixelSize: 8; font.bold: true; font.letterSpacing: 1
+                                                }
+                                                MouseArea { id: tagMa; anchors.fill: parent; hoverEnabled: true }
+                                                Tip { visible: tagMa.containsMouse && text !== ""; text: win.tagTip(modelData.t) }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
                                         Text {
                                             text: modelData.version; color: pal.dim
                                             font.family: win.mono; font.pixelSize: 9

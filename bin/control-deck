@@ -25,6 +25,7 @@ HISTORY_FILE="$STATE_DIR/history.tsv"
 TRASH_DIR="$STATE_DIR/trash"
 DL_DIR="$CACHE_HOME/control-deck/downloads"
 AUR_URL="${CONTROL_DECK_AUR_URL:-https://aur.archlinux.org}"
+FLATHUB_API="${CONTROL_DECK_FLATHUB_API:-https://flathub.org/api/v2}"
 NEWS_URL="${CONTROL_DECK_NEWS_URL:-https://archlinux.org/feeds/news/}"
 PACMAN_LOG="${CONTROL_DECK_PACMAN_LOG:-/var/log/pacman.log}"
 PACMAN_DB="${CONTROL_DECK_PACMAN_DB:-/var/lib/pacman/local}"
@@ -1841,7 +1842,9 @@ search_aur() {
         (.results // []) | sort_by(-(.Popularity // 0))[:30][] | .Name as $n |
         {source:$s, name:$n, id:$n, version:.Version,
          desc:(.Description // ""), remote:"aur",
-         installed: (($names | index($n)) != null)}' 2>/dev/null
+         installed: (($names | index($n)) != null),
+         votes:(.NumVotes // 0), popularity:(.Popularity // 0), maintainer:.Maintainer,
+         outOfDate:(.OutOfDate != null), firstSubmitted:(.FirstSubmitted // 0), lastModified:(.LastModified // 0)}' 2>/dev/null
 }
 
 # columns come tab-separated and may be empty, so they are split with jq
@@ -1855,7 +1858,54 @@ search_flatpak() {
         {source:"flatpak", name:.[0], id:.[1], version:(.[2] // ""), desc:(.[3] // ""),
          remote:((.[4] // "") | split(",")[0]),
          installed:(.[1] as $id | $inst | split("\n") | index($id) != null)}' \
-    | head -30
+    | head -30 | flathub_stats "$q"
+}
+
+# Flathub's own search: installs last month, verified developer, free license
+# (one request for the whole query; results not on it stay as they are)
+flathub_stats() {   # query, flatpak results on stdin (one JSON per line)
+    local rows st
+    rows="$(cat)"; [[ -n "$rows" ]] || return 0
+    st="$(curl -s --max-time 6 -X POST "$FLATHUB_API/search" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg q "$1" '{query:$q}')" 2>/dev/null \
+          | jq -c '[(.hits // [])[] | {(.app_id): {installs:(.installs_last_month // null), verified:(.verification_verified == true), free:.is_free_license}}] | add // {}' 2>/dev/null)"
+    [[ -n "$st" ]] || st='{}'
+    jq -sc --argjson st "$st" 'map(. + (if .remote == "flathub" then ($st[.id] // {}) else {} end))
+        | sort_by(-(.installs // -1))[]' <<<"$rows"     # most installed first
+}
+
+# what tells a good result from a suspicious one: tags (tone ok/info/warn/bad)
+# and one ★ RECOMMENDED among the results named like the query
+store_trust() {   # query; results array on stdin
+    jq -c --arg q "$1" --argjson now "$(date +%s)" '
+      def k: if . >= 1000000 then "\(. / 100000 | floor / 10)M" elif . >= 1000 then "\(. / 1000 | floor)K" else tostring end;
+      ($q | ascii_downcase) as $ql
+      | map(. + {tags:(
+          if .source == "repo" then
+              (if (.remote | test("^(core|extra|multilib|core-testing|extra-testing|multilib-testing|cachyos.*)$")) then [{t:"OFFICIAL", tone:"ok"}]
+               elif .remote == "chaotic-aur" then [{t:"PREBUILT AUR", tone:"info"}]
+               else [{t:"THIRD-PARTY REPO", tone:"warn"}] end)
+          elif .source == "aur" then
+              [{t:("▲" + (.votes | tostring)), tone:"info"}]
+              + (if .votes >= 100 then [{t:"POPULAR", tone:"ok"}] else [] end)
+              + (if ($now - .firstSubmitted) < 30 * 86400 and .votes < 10 then [{t:"NEW · FEW VOTES", tone:"bad"}]
+                 elif .votes < 10 then [{t:"FEW VOTES", tone:"warn"}] else [] end)
+              + (if .maintainer == null then [{t:"ORPHAN", tone:"bad"}] else [] end)
+              + (if .outOfDate then [{t:"OUT OF DATE", tone:"warn"}] else [] end)
+          elif .source == "flatpak" then
+              (if .verified == true then [{t:"VERIFIED", tone:"ok"}] else [] end)
+              + (if .installs != null then [{t:((.installs | k) + "/mo"), tone:(if .installs >= 10000 then "ok" else "info" end)}] else [] end)
+          else [] end)})
+      # trust score, for the one recommendation
+      | map(. + {score:(
+          if .source == "repo" then (if any(.tags[]; .t == "OFFICIAL") then 120 elif .remote == "chaotic-aur" then 60 else 30 end)
+          elif .source == "flatpak" then (if .verified == true then 90 else 50 end) + (if (.installs // 0) >= 10000 then 20 else 0 end)
+          elif .source == "aur" then (if .maintainer == null or .outOfDate or .votes < 10 then 0 else 40 + ([.votes / 10, 30] | min) end)
+          else 0 end)})
+      | ([.[] | select(.score > 0 and ((.name | ascii_downcase) == $ql or (.id | ascii_downcase) == $ql
+                                        or (.id | ascii_downcase | split(".") | last) == $ql))] | max_by(.score) // null) as $best
+      | map(if $best != null and .source == $best.source and .id == $best.id then .recommended = true | .tags = [{t:"★ RECOMMENDED", tone:"ok"}] + .tags else . end)
+      | map(select(.recommended)) + map(select(.recommended | not))'
 }
 
 cmd_search() {
@@ -1869,7 +1919,7 @@ cmd_search() {
         search_repo    "$q" "$ipkgs"
         search_aur     "$q" "$ipkgs"
         search_flatpak "$q" "$iflat"
-    } | jq -s '.'
+    } | jq -s '.' | store_trust "$q"
 }
 
 install_aur() {
