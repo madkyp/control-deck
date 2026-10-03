@@ -628,7 +628,7 @@ rep() { printf '{"app":{"steam":{"appId":"%s"}},"timestamp":%s,"responses":{"ver
     echo ']'
 } > "$T/reports_piiremoved.json"
 mkdir -p "$T/pdbdump"; (cd "$T" && tar czf "$T/pdbdump/reports_sep1_2026.tar.gz" reports_piiremoved.json)
-export CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_GPU_NAME="NVIDIA GeForce RTX 2070" CONTROL_DECK_SCREEN=""
+export CONTROL_DECK_GPU_VENDOR=nvidia CONTROL_DECK_GPU_NAME="NVIDIA GeForce RTX 2070" CONTROL_DECK_SCREEN="" CONTROL_DECK_SCREEN_HZ=""   # never this PC's screen
 eq "no index → says so" "$("$CD" gsuggest 100 | jq -r .index)" false
 CONTROL_DECK_PDB_RAW="file://$T/pdbdump" CONTROL_DECK_PDB_DUMP=reports_sep1_2026.tar.gz "$CD" pdbindex update >/dev/null 2>&1
 eq "index built (reports with launch options only)" "$("$CD" pdbindex status | jq -r .reports)" 18
@@ -647,7 +647,7 @@ eq "reports saying it doesn't work are ignored" "$(sug -dx11)" none
 eq "reports older than 3 years ignored when there are enough recent ones" "$(sug -oldflag)" none
 eq "wrapper suggested" "$(sug gamemoderun)" "16/11/true"
 eq "few reports → all-time window" "$("$CD" gsuggest 300 | jq -r '.window + " " + (.suggestions[0].token)')" "all -windowed"
-unset CONTROL_DECK_GPU_VENDOR CONTROL_DECK_GPU_NAME CONTROL_DECK_SCREEN
+unset CONTROL_DECK_GPU_VENDOR CONTROL_DECK_GPU_NAME CONTROL_DECK_SCREEN CONTROL_DECK_SCREEN_HZ
 
 section "Gaming: suggestions adapt to this PC's hardware"
 gen() { bash -c 'source "$1"; jq -Rr "$JQ_GPU_GEN"" gpu_gen" <<<"$2"' _ "$CD" "$1"; }
