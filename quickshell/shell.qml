@@ -4717,6 +4717,16 @@ ShellRoot {
                                                        win.gstat.gamemode && win.gstat.gamemode.active ? win.t("GameMode active") : "",
                                                        "pid " + modelData.pid].filter(function (x) { return x; }).join("  ·  ")
                                             }
+                                            // Umbral 0.11+ closes its games on request (and their wineserver)
+                                            MiniBtn {
+                                                visible: modelData.key.indexOf("umbral:") === 0
+                                                property string ck: "stop:" + modelData.key
+                                                width: Math.max(70, implicitWidth); height: 26; tint: pal.bad
+                                                primary: win.confirmShader === ck
+                                                label: win.confirmShader === ck ? win.t("CONFIRM?") : win.t("■ STOP")
+                                                on: !win.gameBusy
+                                                onClicked: win.shaderAction(["gstop", modelData.key], ck, win.t("CLOSING…"))
+                                            }
                                         }
                                     }
                                 }

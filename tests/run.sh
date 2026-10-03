@@ -12,6 +12,7 @@ T="$(mktemp -d)"
 trap 'pkill -f -- "$T/fake/" 2>/dev/null; rm -rf "$T"' EXIT
 
 export HOME="$T/home"
+export CONTROL_DECK_UMBRAL_RUNNING="$T/umbral-running.json"   # never the real one
 unset XDG_DATA_HOME XDG_CACHE_HOME XDG_CONFIG_HOME CONTROL_DECK_APPS_DIR INSTALL_ANY_APPS_DIR GITHUB_TOKEN
 export LC_ALL=C.UTF-8
 mkdir -p "$HOME" "$T/bin" "$T/dl" "$T/fake" "$T/sys"
@@ -873,6 +874,26 @@ mkdir -p "$T/proc2/6000" "$T/proc2/6001"
 printf '%s\0%s\0' "/usr/bin/umu-run" 'C:\games\Poke\Game.exe' > "$T/proc2/6000/cmdline"
 printf '%s\0%s\0' "grep" "WowB.exe.bak" > "$T/proc2/6001/cmdline"
 eq "running Umbral game found by its .exe (Windows path too), no partial matches" "$(PROC_ROOT="$T/proc2" "$CD" gstatus | jq -c '[.running[] | .key]')" '["umbral:1484d426be"]'
+# Umbral ≥ 0.11: running.json with exact pids + start times (field 22 of /proc/<pid>/stat)
+mkstat() { mkdir -p "$T/proc3/$1"; printf '%s (%s) S 1 %s 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 %s 0 0\n' "$1" "$2" "$1" "$3" > "$T/proc3/$1/stat"; }
+mkstat 7000 "Game.exe" 555; mkstat 7001 "umu run (x)" 500; mkstat 7100 "Other.exe" 999
+cat > "$T/umbral-running.json" <<EOF
+{"version":1,"umbral_pid":1,"games":[
+ {"id":"1484d426be","name":"Pokemon Iberia","launched_by":"umbral","pid":7001,"pid_starttime":500,
+  "game_pids":[{"pid":7000,"starttime":555}],"proton":"GE-Proton11-7-x86_64","started":1790000000.0},
+ {"id":"battlenet:wow","name":"WoW","launched_by":"battlenet","pid":7100,"pid_starttime":111,"game_pids":[{"pid":7100,"starttime":111}]}]}
+EOF
+GS3="$(PROC_ROOT="$T/proc3" "$CD" gstatus)"
+eq "running.json: the game's own pid, its Proton from Umbral" "$(jq -c '[.running[] | [.key, .pid, .proton]]' <<<"$GS3")" '[["umbral:1484d426be",7000,"GE-Proton11-7-x86_64"]]'
+yes "…a reused pid (start time differs) isn't taken for the game" "! jq -e '.running[] | select(.key == \"umbral:battlenet:wow\")' <<<'$GS3' >/dev/null"
+echo '{"version":1,"games":[]}' > "$T/umbral-running.json"
+eq "running.json says nothing runs → no name guessing" "$(PROC_ROOT="$T/proc2" "$CD" gstatus | jq -c '[.running[] | .key]')" '[]'
+rm -f "$T/umbral-running.json"
+stub umbral 'echo "umbral $*" >> "'"$T"'/umbral.log"; [ "$1" = --stop ] && [ "$2" = 1484d426be ] && exit 0; [ "$1" = --stop ] && exit 1; exit 0'
+rm -f "$T/umbral.log"; "$CD" gstop umbral:1484d426be >/dev/null
+has "STOP closes an Umbral game through Umbral" "$(cat "$T/umbral.log")" "umbral --stop 1484d426be"
+"$CD" gstop umbral:other >/dev/null 2>&1; eq "…not running → 3" "$?" 3
+"$CD" gstop steam:100 >/dev/null 2>&1; eq "…Steam games aren't stopped from here" "$?" 2
 rm -f "$T/umbral.log" "$T/steam.log"
 "$CD" gplay umbral:1484d426be >/dev/null
 has "PLAY starts an Umbral game through Umbral" "$(cat "$T/umbral.log")" "umbral --launch 1484d426be"

@@ -3161,10 +3161,38 @@ umbral_games() {
               cover:(.cover // "")}]' "$UMBRAL_CONFIG"
 }
 
-# Umbral games running now: a process with the game's .exe as an argument.
-# Read in bash (no grep/pgrep with the name in its own command line, which
-# would find itself); exact file-name match.
+# Umbral ≥ 0.11 writes the games it runs to $XDG_RUNTIME_DIR/umbral/running.json,
+# with their exact pids (from the process tree it launched) and each pid's start
+# time (field 22 of /proc/<pid>/stat), so a reused pid isn't taken for the game.
+UMBRAL_RUNNING="${CONTROL_DECK_UMBRAL_RUNNING:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/umbral/running.json}"
+pid_starttime() {   # pid → its start time in clock ticks since boot
+    local s a
+    s="$(cat "${PROC_ROOT:-/proc}/$1/stat" 2>/dev/null)" || return 1
+    s="${s##*) }"; read -ra a <<<"$s"     # after "(comm) ": field 3 onwards
+    echo "${a[19]}"
+}
+# the running games from that file, each with a live pid → [{key, pid, proton, started, launchedBy}]
+umbral_running_file() {
+    [[ -s "$UMBRAL_RUNNING" ]] && jq -e '.version == 1' "$UMBRAL_RUNNING" >/dev/null 2>&1 || return 1
+    local id pid st proton started by live x pids rows=()
+    while IFS=$'\x1f' read -r id proton started by pids; do
+        live=""
+        for x in $pids; do
+            pid="${x%:*}"; st="${x#*:}"
+            [[ "$pid" =~ ^[0-9]+$ && "$(pid_starttime "$pid")" == "$st" ]] && { live="$pid"; break; }
+        done
+        [[ -n "$live" ]] && rows+=("$(jq -nc --arg k "umbral:$id" --argjson p "$live" --arg pr "$proton" --arg s "$started" --arg b "$by" \
+            '{key:$k, pid:$p, proton:($pr | select(. != "")), started:($s | tonumber? // null), launchedBy:$b}')")
+    done < <(jq -r '.games[]? | [.id, (.proton // ""), (.started // "" | tostring), (.launched_by // ""),
+                     ([(.game_pids // [])[] | "\(.pid):\(.starttime)"] + ["\(.pid):\(.pid_starttime)"] | join(" "))] | join("\u001f")' "$UMBRAL_RUNNING")
+    printf '%s\n' "${rows[@]}" | jq -sc 'map(select(. != null))'
+}
+
+# Umbral games running now: from Umbral's running.json when there is one;
+# older Umbral: a process with the game's .exe as an argument (read in bash —
+# no grep/pgrep with the name in its own command line, which would find itself).
 umbral_running() {
+    local rf; rf="$(umbral_running_file)" && { jq -r '.[] | "\(.key)\t\(.pid)"' <<<"$rf"; return 0; }
     local list f pid a id exe
     list="$(jq -r '.games[]? | select((.exe // "") != "") | [.id, (.exe | split("/") | last)] | @tsv' "$UMBRAL_CONFIG" 2>/dev/null)"
     [[ -n "$list" ]] || return 0
@@ -3179,6 +3207,19 @@ umbral_running() {
             fi
         done < "$f" 2>/dev/null
     done
+}
+
+# gstop umbral:<id> — close a game through Umbral (≥ 0.11), which also ends its wineserver
+cmd_gstop() {
+    local key="$1"
+    [[ "$key" == umbral:* ]] || { err "only Umbral games can be stopped from here (use: gstop umbral:<id>)"; return 2; }
+    have umbral || { err "Umbral is not installed"; return 4; }
+    umbral --stop "${key#umbral:}" >/dev/null 2>&1
+    case $? in
+        0) log "■ Closing $key"; history_add stop umbral "$key" 0 ;;
+        1) log "$key isn't running."; return 3 ;;
+        *) err "this Umbral can't stop games (needs 0.11 or newer)"; return 4 ;;
+    esac
 }
 
 # gplay <key> — start a game from its own launcher
@@ -4070,6 +4111,7 @@ Gaming
   uilang [en|es]                The GUI's language (default: the system's)
   playing [quiet|lite on|off]   While playing: hold notifications · Hyprland without animations/blur/shadows
   iosched <key>                 The game's disk and I/O scheduler (does IO PRIORITY do anything there?)
+  gstop umbral:<id>             Close an Umbral game (Umbral 0.11+)
   sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
   upscale <steam:id>            FSR 4 / DLSS / XeSS upgrades this game, GPU and Proton allow (JSON)
   sched status|start|stop|playing|boot|nopassword …   CPU scheduler (sched-ext via scxctl): now, while playing, at boot
@@ -5549,7 +5591,9 @@ gs_tools() {
 gs_running_detail() {   # key pid → JSON
     local key="$1" pid="$2" id="${1#*:}" up proton="" fx="" p env
     up="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
-    if [[ "$key" == steam:* ]]; then
+    if [[ "$key" == umbral:* ]]; then
+        proton="$(umbral_running_file 2>/dev/null | jq -r --arg k "$key" '.[] | select(.key == $k) | .proton // empty' 2>/dev/null)"
+    elif [[ "$key" == steam:* ]]; then
         for p in "${PROC_ROOT:-/proc}"/[0-9]*; do
             grep -qa "waitforexitandrun" "$p/cmdline" 2>/dev/null || continue
             grep -qa "SteamAppId=$id" "$p/environ" 2>/dev/null || continue
@@ -6187,6 +6231,7 @@ main() {
         sched)       cmd_sched "$@" ;;
         uilang)      cmd_uilang "${1:-}" ;;
         playing)     cmd_playing "$@" ;;
+        gstop)       cmd_gstop "${1:-}" ;;
         iosched)     cmd_iosched "${1:-}" ;;
         sessions)    cmd_sessions "${1:-}" ;;
         upscale)     need "$1" "missing game key"; cmd_upscale "$1" ;;

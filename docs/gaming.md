@@ -537,6 +537,20 @@ reports:
   Forever → "World of Warcraft" (Warden) → red warning.
 - LIBRARY → an Umbral game has TEMPS and FX chips.
 
+### Umbral ≥ 0.11: running games and STOP
+- Running Umbral games come from `$XDG_RUNTIME_DIR/umbral/running.json`
+  (format in Umbral's README, "Integration"). Each game lists the pids Umbral
+  launched (the game's own `game_pids`, then the launcher's `pid`), each with
+  its start time. The deck takes the first pid that is alive and whose field
+  22 of `/proc/<pid>/stat` still matches it, so a reused pid isn't the game.
+  STATUS shows the Proton from that file. With no file (older Umbral), it falls
+  back to matching the .exe's name in process command lines, where two
+  RPG Maker `Game.exe` could be confused.
+- **■ STOP** in STATUS → RUNNING NOW (Umbral games, confirm click):
+  `gstop umbral:<id>` → `umbral --stop <id>`. Umbral closes the game and its
+  wineserver, also when its window is closed. Checked here with Pokémon
+  Iberia: gone from the file and no process left.
+
 ### CPU scheduler (STATUS → CPU · MEMORY)
 - `scxctl` (scx-tools) talks to `scx_loader` over D-Bus. Starting, switching
   and stopping are allowed by polkit action `org.scx.loader.manage-schedulers`
