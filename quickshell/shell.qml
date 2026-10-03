@@ -1477,7 +1477,7 @@ ShellRoot {
                 clip: true
                 TextArea {
                     readOnly: true
-                    text: lb.content || lb.placeholder
+                    text: lb.content || win.t(lb.placeholder)
                     color: lb.content ? pal.text : pal.dim
                     font.family: win.mono; font.pixelSize: 11
                     wrapMode: TextArea.WordWrap
@@ -1639,22 +1639,25 @@ ShellRoot {
                     onHeightChanged: requestPaint()
                 }
 
-                // watermark
+                // watermark, centred in the room above the formats list
                 Text {
-                    anchors.centerIn: parent
+                    id: dropMark
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.verticalCenterOffset: fmtList.visible ? -(fmtList.height + 16) / 2 : 0
                     text: "力"; font.pixelSize: 150; font.bold: true
                     color: "#141127"; visible: win.queue.length === 0
                 }
                 Text {
-                    anchors.centerIn: parent
+                    anchors.centerIn: dropMark
                     visible: win.queue.length === 0
-                    y: parent.height / 2 + 40
                     text: win.t("DROP PACKAGE(S) HERE"); color: pal.dim; font.family: win.mono
                     font.pixelSize: 12; font.letterSpacing: 3
                 }
 
                 // supported formats (shown while the queue is empty and there's room)
                 ColumnLayout {
+                    id: fmtList
                     visible: win.queue.length === 0 && dropZone.height >= 280
                     anchors.bottom: parent.bottom
                     anchors.horizontalCenter: parent.horizontalCenter

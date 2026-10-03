@@ -107,6 +107,7 @@ var ES = {
     ". Shaders: the packages the official ReShade installer lists.": ". Shaders: los paquetes que lista el instalador oficial de ReShade.",
     ".deb  (with debtap)": ".deb  (con debtap)",
     ".dll + d3dcompiler_47 linked in the game folder · OFF removes them": ".dll + d3dcompiler_47 enlazados en la carpeta del juego · OFF los quita",
+    "// log output": "// registro",
     "0.1% low": "0,1% mínimo",
     "1% low": "1% mínimo",
     "2D game drawn with GDI (RPG Maker style): no shader tool can hook it.": "Juego 2D dibujado con GDI (estilo RPG Maker): ninguna herramienta de shaders puede engancharse.",
