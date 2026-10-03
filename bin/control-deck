@@ -4406,6 +4406,30 @@ cmd_health() {
 OVERLAY_QML="${CONTROL_DECK_OVERLAY_QML:-$HOME/.config/quickshell/control-deck-overlay/shell.qml}"
 
 # first temperature (°C, integer) of a hwmon chip whose label matches, else temp1
+# the AMD GPU to report: the one with the most VRAM (the dedicated card, not the
+# CPU's integrated graphics, which is also amdgpu: Ryzen 7000/9000 have one)
+amd_gpu_dev() {
+    local c best="" bv=-1 v
+    for c in "$SYSFS"/class/drm/card[0-9]*; do
+        [[ ! "${c##*/}" =~ - && "$(cat "$c/device/vendor" 2>/dev/null)" == 0x1002 ]] || continue
+        v="$(cat "$c/device/mem_info_vram_total" 2>/dev/null || echo 0)"
+        (( v > bv )) && { bv=$v; best="$c/device"; }
+    done
+    [[ -z "$best" ]] || echo "$best"     # none: empty, not an error (callers run under set -e)
+}
+# its temperature ("edge"), from its own hwmon
+amd_gpu_temp() {
+    local d h t; d="$(amd_gpu_dev)"
+    if [[ -n "$d" ]]; then
+        for h in "$d"/hwmon/hwmon*; do
+            for t in "$h"/temp*_input; do
+                [[ -f "$t" ]] || continue
+                [[ "$(cat "${t%_input}_label" 2>/dev/null)" == edge || ! -f "${t%_input}_label" ]] && { echo $(( $(cat "$t") / 1000 )); return 0; }
+            done
+        done
+    fi
+    hwmon_temp amdgpu edge     # no per-card sensor found: the first amdgpu one
+}
 hwmon_temp() {   # name regex · label regex
     local h t l
     for h in "$SYSFS"/class/hwmon/hwmon*; do
@@ -4429,7 +4453,7 @@ cmd_temps() {
            || hwmon_temp 'cpu_thermal|acpitz' '')"
     case "$(gpu_vendor)" in
         nvidia) have nvidia-smi && gpu="$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc 0-9)" ;;
-        amd)    gpu="$(hwmon_temp amdgpu edge)" ;;
+        amd)    gpu="$(amd_gpu_temp)" ;;
         intel)  gpu="$(hwmon_temp 'i915|xe' '')" ;;
     esac
     printf 'CPU=%s\nGPU=%s\n' "$cpu" "$gpu"
@@ -5649,15 +5673,13 @@ gs_gpu() {
                  temp:($t | n), power:($pw | n), powerLimit:($pl | n), clock:($clk | n), clockMax:($clkmax | n),
                  load:($util | n), pstate:$ps, limits:$why}' ;;
         amd)
-            local c dev h
-            for c in "$SYSFS"/class/drm/card[0-9]*; do
-                [[ "$(cat "$c/device/vendor" 2>/dev/null)" == 0x1002 && ! "${c##*/}" =~ - ]] && { dev="$c/device"; break; }
-            done
+            local dev h
+            dev="$(amd_gpu_dev)"
             h="$(ls -d "$dev"/hwmon/hwmon* 2>/dev/null | head -1)"
             jq -nc --arg name "$(gpu_name)" --arg mesa "$(pkg_ver mesa)" \
                 --arg busy "$(cat "$dev/gpu_busy_percent" 2>/dev/null)" \
                 --arg mu "$(cat "$dev/mem_info_vram_used" 2>/dev/null)" --arg mt "$(cat "$dev/mem_info_vram_total" 2>/dev/null)" \
-                --arg t "$(hwmon_temp amdgpu edge || true)" \
+                --arg t "$(amd_gpu_temp || true)" \
                 --arg pw "$(cat "$h/power1_average" 2>/dev/null || cat "$h/power1_input" 2>/dev/null)" \
                 --arg pl "$(cat "$h/power1_cap" 2>/dev/null)" --arg clk "$(cat "$h/freq1_input" 2>/dev/null)" '
                 def n: (tonumber? // null);
@@ -6194,12 +6216,10 @@ session_sample() {
             IFS=',' read -r gpu load pw vram < <(nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,power.draw,memory.used \
                 --format=csv,noheader,nounits 2>/dev/null | head -1) ;;
         amd)
-            local c dev h
-            for c in "$SYSFS"/class/drm/card[0-9]*; do
-                [[ "$(cat "$c/device/vendor" 2>/dev/null)" == 0x1002 && ! "${c##*/}" =~ - ]] && { dev="$c/device"; break; }
-            done
+            local dev h
+            dev="$(amd_gpu_dev)"
             h="$(ls -d "$dev"/hwmon/hwmon* 2>/dev/null | head -1)"
-            gpu="$(hwmon_temp amdgpu edge || true)"; load="$(cat "$dev/gpu_busy_percent" 2>/dev/null)"
+            gpu="$(amd_gpu_temp || true)"; load="$(cat "$dev/gpu_busy_percent" 2>/dev/null)"
             pw="$(cat "$h/power1_average" 2>/dev/null || cat "$h/power1_input" 2>/dev/null)"; [[ -n "$pw" ]] && pw=$(( pw / 1000000 ))
             vram="$(cat "$dev/mem_info_vram_used" 2>/dev/null)"; [[ -n "$vram" ]] && vram=$(( vram / 1048576 )) ;;
     esac

@@ -1564,6 +1564,18 @@ mkdir -p "$T/fh"; echo '{"hits":[{"app_id":"org.a.A","installs_last_month":50,"v
 FS="$(printf '%s\n' '{"source":"flatpak","id":"org.a.A","remote":"flathub"}' '{"source":"flatpak","id":"org.b.B","remote":"flathub"}' '{"source":"flatpak","id":"org.c.C","remote":"other"}' \
       | CONTROL_DECK_FLATHUB_API="file://$T/fh" bash -c 'source "$1"; flathub_stats q' _ "$CD" | jq -sc 'map([.id, .installs, .verified])')"
 eq "Flathub stats merged, most installed first, other remotes untouched" "$FS" '[["org.b.B",9000,true],["org.a.A",50,false],["org.c.C",null,null]]'
+section "AMD: the dedicated GPU, not the CPU's integrated one"
+G2="$T/sys2/class/drm"
+mkgpu() {   # card vram busy temp(m°C) power(µW)
+    mkdir -p "$G2/$1/device/hwmon/hwmon${1#card}"; echo 0x1002 > "$G2/$1/device/vendor"
+    echo "$2" > "$G2/$1/device/mem_info_vram_total"; echo "$3" > "$G2/$1/device/gpu_busy_percent"; echo 100 > "$G2/$1/device/mem_info_vram_used"
+    echo "$4" > "$G2/$1/device/hwmon/hwmon${1#card}/temp1_input"; echo edge > "$G2/$1/device/hwmon/hwmon${1#card}/temp1_label"; echo "$5" > "$G2/$1/device/hwmon/hwmon${1#card}/power1_average"
+}
+mkgpu card0 536870912 0 40000 1000000          # Ryzen iGPU listed first
+mkgpu card1 17095983104 55 61000 250000000     # RX 9070 XT
+eq "picks the card with the most VRAM" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_dev)" "$G2/card1/device"
+eq "…its own temperature sensor" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_temp)" 61
+eq "session samples read it: GPU °C, load, W" "$(CONTROL_DECK_SYSFS="$T/sys2" CONTROL_DECK_GPU_VENDOR=amd fn session_sample | awk '{print $3, $4, $5}')" "61 55 250"
 section "Interface language (ESP/ENG)"
 rm -f "$HOME/.local/share/control-deck/ui.json"
 eq "default follows the locale (es_ES)" "$(LC_ALL='' LC_MESSAGES='' LANG=es_ES.UTF-8 "$CD" uilang)" es
