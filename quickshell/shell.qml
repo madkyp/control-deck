@@ -330,6 +330,7 @@ ShellRoot {
             else if (gameView === "bench") { if (selGame && selGameSource === "steam") benchProc.running = true; }
             else if (gameView === "prefixes") { pfxProc.running = true; pfxBakProc.running = true; }
             else if (gameView === "health") healthProc.running = true;
+            else if (gameView === "fx" && !fxStatProc.running) openFx();
         }
         property var    games: []
         property var    ioInfo: ({})        // the selected game's disk + I/O scheduler (IO PRIORITY)
@@ -3853,6 +3854,55 @@ ShellRoot {
                                         }
                                         Chip { label: win.fxGuideOpen ? win.t("GUIDE ▴") : win.t("GUIDE ▾"); tip: win.t("Every step, with what each one does"); onClicked: win.fxGuideOpen = !win.fxGuideOpen }
                                     }
+                                    // what is installed: where the preset came from, each effect and its shader pack
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 4
+                                        visible: win.fxStepsDone === 5 && (win.fxCur.effects || []).length > 0
+                                        Text {
+                                            Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                            property var packs: Object.keys(win.fxCur.packs || {}).map(function (k) { return win.fxCur.packs[k]; })
+                                                                     .filter(function (p, i, a) { return p && a.indexOf(p) === i; })
+                                            text: [win.fxCur.source === "file" ? (win.fxCur.archive ? win.t("Imported from ") + win.fxCur.archive : win.t("Imported preset"))
+                                                   : win.fxCur.source === "sfx" ? win.t("From SweetFX Settings DB") : win.t("Built-in look"),
+                                                   win.fxCur.importedAt ? new Date(win.fxCur.importedAt * 1000).toLocaleString(Qt.locale(), "dd/MM/yyyy HH:mm") : "",
+                                                   (win.fxCur.bundled || 0) > 0 ? win.fxCur.bundled + win.t(" shader file(s) from the archive") : "",
+                                                   packs.length ? win.t("shader packs: ") + packs.join(", ") : ""].filter(function (x) { return x; }).join("  ·  ")
+                                        }
+                                        Flow {
+                                            Layout.fillWidth: true; spacing: 4
+                                            Repeater {
+                                                model: (win.fxCur.effects || []).map(function (e) { return { e: e, ok: true }; })
+                                                       .concat((win.fxCur.skipped || []).map(function (s) { return { e: s.file || s.effect, ok: false, why: s.why }; }))
+                                                delegate: Rectangle {
+                                                    required property var modelData
+                                                    implicitWidth: effTxt.implicitWidth + 12; implicitHeight: 18; radius: 4
+                                                    color: "transparent"; border.width: 1; border.color: modelData.ok ? pal.border : pal.bad
+                                                    Text {
+                                                        id: effTxt; anchors.centerIn: parent
+                                                        property string pk: modelData.ok ? ((win.fxCur.packs || {})[modelData.e] || "") : ""
+                                                        text: (modelData.ok ? "✓ " : "✗ ") + modelData.e.replace(/\.fx$/i, "") + (pk ? "  · " + pk : "")
+                                                        color: modelData.ok ? pal.text : pal.bad; font.family: win.mono; font.pixelSize: 9
+                                                    }
+                                                    MouseArea { id: effMa; anchors.fill: parent; hoverEnabled: true }
+                                                    Tip { visible: effMa.containsMouse && !modelData.ok; text: win.t(modelData.why || "") }
+                                                }
+                                            }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 6
+                                            Text {
+                                                Layout.fillWidth: true; elide: Text.ElideMiddle
+                                                color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                                text: win.t("preset file: ") + (win.fxCur.presetFile || "")
+                                            }
+                                            Chip {
+                                                visible: !!win.fxCur.presetFile; label: win.t("FOLDER ↗")
+                                                tip: win.t("Open the folder with this game's preset")
+                                                onClicked: Qt.openUrlExternally("file://" + String(win.fxCur.presetFile).replace(/^~/, win.home).replace(/\/[^\/]*$/, ""))
+                                            }
+                                        }
+                                    }
                                     Repeater {
                                         // all steps when opened; otherwise just the next one (none when all is done)
                                         model: win.fxSteps.map(function (s, i) { return { s: s, i: i }; })
@@ -4245,7 +4295,10 @@ ShellRoot {
                                             model: win.fx.links || []
                                             delegate: Chip {
                                                 required property var modelData
-                                                label: modelData.label + " ↗"; tip: modelData.url + win.t(" — right-click removes it")
+                                                label: (modelData.installed ? "✓ " : "") + modelData.label + " ↗"
+                                                tint: pal.ok; active: modelData.installed === true
+                                                tip: (modelData.installed ? win.t("Installed: the preset in use was imported from this mod's file.") + "\n" : "")
+                                                     + modelData.url + win.t(" — right-click removes it")
                                                 onClicked: Qt.openUrlExternally(modelData.url)
                                                 MouseArea {
                                                     anchors.fill: parent; acceptedButtons: Qt.RightButton

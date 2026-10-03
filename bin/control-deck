@@ -2952,7 +2952,7 @@ cmd_gprofile() {
     valid_game_key "$key" || { err "not a game key: $key (e.g. steam:1422450 or default)"; return 2; }
     case "$sub" in
         get) profile_get "$key" ;;
-        reset) profile_write "$key" null; log "✔ Profile of $key reset to the default." ;;
+        reset) profile_write "$key" null; log "✔ Profile of $(game_label "$key") reset to the default." ;;
         set)
             local patch='{}' kv f v e
             for kv in "$@"; do
@@ -2979,7 +2979,7 @@ cmd_gprofile() {
                 esac
             done
             profile_write "$key" "$patch"
-            log "✔ Profile of $key saved."
+            log "✔ Profile of $(game_label "$key") saved."
             history_add "game profile" "${key%%:*}" "$key" 0 ;;
         *) err "use: gprofile get|set|reset <key> …"; return 2 ;;
     esac
@@ -3291,8 +3291,8 @@ cmd_gstop() {
     have umbral || { err "Umbral is not installed"; return 4; }
     umbral --stop "${key#umbral:}" >/dev/null 2>&1
     case $? in
-        0) log "■ Closing $key"; history_add stop umbral "$key" 0 ;;
-        1) log "$key isn't running."; return 3 ;;
+        0) log "■ Closing $(game_label "$key")"; history_add stop umbral "$key" 0 ;;
+        1) log "$(game_label "$key") isn't running."; return 3 ;;
         *) err "this Umbral can't stop games (needs 0.11 or newer)"; return 4 ;;
     esac
 }
@@ -3310,7 +3310,7 @@ cmd_gplay() {
             setsid -f umbral --launch "${key#umbral:}" >/dev/null 2>&1 ;;
         *) err "use: gplay steam:<appid> | umbral:<id>"; return 2 ;;
     esac
-    log "▶ Launching $key"
+    log "▶ Launching $(game_label "$key")"
     history_add play "${key%%:*}" "$key" 0
 }
 
@@ -3923,7 +3923,7 @@ cmd_bench() {
                 esac
             done
             mkdir -p "$dir"; printf '%s\n' "$cfg" > "$dir/config.json"
-            log "✔ Benchmark of $key saved." ;;
+            log "✔ Benchmark of $(game_label "$key") saved." ;;
         run)
             local variant="$1" lc proton cur cfgv
             [[ "$variant" == A || "$variant" == B ]] || { err "use: bench run $key A|B"; return 2; }
@@ -3944,7 +3944,7 @@ cmd_bench() {
             mkdir -p "$BENCH_DIR"
             printf '%s\t%s\t%s\n' "$key" "$variant" "$(date +%s)" > "$BENCH_ARMED"
             cfgv="$(jq -r '"logging starts after \(.delay) s and lasts \(.duration) s"' <<<"$cfg")"
-            log "→ Launching $key for run $variant ($cfgv). Play the same scene for both runs, then quit the game."
+            log "→ Launching $(game_label "$key") for run $variant ($cfgv). Play the same scene for both runs, then quit the game."
             setsid -f steam "steam://rungameid/$id" >/dev/null 2>&1 || true
             history_add "benchmark $variant" steam "$key" 0 ;;
         restore)
@@ -3953,7 +3953,7 @@ cmd_bench() {
             cmd_steamcompat "$id" "$orig" || return $?
             bench_cfg "$key" | jq -c 'del(.originalProton)' > "$dir/config.json"
             log "✔ Proton restored to $orig." ;;
-        clear) rm -rf "$dir/A" "$dir/B" "$BENCH_ARMED"; log "✔ Benchmark results of $key cleared." ;;
+        clear) rm -rf "$dir/A" "$dir/B" "$BENCH_ARMED"; log "✔ Benchmark results of $(game_label "$key") cleared." ;;
         *) err "use: bench get|set|run|restore|clear <key> …"; return 2 ;;
     esac
 }
@@ -4664,7 +4664,17 @@ cmd_fx_status() {
     if [[ -n "$key" ]]; then
         valid_game_key "$key" || { err "not a game key: $key"; return 2; }
         d="$(fx_key_dir "$key")"
-        [[ -s "$d/report.json" ]] && cur="$(cat "$d/report.json")"
+        if [[ -s "$d/report.json" ]]; then
+            cur="$(cat "$d/report.json")"
+            # which shader pack each effect comes from (the folder under Shaders/)
+            local e fp packs="{}"
+            while IFS= read -r e; do
+                [[ -n "$e" ]] || continue
+                fp="$(fx_find "$e")"; fp="${fp#"$FX_DIR/Shaders/"}"
+                packs="$(jq -c --arg e "$e" --arg p "$([[ "$fp" == */* ]] && echo "${fp%%/*}")" '. + {($e): $p}' <<<"$packs")"
+            done < <(jq -r '.effects[]?' <<<"$cur")
+            cur="$(jq -c --argjson p "$packs" --arg ini "${d/#$HOME/\~}/ReShadePreset.ini" '. + {packs:$p, presetFile:$ini}' <<<"$cur")"
+        fi
         route="$(fx_route "$key")"
         if [[ "$key" == steam:* || "$key" == umbral:* ]]; then
             if [[ "$key" == steam:* ]]; then online="$(fx_online "${key#steam:}")"
@@ -4682,7 +4692,10 @@ cmd_fx_status() {
         --argjson steamRunning "$(steam_running && echo true || echo false)" --arg key "$(fx_key)" --arg ekey "$(fx_effects_key)" \
         --arg shots "$(if [[ -n "$key" ]]; then reshade_shots_dir "$key" | sed "s|^$HOME|~|"; fi)" \
         --argjson advice "$(if [[ -n "$key" ]]; then fx_advice "$key" "$exes" "$online" "$cur"; else echo null; fi)" \
-        --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" '.[$k] // []'; else echo '[]'; fi)" \
+        --argjson links "$(if [[ "$key" == steam:* ]]; then fx_links_json | jq -c --arg k "$key" --arg a "$(jq -r '.archive // ""' <<<"$cur" 2>/dev/null)" '
+            # a Nexus file is named <name>-<mod id>-<version>-<time>: that link is the installed preset
+            (.[$k] // []) | map(. + {installed:(($a != "") and ((.url | capture("nexusmods\\.com/[^/]+/mods/(?<id>[0-9]+)")? .id) as $id
+                                                   | $id != null and ($a | test("-" + $id + "-"))))})'; else echo '[]'; fi)" \
         --arg rver "$(reshade_version | sed 's/^ReShade-//')" --arg rlatest "$(reshade_latest 2>/dev/null)" \
         --arg d3dc "$([[ -f "$RESHADE_BIN/d3dcompiler_47.dll.64" && -f "$RESHADE_BIN/d3dcompiler_47.dll.32" ]] && echo 1 || echo 0)" \
         --arg chaotic "$(grep -qE '^[[:space:]]*\[chaotic-aur\]' "$PACMAN_CONF" 2>/dev/null && echo 1 || echo 0)" '{
@@ -4828,7 +4841,7 @@ cmd_fx_set() {
             [[ -n "$(reshade_state "$key")" ]] && cmd_reshade_off "$key" --keep-profile >/dev/null
             rm -f "$d/vkBasalt.conf" "$d/preset.ini" "$d/report.json"
             profile_write "$key" '{"fx":false}'
-            log "✔ Visual shaders off for $key."; return 0 ;;
+            log "✔ Visual shaders off for $(game_label "$key")."; return 0 ;;
         builtin:*)
             name="${what#builtin:}"; mkdir -p "$d"
             if [[ "$mode" == reshade ]]; then
@@ -4881,14 +4894,19 @@ cmd_fx_set() {
                 rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
                        '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")"
             else
-                rep="$(jq -c --arg n "${name:-imported preset}" '. + {source:"file", name:$n}' <<<"$r")"
+                # where it came from: set by IMPORT; kept when the same preset is applied again
+                local prev="{}"; [[ -s "$d/report.json" ]] && prev="$(jq -c 'if .source == "file" then {archive, bundled, importedAt} else {} end' "$d/report.json" 2>/dev/null || echo '{}')"
+                rep="$(jq -c --arg n "${name:-imported preset}" --arg a "${FX_IMPORT_ARCHIVE:-}" --arg b "${FX_IMPORT_BUNDLED:-0}" \
+                       --argjson prev "$prev" --argjson now "$(date +%s)" \
+                       '. + {source:"file", name:$n}
+                        + (if $a != "" then {archive:$a, bundled:($b | tonumber), importedAt:$now} else ($prev | with_entries(select(.value != null))) end)' <<<"$r")"
             fi ;;
         *) err "use: fx set <key> builtin:<sharpen|sharpen-aa|fxaa|clarity> | sfx:<preset id> | off"; return 2 ;;
     esac
     rep="$(jq -c --arg m "$mode" '. + {mode:$m}' <<<"$rep")"
     printf '%s\n' "$rep" > "$d/report.json"
     profile_write "$key" '{"fx":true}'
-    log "✔ $(jq -r '.name' <<<"$rep") → $key via $mode ($(jq -r '.applied' <<<"$rep") effect(s))"
+    log "✔ $(jq -r '.name' <<<"$rep") → $(game_label "$key") via $mode ($(jq -r '.applied' <<<"$rep") effect(s))"
     [[ "$key" == steam:* || "$key" == umbral:* ]] && fx_ensure_wrapped "$key"
     jq -r '.skipped[]? | "  ✗ \(.effect): \(.why)"' <<<"$rep"
     [[ "$(jq '.partial | length' <<<"$rep")" != 0 ]] && log "  ~ $(jq '.partial | length' <<<"$rep") colour value(s) kept at the shader's default (vkBasalt can't set vectors)"
@@ -4917,7 +4935,7 @@ cmd_fx_mode() {
     esac
     if [[ -n "$look" ]]; then cmd_fx_set "$key" "$look"; rm -f "$d/preset.keep"
     elif [[ "$mode" == vkbasalt ]]; then profile_write "$key" '{"fx":false}'; fi
-    log "✔ $key now uses $mode."
+    log "✔ $(game_label "$key") now uses $mode."
 }
 
 # --- ReShade (real, DLL) under Proton -------------------------------------------
@@ -5059,6 +5077,15 @@ cmd_iosched() {
 # an Umbral game's .exe (from Umbral's config)
 umbral_game_exe() { umbral_json | jq -r --arg i "${1#umbral:}" '.games[]? | select(.id == $i) | .exe // empty'; }
 umbral_game_name() { umbral_json | jq -r --arg i "${1#umbral:}" '.games[]? | select(.id == $i) | .name // empty'; }
+# a game key as people read it: its name (the key itself if the game is unknown)
+game_label() {
+    local n=""
+    case "$1" in
+        steam:*)  n="$(steam_games | awk -v i="${1#steam:}" 'NR % 5 == 1 { x = $0 } NR % 5 == 2 && x == i { print; exit }')" ;;
+        umbral:*) n="$(umbral_game_name "$1")" ;;
+    esac
+    echo "${n:-$1}"
+}
 
 cmd_fx_exes() {
     local key="$1" dir main="" gname=""
@@ -5492,7 +5519,7 @@ cmd_fx_import() {
     ((n)) && log "→ $n shader file(s) from the archive → Shaders/imported/$slug"
     local keep; keep="$(mktemp)"; cp -- "$d/$pick" "$keep"; rm -rf "$d"
     local label="${pick##*/}"; label="${label%.*}"
-    FX_IMPORT_NAME="$label" cmd_fx_set "$key" "file:$keep"; local rc=$?
+    FX_IMPORT_NAME="$label" FX_IMPORT_ARCHIVE="${f##*/}" FX_IMPORT_BUNDLED="$n" cmd_fx_set "$key" "file:$keep"; local rc=$?
     rm -f "$keep"
     return $rc
 }
@@ -5513,7 +5540,7 @@ cmd_fx_link() {
             mkdir -p "$GAMING_DIR"; tmp="$(mktemp)"
             fx_links_json | jq --arg k "$key" --arg u "$url" --arg l "${label:-$url}" \
                 '.[$k] = ((.[$k] // []) | map(select(.url != $u)) + [{url:$u, label:$l}])' > "$tmp" && mv "$tmp" "$FX_LINKS"
-            log "✔ Saved for $key: ${label:-$url}" ;;
+            log "✔ Saved for $(game_label "$key"): ${label:-$url}" ;;
         note)
             [[ -n "$url" ]] || { err "use: fx link note <key> <url> <text>"; return 2; }
             fx_links_json | jq -e --arg k "$key" --arg u "$url" '(.[$k] // []) | any(.url == $u)' >/dev/null \
@@ -5551,7 +5578,7 @@ cmd_fx() {
                          [[ -f "$f" ]] || continue
                          k="$(jq -r '.key // empty' "$f")"; [[ -n "$k" ]] || { k="$(basename "$(dirname "$f")")"; k="${k/_/:}"; }
                          [[ -f "$(jq -r .dir "$f")/ReShade.ini" ]] && reshade_set_shots "$k" "$(jq -r .dir "$f")/ReShade.ini" \
-                             && log "→ $k: screenshots to $(reshade_shots_dir "$k" | sed "s|^$HOME|~|")"
+                             && log "→ $(game_label "$k"): screenshots to $(reshade_shots_dir "$k" | sed "s|^$HOME|~|")"
                      done ;;
         effectskey) cmd_fx_effectskey "${1:-}" ;;
         scan)     if [[ "${1:-}" == --cached ]]; then
@@ -6051,20 +6078,20 @@ cmd_gaudit_fix() {
         if [[ "$drop" != "[]" && "$k" == umbral:* ]]; then
             local -a unset_args=(); mapfile -t unset_args < <(jq -r '.[] | "env." + . + "="' <<<"$drop")
             if cmd_uset "$k" "${unset_args[@]}" >/dev/null; then
-                log "→ $k: removed $(jq -r 'join(", ")' <<<"$drop") in Umbral (no effect on this $(jq -r .vendor <<<"$a") GPU)"; n=$((n + 1))
-            else log "✗ $k: Umbral couldn't remove $(jq -r 'join(", ")' <<<"$drop") (Umbral 0.12+ needed)"; fi
+                log "→ $(game_label "$k"): removed $(jq -r 'join(", ")' <<<"$drop") in Umbral (no effect on this $(jq -r .vendor <<<"$a") GPU)"; n=$((n + 1))
+            else log "✗ $(game_label "$k"): Umbral couldn't remove $(jq -r 'join(", ")' <<<"$drop") (Umbral 0.12+ needed)"; fi
         elif [[ "$drop" != "[]" ]]; then
             local tmp; tmp="$(mktemp)"
             profiles_json | jq --arg k "$k" --argjson d "$drop" '.[$k].env |= (. // {} | with_entries(select(.key as $x | $d | index($x) | not)))' > "$tmp" \
                 && mv "$tmp" "$PROFILES"
-            log "→ $k: removed $(jq -r 'join(", ")' <<<"$drop") (no effect on this $(jq -r .vendor <<<"$a") GPU)"; n=$((n + 1))
+            log "→ $(game_label "$k"): removed $(jq -r 'join(", ")' <<<"$drop") (no effect on this $(jq -r .vendor <<<"$a") GPU)"; n=$((n + 1))
         fi
         if jq -e --arg k "$k" 'any(.issues[]; .key == $k and .kind == "reshade")' <<<"$a" >/dev/null; then
-            cmd_fx_mode "$k" reshade >/dev/null 2>&1 && log "→ $k: ReShade set up on this PC" || log "✗ $k: ReShade couldn't be set up here (see FX)"
+            cmd_fx_mode "$k" reshade >/dev/null 2>&1 && log "→ $(game_label "$k"): ReShade set up on this PC" || log "✗ $(game_label "$k"): ReShade couldn't be set up here (see FX)"
             n=$((n + 1))
         fi
         jq -e --arg k "$k" 'any(.issues[]; .key == $k and .kind == "vkbasalt")' <<<"$a" >/dev/null \
-            && log "  $k: vkBasalt isn't installed here — FX → INSTALL"
+            && log "  $(game_label "$k"): vkBasalt isn't installed here — FX → INSTALL"
     done <<<"$keys"
     log "✔ $n change(s)."
 }

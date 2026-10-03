@@ -554,7 +554,7 @@ eq "old options adopted: args"     "$(jq -r '.args' <<<"$PR")" "-novid +fps_max 
 "$CD" steamwrap 100 off >/dev/null
 # a profile saved BEFORE wrapping must still get the old options merged in
 "$CD" gprofile reset steam:100 >/dev/null
-"$CD" gprofile set steam:100 mangohud=false 'env=MY_VAR=1' >/dev/null
+has "messages name the game, not its key" "$("$CD" gprofile set steam:100 mangohud=false 'env=MY_VAR=1')" 'Profile of Game "Quoted" One saved'
 "$CD" steamwrap 100 on >/dev/null
 PR="$("$CD" gprofile get steam:100)"
 eq "pre-existing profile: old env merged in" "$(jq -r '.env.PROTON_ENABLE_WAYLAND' <<<"$PR")" 0
@@ -1305,6 +1305,7 @@ O="$("$CD" fx import steam:5000 "$T/nexus/Realistica.zip" 2>&1)"; eq "import suc
 RP="$HOME/.local/share/control-deck/gaming/fx/steam_5000"; FXD="$HOME/.local/share/control-deck/reshade"
 eq "applied as the game's preset, named after the file" "$(jq -c '[.source, .name, .mode, .effects]' "$RP/report.json")" '["file","Realistica","reshade",["MyGrain.fx","Vibrance.fx"]]'
 has "preset content kept as is" "$(cat "$RP/ReShadePreset.ini")" "Amount=0.5"
+eq "import records the archive it came from" "$(jq -r '.archive' "$RP/report.json")" "Realistica.zip"
 yes "the archive's own shader copied" "[[ -f '$FXD/Shaders/imported/Realistica/MyGrain.fx' ]]"
 yes "a shader we already have isn't duplicated" "[[ ! -e '$FXD/Shaders/imported/Realistica/Vibrance.fx' ]]"
 yes "texture copied" "[[ -f '$FXD/Textures/grain.png' ]]"
