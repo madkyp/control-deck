@@ -6128,8 +6128,13 @@ cmd_upscale() {
     jq -nc --arg tool "$tool" --arg vars "$vars" --arg gpu "$name" --arg gen "$gen" --arg vendor "$(gpu_vendor)" \
         --argjson env "$(jq -c '.env // {}' <<<"$p")" --argjson online "$(fx_online "$id" 2>/dev/null || echo null)" \
         --argjson ships "$(
-            f() { [[ -d "$dir" ]] && find "$dir" -maxdepth 6 -type f -iname "$1" 2>/dev/null | head -1 | grep -q . && echo true || echo false; }
-            jq -nc --argjson fsrdx "$(f amd_fidelityfx_dx12.dll)" --argjson fsrvk "$(f amd_fidelityfx_vk.dll)" \
+            # any of the names given (FidelityFX SDK 1: amd_fidelityfx_dx12.dll; SDK 2, FSR 3.1.4+:
+            # amd_fidelityfx_upscaler_dx12.dll + amd_fidelityfx_loader_dx12.dll — KCD2 ships these)
+            f() { [[ -d "$dir" ]] || { echo false; return; }
+                  local n a=(); for n in "$@"; do a+=(-o -iname "$n"); done
+                  find "$dir" -maxdepth 6 -type f \( "${a[@]:1}" \) 2>/dev/null | head -1 | grep -q . && echo true || echo false; }
+            jq -nc --argjson fsrdx "$(f amd_fidelityfx_dx12.dll amd_fidelityfx_upscaler_dx12.dll amd_fidelityfx_loader_dx12.dll)" \
+                   --argjson fsrvk "$(f amd_fidelityfx_vk.dll amd_fidelityfx_upscaler_vk.dll amd_fidelityfx_loader_vk.dll)" \
                    --argjson dlss "$(f 'nvngx_dlss*.dll')" --argjson xess "$(f 'libxess*.dll')" --argjson fsr2 "$(f 'ffx_fsr2_api*.dll')" \
                    '{fsr31dx12:$fsrdx, fsr31vk:$fsrvk, dlss:$dlss, xess:$xess, fsr2:$fsr2}')" '
         ($vars | split(" ")) as $v

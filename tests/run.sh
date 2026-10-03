@@ -1450,6 +1450,11 @@ printf '"compatibilitytools"\n{\n  "compat_tools"\n  {\n    "GE-Test"\n    {\n  
 printf 'check_environment("PROTON_FSR4_UPGRADE", "fsr4")\ncheck_environment("PROTON_DLSS_UPGRADE", "dlss")\ncheck_environment("PROTON_XESS_UPGRADE", "xess")\ncheck_environment("PROTON_FSR4_INDICATOR", "fsr4hud")\n' > "$UP/compatibilitytools.d/GE-Test/proton"
 UPS() { CONTROL_DECK_STEAM_ROOT="$UP" CONTROL_DECK_GPU_VENDOR="$1" CONTROL_DECK_GPU_NAME="$2" "$CD" upscale steam:8000; }
 eq "detects what the game ships" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c .ships)" '{"fsr31dx12":true,"fsr31vk":false,"dlss":true,"xess":false,"fsr2":false}'
+# FidelityFX SDK 2 (FSR 3.1.4+) names its DLLs differently (Kingdom Come: Deliverance II ships these)
+mv "$UP/steamapps/common/Up/bin/amd_fidelityfx_dx12.dll" "$UP/steamapps/common/Up/bin/amd_fidelityfx_upscaler_dx12.dll"
+touch "$UP/steamapps/common/Up/bin/amd_fidelityfx_loader_dx12.dll"
+eq "…FidelityFX SDK 2 DLLs count as FSR 3.1 DX12 too" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r .ships.fsr31dx12)" true
+rm "$UP/steamapps/common/Up/bin/amd_fidelityfx_loader_dx12.dll"; mv "$UP/steamapps/common/Up/bin/amd_fidelityfx_upscaler_dx12.dll" "$UP/steamapps/common/Up/bin/amd_fidelityfx_dx12.dll"
 eq "Steam default Proton → no upgrades" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -r '.options[] | select(.id == "fsr4") | .why')" "This game's Proton can't do it: pick GE-Proton or Proton-CachyOS in PROTON."
 printf '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t\t"Valve"\n\t\t{\n\t\t\t"Steam"\n\t\t\t{\n\t\t\t\t"CompatToolMapping"\n\t\t\t\t{\n\t\t\t\t\t"8000"\n\t\t\t\t\t{\n\t\t\t\t\t\t"name"\t\t"GE-Test"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n' > "$UP/config/config.vdf"
 eq "RX 9070 XT + GE: FSR 4 available" "$(UPS amd 'AMD Radeon RX 9070 XT' | jq -c '[.options[] | select(.id == "fsr4") | .available, .var]')" '[true,"PROTON_FSR4_UPGRADE"]'
