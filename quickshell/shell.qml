@@ -58,10 +58,16 @@ ShellRoot {
         Component.onCompleted: {
             timerStatusProc.running = true;
             versionProc.running = true;
-            if (view === "manage") refreshApps();
-            if (view === "updates") checkUpdates();
+            loadView();
+        }
+        // each tab loads its data when it's shown, whatever showed it (tab, header
+        // notice, a notification opening the deck on a tab)
+        onViewChanged: loadView()
+        function loadView() {
+            if (view === "manage" && apps.length === 0) refreshApps();
+            if (view === "updates" && !updChecked && !updBusy) checkUpdates();
             if (view === "system") openSystem(sysView);
-            if (view === "gaming") openGaming();
+            if (view === "gaming" && games.length === 0) openGaming();
         }
 
         function srcColor(s) {
@@ -1352,13 +1358,7 @@ ShellRoot {
             }
             MouseArea {
                 anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    win.view = key;
-                    if (key === "manage" && win.apps.length === 0) win.refreshApps();
-                    if (key === "updates" && !win.updChecked && !win.updBusy) win.checkUpdates();
-                    if (key === "system") win.openSystem(win.sysView);
-                    if (key === "gaming" && win.games.length === 0) win.openGaming();
-                }
+                onClicked: { if (win.view === key) win.loadView(); else win.view = key; }
             }
         }
 
