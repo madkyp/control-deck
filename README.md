@@ -149,7 +149,7 @@ Nothing is needed on Control Deck's side: it finds `umbral` in your `PATH` and r
 
 | GAMING · LIBRARY | GAMING · STATUS | GAMING · HEALTH |
 |---|---|---|
-| ![GAMING — library, per-game profile, UPSCALE and suggestions for this PC](screenshots/gaming-library.png) | ![GAMING — live status: GPU, CPU and scheduler, last sessions, tools](screenshots/gaming-status.png) | ![GAMING — health checks of what games need](screenshots/gaming-health.png) |
+| ![GAMING — library, per-game profile, mods (Crisol), UPSCALE and suggestions for this PC](screenshots/gaming-library.png) | ![GAMING — live status: GPU, CPU and scheduler, last sessions, tools](screenshots/gaming-status.png) | ![GAMING — health checks of what games need](screenshots/gaming-health.png) |
 
 | GAMING · FX (this game) | GAMING · FX (my library) | Spanish interface (ESP) |
 |---|---|---|
