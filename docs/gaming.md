@@ -676,6 +676,40 @@ until vkBasalt is installed.
 - STATUS lists the last 8 sessions with a small temperature graph.
   `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
 
+### Preset review: telling good presets from bad ones (FX)
+- SweetFX Settings DB has no ratings, only downloads and a date, so the deck
+  reads what each preset does. `fx_review` sorts each effect by its file name
+  (sharpen, detail, colour, gamma, bloom, depth, film, AA) and flags what tends
+  to look worse:
+  - several sharpeners stacked (CAS is kept);
+  - sharpeners plus Clarity-like detail effects;
+  - CAS at 100 %;
+  - gamma / colour-space tools made for one monitor or HDR setup;
+  - four or more colour effects;
+  - grain, chromatic aberration and vignette;
+  - depth effects;
+  - ten or more effects.
+
+  It then gives a verdict: light, moderate, strong, empty or old format.
+- `fx reviews <sfx game>` reviews the 10 most downloaded presets of the list (each
+  file is downloaded once and cached 30 days); the list shows downloads, year,
+  effects and those tags. A file without `Techniques=` is SweetFX / ReShade 1–2
+  era: marked OLD FORMAT.
+- Active preset: the same tags, each effect switchable (`fx toggle <key> <file>
+  on|off`), and LIGHTER (`fx lighter <key>`), which switches off what the review
+  suggests. The downloaded/imported preset is kept as `preset.orig.ini`; a new
+  look clears the switches. Applies at the next launch.
+- Lords of the Fallen (2023) ships a 13-effect preset as the only one on SweetFX DB:
+  - 2 sharpeners + 2 Clarity;
+  - CAS at 100 %;
+  - lilium SDR TRC fix + ConvertColorSpace;
+  - 6 colour effects.
+
+  LIGHTER switches off Unsharp and both gamma tools.
+- An SFX preset remembers the SweetFX game it came from (`sfxGame`), so FX lists
+  that game again (two games named "Lords of the Fallen", 2014 and 2023), and its
+  name from the listing.
+
 ### Community shader packs (FX)
 - Some presets use free shaders that ReShade's installer list (EffectPackages.ini)
   doesn't carry: Rabbit's KCD2 preset uses NGLighting, from NiceGuy-Shaders. The

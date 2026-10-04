@@ -1124,6 +1124,9 @@ yes "textures are flattened (one folder for vkBasalt)" "[[ -f '$FXD/Textures/lut
 yes "DenyEffectFiles removed" "[[ ! -e '$FXD/Shaders/Sub/Template.fx' ]]"
 eq "marked installed" "$("$CD" fx packages | jq '.[0].installed')" true
 eq "search on SweetFX DB" "$("$CD" fx search Test Game)" '[{"title":"Test Game","id":"7"}]'
+RVS="$("$CD" fx reviews 7)"
+eq "preset reviews: a ReShade preset is analysed" "$(jq -c '."501" | [.verdict, .effects]' <<<"$RVS")" '["light",4]'
+eq "…one that can't be read (old format) is marked so" "$(jq -r '."499".verdict' <<<"$RVS")" old
 eq "presets of a game, newest first, entities decoded, downloads and type" "$("$CD" fx presets 7 | jq -c '[.[] | [.id, .name, .downloads, .shader]]')" '[["502","Popular",300,"ReShade"],["501","Nice & sharp",40,"ReShade"],["499","Old one",900,"SweetFX"]]'
 "$CD" fx set steam:4002 builtin:nope >/dev/null 2>&1; eq "unknown look refused" "$?" 2
 "$CD" fx set steam:4002 sfx:501 >/dev/null 2>&1
@@ -1612,6 +1615,34 @@ eq "HEALTH: warns with the install command" "$(CONTROL_DECK_GAMEMODE=0 "$CD" hea
 rm -f "$T/pkexec.log"; CONTROL_DECK_GAMEMODE=0 "$CD" gaudit fix all >/dev/null 2>&1
 has "FIX ALL installs it through pkexec pacman" "$(cat "$T/pkexec.log" 2>/dev/null)" "gamemode lib32-gamemode"
 echo "[]" > "$T/fx-extra.json"
+section "Preset review: what makes a preset look worse"
+printf 'Techniques=Unsharp@Unsharp.fx,lilium__sdr_trc_fix@lilium__sdr_trc_fix.fx,ContrastAdaptiveSharpen@CAS.fx,Clarity@Clarity.fx,Clarity2@Clarity2.fx,Technicolor@Technicolor.fx,LevelsPlus@LevelsPlus.fx,Colors@pColors.fx,ColorMatrix@ColorMatrix.fx,FilmGrain@FilmGrain.fx\nTechniqueSorting=Unsharp@Unsharp.fx,CAS@CAS.fx\n\n[CAS.fx]\nContrast=0.000000\nSharpening=1.000000\n\n[Clarity.fx]\nClarityStrength=0.4\n' > "$T/heavy.ini"
+RV="$(fn fx_review "$T/heavy.ini")"
+eq "stacked sharpeners flagged, CAS kept" "$(jq -c '[.flags[] | select(.t | test("SHARPENERS")) | .off]' <<<"$RV")" '[["Unsharp.fx"]]'
+eq "gamma tools, strong colour, film fx, CAS at 100 %" "$(jq -c '[.flags[].t]' <<<"$RV")" '["2 SHARPENERS","OVER-SHARP","SHARP 100 %","GAMMA","STRONG COLOUR","FILM FX","10 EFFECTS"]'
+eq "LIGHTER switches off the culprits only" "$(jq -c .suggestOff <<<"$RV")" '["FilmGrain.fx","Unsharp.fx","lilium__sdr_trc_fix.fx"]'
+eq "verdict" "$(jq -r .verdict <<<"$RV")" strong
+printf 'Techniques=ContrastAdaptiveSharpen@CAS.fx,Clarity@Clarity.fx,Vibrance@Vibrance.fx\n\n[CAS.fx]\nSharpening=0.5\n' > "$T/light.ini"
+eq "CAS + Clarity + one colour effect: light, nothing to switch off" "$(fn fx_review "$T/light.ini" | jq -c '[.verdict, .suggestOff]')" '["light",[]]'
+# switching effects of a game's preset
+FD="$HOME/.local/share/control-deck/reshade/Shaders/T"; mkdir -p "$FD"
+for f in Unsharp lilium__sdr_trc_fix CAS Clarity Clarity2 Technicolor LevelsPlus pColors ColorMatrix FilmGrain; do echo "technique $f {}" > "$FD/$f.fx"; done
+fn profile_write steam:6200 '{"fx":true,"fxMode":"reshade"}'
+GD="$HOME/.local/share/control-deck/gaming/fx/steam_6200"; mkdir -p "$GD"; cp "$T/heavy.ini" "$GD/preset.ini"; tr -d '\r' < "$T/heavy.ini" > "$GD/ReShadePreset.ini"
+echo '{"source":"sfx","id":"777","url":"https://sfx.example/777/","name":"Heavy one","mode":"reshade","applied":10,"effects":[],"skipped":[]}' > "$GD/report.json"
+echo '{"key":"steam:6200","dir":"'"$T"'/g6200","api":"dxgi"}' > "$GD/reshade.json"; mkdir -p "$T/g6200"
+"$CD" fx toggle steam:6200 FilmGrain.fx off >/dev/null 2>&1
+eq "toggle off: gone from the applied preset" "$(grep -c 'FilmGrain' "$GD/ReShadePreset.ini")" 0
+yes "…the original kept" "grep -q FilmGrain '$GD/preset.orig.ini'"
+eq "…report keeps the SweetFX source and lists what's off" "$(jq -c '[.source, .id, .name, .disabled]' "$GD/report.json")" '["sfx","777","Heavy one",["FilmGrain.fx"]]'
+"$CD" fx lighter steam:6200 >/dev/null 2>&1
+eq "LIGHTER: the flagged ones off too" "$(jq -c .disabled "$GD/report.json")" '["FilmGrain.fx","Unsharp.fx","lilium__sdr_trc_fix.fx"]'
+"$CD" fx toggle steam:6200 Unsharp.fx on >/dev/null 2>&1
+eq "toggle on: back in the applied preset" "$(grep -m1 '^Techniques=' "$GD/ReShadePreset.ini" | grep -c Unsharp)" 1
+"$CD" fx set steam:6200 builtin:sharpen >/dev/null 2>&1
+yes "another look clears the switches" "[[ ! -e '$GD/preset.orig.ini' && ! -e '$GD/disabled.json' ]]"
+"$CD" fx toggle steam:6200 'x/../y.fx' off >/dev/null 2>&1; eq "bad file name refused" "$?" 2
+rm -rf "$GD" "$FD"
 section "ReShade screenshot key"
 eq "PrtSc by default" "$("$CD" fx status | jq -r .shotKey)" PrtSc
 "$CD" fx shotkey F10 >/dev/null; eq "changed and kept" "$("$CD" fx status | jq -c '[.shotKey, .key, .effectsKey]')" "[\"F10\",$("$CD" fx status | jq -c .key),$("$CD" fx status | jq -c .effectsKey)]"

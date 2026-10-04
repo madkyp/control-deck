@@ -439,9 +439,13 @@ ShellRoot {
             fxSearchProc.command = [scriptPath, "fx", "search", q]; fxSearchProc.running = true;
         }
         function fxLoadPresets(id) {
-            fxGameId = id; fxPresets = []; fxMsg = "Loading presets…";
+            fxGameId = id; fxPresets = []; fxReviews = {}; fxMsg = "Loading presets…";
             fxPresetsProc.command = [scriptPath, "fx", "presets", id]; fxPresetsProc.running = true;
         }
+        // what each listed preset does (fx reviews: the most downloaded ones, cached)
+        property var fxReviews: ({})
+        function verdictTone(v) { return v === "light" ? "ok" : (v === "moderate" || v === "empty" || v === "old" ? "warn" : "bad"); }
+        function verdictLabel(v) { return v === "light" ? win.t("LIGHT") : v === "moderate" ? win.t("MODERATE") : v === "empty" ? win.t("EMPTY") : v === "old" ? win.t("OLD FORMAT") : win.t("STRONG"); }
         function fxApply(k, label, cmd) {
             if (fxAnticheat && fxConfirm !== k) { fxConfirm = k; return; }
             fxConfirm = "";
@@ -1216,9 +1220,17 @@ ShellRoot {
                 onStreamFinished: {
                     try { win.fxGames = JSON.parse(text); } catch (e) { win.fxGames = []; }
                     if (win.fxGames.length === 0) win.fxMsg = "No game with that name on SweetFX Settings DB: try another name, or use a quick look.";
-                    else win.fxLoadPresets(win.fxGames[0].id);
+                    else {
+                        // the SweetFX game the active preset came from, when it's among the results
+                        var g = win.fxGames.filter(function (x) { return x.id === win.fxCur.sfxGame; })[0];
+                        win.fxLoadPresets((g || win.fxGames[0]).id);
+                    }
                 }
             }
+        }
+        Process {
+            id: fxReviewsProc
+            stdout: StdioCollector { onStreamFinished: { try { win.fxReviews = JSON.parse(text); } catch (e) { win.fxReviews = {}; } } }
         }
         Process {
             id: fxPresetsProc
@@ -1227,6 +1239,7 @@ ShellRoot {
                     try { win.fxPresets = JSON.parse(text); } catch (e) { win.fxPresets = []; }
                     win.fxMsg = win.fxPresets.length === 0 ? "This game has no presets yet." : win.fxPresets.length + " presets — newest first";
                     Qt.callLater(win.fxToTop);
+                    if (win.fxPresets.length) { fxReviewsProc.command = [win.scriptPath, "fx", "reviews", win.fxGameId]; fxReviewsProc.running = true; }
                 }
             }
         }
@@ -3882,23 +3895,64 @@ ShellRoot {
                                                    (win.fxCur.bundled || 0) > 0 ? win.fxCur.bundled + win.t(" shader file(s) from the archive") : "",
                                                    packs.length ? win.t("shader packs: ") + packs.join(", ") : ""].filter(function (x) { return x; }).join("  ·  ")
                                         }
+                                        // what the preset does (review): verdict, warnings, and a lighter version in one click
+                                        RowLayout {
+                                            Layout.fillWidth: true; spacing: 4
+                                            visible: !!win.fxCur.review
+                                            property var rv: win.fxCur.review || ({})
+                                            property var pending: (rv.suggestOff || []).filter(function (f) { return (win.fxCur.disabled || []).indexOf(f) < 0; })
+                                            Repeater {
+                                                model: { var r = parent.rv; return r.verdict ? [{ t: win.verdictLabel(r.verdict), tone: win.verdictTone(r.verdict), why: win.t("How much this preset changes the game's look") }].concat(r.flags || []) : []; }
+                                                delegate: Rectangle {
+                                                    required property var modelData
+                                                    implicitWidth: crTxt.implicitWidth + 10; implicitHeight: 16; radius: 3
+                                                    color: "transparent"; border.width: 1; border.color: win.tagTone(modelData.tone)
+                                                    Text { id: crTxt; anchors.centerIn: parent; text: win.t(modelData.t); color: win.tagTone(modelData.tone); font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                                    MouseArea { id: crMa; anchors.fill: parent; hoverEnabled: true }
+                                                    Tip { visible: crMa.containsMouse && !!modelData.why; text: win.t(modelData.why) }
+                                                }
+                                            }
+                                            Item { Layout.fillWidth: true }
+                                            Chip {
+                                                visible: parent.pending.length > 0
+                                                label: win.t("LIGHTER"); tint: pal.ok; on: !win.gameBusy
+                                                tip: win.t("Switch off what usually makes it look worse: ") + parent.pending.map(function (f) { return f.replace(/\.fx$/i, ""); }).join(", ")
+                                                     + win.t(". You can switch any of them back on below.")
+                                                onClicked: win.runGame(["fx", "lighter", win.selGame], win.t("APPLYING…"))
+                                            }
+                                        }
                                         Flow {
                                             Layout.fillWidth: true; spacing: 4
+                                            property bool switchable: win.fxCur.source === "file" || win.fxCur.source === "sfx"
                                             Repeater {
-                                                model: (win.fxCur.effects || []).map(function (e) { return { e: e, ok: true }; })
-                                                       .concat((win.fxCur.skipped || []).map(function (s) { return { e: s.file || s.effect, ok: false, why: s.why }; }))
+                                                model: (win.fxCur.effects || []).map(function (e) { return { e: e, st: "on" }; })
+                                                       .concat((win.fxCur.disabled || []).map(function (e) { return { e: e, st: "off" }; }))
+                                                       .concat((win.fxCur.skipped || []).map(function (s) { return { e: s.file || s.effect, st: "missing", why: s.why }; }))
                                                 delegate: Rectangle {
                                                     required property var modelData
                                                     implicitWidth: effTxt.implicitWidth + 12; implicitHeight: 18; radius: 4
-                                                    color: "transparent"; border.width: 1; border.color: modelData.ok ? pal.border : pal.bad
+                                                    color: "transparent"; border.width: 1
+                                                    border.color: modelData.st === "missing" ? pal.bad : (effMa.containsMouse && parent.switchable ? pal.accent : pal.border)
+                                                    opacity: modelData.st === "off" ? 0.55 : 1
                                                     Text {
                                                         id: effTxt; anchors.centerIn: parent
-                                                        property string pk: modelData.ok ? ((win.fxCur.packs || {})[modelData.e] || "") : ""
-                                                        text: (modelData.ok ? "✓ " : "✗ ") + modelData.e.replace(/\.fx$/i, "") + (pk ? "  · " + pk : "")
-                                                        color: modelData.ok ? pal.text : pal.bad; font.family: win.mono; font.pixelSize: 9
+                                                        property string pk: modelData.st === "on" ? ((win.fxCur.packs || {})[modelData.e] || "") : ""
+                                                        text: (modelData.st === "on" ? "✓ " : (modelData.st === "off" ? "○ " : "✗ ")) + modelData.e.replace(/\.fx$/i, "") + (pk ? "  · " + pk : "")
+                                                        color: modelData.st === "missing" ? pal.bad : pal.text; font.family: win.mono; font.pixelSize: 9
+                                                        font.strikeout: modelData.st === "off"
                                                     }
-                                                    MouseArea { id: effMa; anchors.fill: parent; hoverEnabled: true }
-                                                    Tip { visible: effMa.containsMouse && !modelData.ok; text: win.t(modelData.why || "") }
+                                                    MouseArea {
+                                                        id: effMa; anchors.fill: parent; hoverEnabled: true
+                                                        cursorShape: parent.parent.switchable && modelData.st !== "missing" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                                        onClicked: if (parent.parent.switchable && modelData.st !== "missing" && !win.gameBusy)
+                                                                       win.runGame(["fx", "toggle", win.selGame, modelData.e, modelData.st === "on" ? "off" : "on"], win.t("APPLYING…"))
+                                                    }
+                                                    Tip {
+                                                        visible: effMa.containsMouse
+                                                        text: modelData.st === "missing" ? win.t(modelData.why || "")
+                                                              : !parent.parent.switchable ? ""
+                                                              : (modelData.st === "on" ? win.t("Click to switch it off") : win.t("Switched off — click to switch it back on")) + win.t(" (applies the next time the game starts)")
+                                                    }
                                                 }
                                             }
                                         }
@@ -4432,15 +4486,53 @@ ShellRoot {
                                         ScrollBar.vertical: ScrollBar {}
                                         delegate: Rectangle {
                                             required property var modelData
+                                            id: presetRow
                                             property string k: "sfx:" + modelData.id
-                                            width: fxList.width - 10; height: 34; radius: 6
+                                            property var rv: win.fxReviews[modelData.id] || null
+                                            width: fxList.width - 10; height: 50; radius: 6
                                             color: pal.panel; border.width: 1
                                             border.color: win.fxActive && win.fxCur.id === modelData.id ? pal.ok : pal.border
                                             RowLayout {
                                                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 6; spacing: 6
-                                                Text {
-                                                    Layout.fillWidth: true; elide: Text.ElideRight
-                                                    text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true; spacing: 3
+                                                    Text {
+                                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                                        text: modelData.name; color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                                    }
+                                                    // downloads · year · effects, then what the review found (hover a tag)
+                                                    RowLayout {
+                                                        spacing: 4
+                                                        Text {
+                                                            text: (modelData.downloads || 0) + win.t(" downloads") + "  ·  " + String(modelData.added || "").replace(/^.*\s(\d{4})$/, "$1")
+                                                                  + (presetRow.rv ? "  ·  " + presetRow.rv.effects + win.t(" effects") : "")
+                                                            color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                                        }
+                                                        Repeater {
+                                                            model: {
+                                                                var r = presetRow.rv;
+                                                                if (r) return [{ t: win.verdictLabel(r.verdict), tone: win.verdictTone(r.verdict),
+                                                                                 why: r.verdict === "empty" ? win.t("No effects in it: it changes nothing")
+                                                                                    : r.verdict === "old" ? win.t("An old preset file (SweetFX or ReShade 1–2): today's ReShade can't load it") : "" }].concat(r.flags);
+                                                                // made for the old SweetFX injector: not a ReShade preset
+                                                                if (modelData.shader && modelData.shader !== "ReShade")
+                                                                    return [{ t: win.t("OLD SWEETFX"), tone: "warn", why: win.t("Made for the old SweetFX injector, not ReShade: it can't be applied") }];
+                                                                return [];
+                                                            }
+                                                            delegate: Rectangle {
+                                                                required property var modelData
+                                                                implicitWidth: rvTxt.implicitWidth + 10; implicitHeight: 14; radius: 3
+                                                                color: "transparent"; border.width: 1; border.color: win.tagTone(modelData.tone)
+                                                                Text { id: rvTxt; anchors.centerIn: parent; text: win.t(modelData.t); color: win.tagTone(modelData.tone); font.family: win.mono; font.pixelSize: 8; font.bold: true }
+                                                                MouseArea { id: rvMa; anchors.fill: parent; hoverEnabled: true }
+                                                                Tip { visible: rvMa.containsMouse && modelData.why !== ""; text: win.t(modelData.why) }
+                                                            }
+                                                        }
+                                                        Text {
+                                                            visible: !presetRow.rv && fxReviewsProc.running
+                                                            text: win.t("checking what it does…"); color: pal.dim; font.family: win.mono; font.pixelSize: 9
+                                                        }
+                                                    }
                                                 }
                                                 Chip { label: "↗"; tip: win.t("Open the preset's page"); onClicked: Qt.openUrlExternally("https://sfx.thelazy.net/games/preset/" + modelData.id + "/") }
                                                 Chip {
@@ -4448,7 +4540,7 @@ ShellRoot {
                                                     tint: pal.ok; on: !win.gameBusy && win.fxReady
                                                     tip: !win.fxReady ? win.t("Run INSTALL above first")
                                                          : (win.fxReshade ? win.t("Download it and fetch the shaders it needs; ReShade runs it as it is") : win.t("Download, fetch the shaders it needs and convert it for vkBasalt"))
-                                                    onClicked: win.fxApply(k, win.t("APPLYING PRESET…"))
+                                                    onClicked: win.fxApply(k, win.t("APPLYING PRESET…"), ["fx", "set", win.selGame, k, win.fxGameId])
                                                 }
                                             }
                                         }

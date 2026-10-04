@@ -4754,6 +4754,8 @@ cmd_fx_status() {
                 packs="$(jq -c --arg e "$e" --arg p "$([[ "$fp" == */* ]] && echo "${fp%%/*}")" '. + {($e): $p}' <<<"$packs")"
             done < <(jq -r '.effects[]?' <<<"$cur")
             cur="$(jq -c --argjson p "$packs" --arg ini "${d/#$HOME/\~}/ReShadePreset.ini" '. + {packs:$p, presetFile:$ini}' <<<"$cur")"
+            # what the preset does (the whole downloaded/imported one, switched-off effects included)
+            local rv; rv="$(cmd_fx_review "$key" 2>/dev/null)" && cur="$(jq -c --argjson r "$rv" '. + {review:$r}' <<<"$cur")"
         fi
         route="$(fx_route "$key")"
         if [[ "$key" == steam:* || "$key" == umbral:* ]]; then
@@ -4919,6 +4921,8 @@ cmd_fx_set() {
     local key="$1" what="$2" d rep name mode
     valid_game_key "$key" && [[ "$key" != default ]] || { err "not a game key: $key"; return 2; }
     d="$(fx_key_dir "$key")"
+    # another look: the effects switched off in the previous one don't apply
+    [[ -n "${FX_TOGGLING:-}" ]] || rm -f "$d/preset.orig.ini" "$d/disabled.json"
     mode="$(profile_get "$key" | jq -r '.fxMode // "vkbasalt"')"
     case "$what" in
         off)
@@ -4980,8 +4984,16 @@ cmd_fx_set() {
             fi
             mv "$tmp" "$d/preset.ini"
             if [[ -n "$id" ]]; then
-                rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" \
-                       '. + {source:"sfx", name:$n, id:$id, url:$url}' <<<"$r")"
+                # the SweetFX game it's listed under, so FX opens that list again (names can repeat: a 2014 and a 2023 game)
+                local sg="${FX_SFX_GAME:-}"; [[ "$sg" =~ ^[0-9]+$ ]] || sg=""
+                [[ -z "$sg" && -s "$d/report.json" ]] && sg="$(jq -r --arg id "$id" 'if .id == $id then .sfxGame // "" else "" end' "$d/report.json" 2>/dev/null)"
+                # the file often has no name in it: the one it's listed with on SweetFX DB
+                if [[ -n "$sg" && ( -z "$name" || "$name" == "preset $id" ) ]]; then
+                    local ln; ln="$(cmd_fx_presets "$sg" 2>/dev/null | jq -r --arg id "$id" '.[] | select(.id == $id) | .name' | head -1)"
+                    [[ -n "$ln" ]] && name="$ln"
+                fi
+                rep="$(jq -c --arg n "${name:-preset $id}" --arg id "$id" --arg url "$SFX_URL/games/preset/$id/" --arg sg "$sg" \
+                       '. + {source:"sfx", name:$n, id:$id, url:$url} + (if $sg != "" then {sfxGame:$sg} else {} end)' <<<"$r")"
             else
                 # where it came from: set by IMPORT; kept when the same preset is applied again
                 local prev="{}"; [[ -s "$d/report.json" ]] && prev="$(jq -c 'if .source == "file" then {archive, bundled, importedAt} else {} end' "$d/report.json" 2>/dev/null || echo '{}')"
@@ -5407,6 +5419,63 @@ reshade_builtin() {   # name out.ini
     printf 'Techniques=%s\nTechniqueSorting=%s\n' "$t" "$t" > "$2"
 }
 
+# --- preset review: what a preset does, and what tends to make it look worse -----
+# An effect's kind, from its file name (order matters: the first match wins).
+FX_KIND_JQ='def kind: ascii_downcase as $f
+  | if   ($f | test("lilium|convertcolorspace|monitorgamma|autohdr|sdr_trc|inverse_tone|hdr_converter|hdr_black")) then "gamma"
+    elif ($f | test("^(smaa|fxaa|cmaa|nfaa|daa|dlaa|temporal_aa|pirate_fxaa|cfxaa|cdlaa)|martysmods_smaa")) then "aa"
+    elif ($f | test("mxao|ssao|ssdo|dof|nglighting|radiantgi|rtgi|_gi\\.|zn_gi|ssr|ssrt|fog|depth|gloomao|neogi|pirate_depth")) then "depth"
+    elif ($f | test("grain|chromatic|^ca\\.|flexibleca|vignette|noise|letterbox|lens|anamorph|scanline|crt|vhs|halftone|prism")) then "film"
+    elif ($f | test("bloom|glow|godrays|flare|halation|magichdr|fakehdr|hdrbloom")) then "bloom"
+    elif ($f | test("clarity|localcontrast|_lc\\.|quark_local")) then "detail"
+    elif ($f | test("sharp|^cas\\.|rcas|unsharp|deblur|finesharp|filmicanamorph")) then "sharpen"
+    elif ($f | test("colou?r|technicolor|levels|curves|vibrance|lut|tonemap|lightroom|grading|satur|matrix|tint|sepia|pd80_0[34]|lift|dpx|cross|emphasize|pcolors|hsl|hue|balance|contrast|exposure|gamma|dehaze|filmic")) then "color"
+    else "other" end;'
+
+# fx review <preset.ini> → {effects:[{technique,file,kind}], count:{kind:n}, flags:[{t,tone,why,off:[files]}], verdict, suggestOff:[files]}
+fx_review() {
+    local techs
+    techs="$(tr -d '\r' < "$1" | grep -m1 -E '^Techniques=' | cut -d= -f2-)"
+    jq -nc --arg techs "$techs" --arg ini "$(tr -d '\r' < "$1")" "$FX_KIND_JQ"'
+      ($ini | split("\n")) as $l
+      # a numeric setting of an effect: [<file>] … key=value
+      | def setting($file; $key): ([range(0; $l | length) as $i | select($l[$i] == "[" + $file + "]") | $i] | first) as $s
+            | if $s == null then null else
+              ([$l[$s + 1:][] ] | (to_entries | map(select(.value | startswith("["))) | first | .key // length) as $e
+               | .[0:$e] | map(select(startswith($key + "="))) | first // null
+               | if . == null then null else (split("=")[1] | split(",")[0] | tonumber? ) end) end;
+      [$techs | split(",")[] | select(contains("@")) | split("@") | {technique:.[0], file:.[1], kind:(.[1] | kind)}] as $e
+      | ($e | group_by(.kind) | map({key:.[0].kind, value:length}) | from_entries) as $c
+      | ([$e[] | select(.kind == "sharpen")]) as $sh
+      # the one to keep: CAS (contrast-adaptive, the cleanest) when there is one
+      | (([$sh[] | select(.file | test("^(CAS|RCAS)\\.fx$"; "i"))] | first) // $sh[0]) as $keep
+      | ($c.detail // 0) as $det
+      | (setting("CAS.fx"; "Sharpening") // 0) as $cas
+      | [ (if ($sh | length) >= 2 then {t:"\($sh | length) SHARPENERS", tone:"bad",
+              why:"\($sh | length) sharpening effects stacked (\($sh | map(.technique) | join(", "))): halos and grain. One is enough.",
+              off:[$sh[] | select(.file != $keep.file) | .file]} else empty end),
+          (if ($sh | length) + $det >= 3 then {t:"OVER-SHARP", tone:"warn",
+              why:"\($sh | length) sharpener(s) + \($det) local-contrast effect(s) (Clarity…): too much detail enhancement, the image gets harsh.", off:[]} else empty end),
+          (if ($sh | length) >= 1 and $cas >= 0.9 then {t:"SHARP 100 %", tone:"warn",
+              why:"CAS at full strength: set the game'"'"'s own sharpening to 0 so it isn'"'"'t sharpened twice.", off:[]} else empty end),
+          (if ($c.gamma // 0) > 0 then {t:"GAMMA", tone:"bad",
+              why:"Gamma / colour-space tools (\([$e[] | select(.kind == "gamma") | .technique] | join(", "))) are made for one monitor or HDR setup: on another they wash out or darken the picture.",
+              off:[$e[] | select(.kind == "gamma") | .file]} else empty end),
+          (if ($c.color // 0) >= 4 then {t:"STRONG COLOUR", tone:"warn",
+              why:"\($c.color) colour effects: a strong style of its own, not a fix — very different from the game'"'"'s look.", off:[]} else empty end),
+          (if ($c.film // 0) > 0 then {t:"FILM FX", tone:"info",
+              why:"Grain / chromatic aberration / vignette (\([$e[] | select(.kind == "film") | .technique] | join(", "))): a taste, many find them worse.",
+              off:[$e[] | select(.kind == "film") | .file]} else empty end),
+          (if ($c.depth // 0) > 0 then {t:"NEEDS DEPTH", tone:"info",
+              why:"\([$e[] | select(.kind == "depth") | .technique] | join(", ")) read the depth buffer: if you see halos or shading on the UI, turn them off.", off:[]} else empty end),
+          (if ($e | length) >= 10 then {t:"\($e | length) EFFECTS", tone:"info", why:"Many effects: more GPU cost and more ways to look off.", off:[]} else empty end) ] as $fl
+      | {effects:$e, count:$c, flags:$fl,
+         suggestOff:([$fl[].off[]] | unique),
+         verdict:(if ($e | length) == 0 then "empty"
+                  elif any($fl[]; .tone == "bad") or ($e | length) >= 10 then "strong"
+                  elif any($fl[]; .tone == "warn") or ($e | length) >= 6 then "moderate" else "light" end)}'
+}
+
 # --- library scan: best preset + known ReShade settings for every game ----------
 # Sources: SweetFX Settings DB (presets, with download counts) and the ReShade
 # compatibility list that reshade.me points to — PCGamingWiki's "ReShade" page
@@ -5649,6 +5718,78 @@ cmd_fx_link() {
     esac
 }
 
+# fx review <key> | sfx:<preset id> — what a preset does and what may make it look worse
+cmd_fx_review() {
+    local w="$1" f d
+    case "$w" in
+        sfx:*) [[ "${w#sfx:}" =~ ^[0-9]+$ ]] || { err "bad preset id"; return 2; }
+               f="$FX_CACHE/sfx-preset-${w#sfx:}.ini"
+               fx_cached "sfx-preset-${w#sfx:}.ini" 2592000 "$SFX_URL/games/preset/${w#sfx:}/download/" >/dev/null
+               [[ -s "$f" ]] && tr -d '\r' < "$f" | grep -qE '^Techniques=' || { err "couldn't read that preset"; return 4; } ;;
+        *)     valid_game_key "$w" || { err "use: fx review <key> | sfx:<id>"; return 2; }
+               d="$(fx_key_dir "$w")"; f="$d/preset.orig.ini"; [[ -s "$f" ]] || f="$d/preset.ini"
+               [[ -s "$f" ]] || { err "no imported/downloaded preset on this game"; return 3; } ;;
+    esac
+    fx_review "$f"
+}
+
+# fx reviews <sfx game id> — a short review of the game's most downloaded presets
+# (the list shows first; each preset file is downloaded once, cached 30 days)
+cmd_fx_reviews() {
+    local g="$1" id r out="{}"
+    [[ "$g" =~ ^[0-9]+$ ]] || { err "use: fx reviews <sfx game id>"; return 2; }
+    while IFS= read -r id; do
+        # no Techniques= line: SweetFX or ReShade 1/2 era, can't be applied
+        r="$(cmd_fx_review "sfx:$id" 2>/dev/null)" || { out="$(jq -c --arg i "$id" '. + {($i): {verdict:"old", effects:0, flags:[]}}' <<<"$out")"; continue; }
+        out="$(jq -c --arg i "$id" --argjson r "$r" '. + {($i): {verdict:$r.verdict, effects:($r.effects | length), flags:[$r.flags[] | {t, tone, why}]}}' <<<"$out")"
+    done < <(cmd_fx_presets "$g" 2>/dev/null | jq -r 'sort_by(-.downloads) | .[0:10][] | .id')
+    echo "$out"
+}
+
+# fx toggle <key> <effect file> on|off — switch one effect of the game's preset
+# (the downloaded/imported one is kept as preset.orig.ini; applies at the next launch)
+fx_reapply_without() {   # key disabled-json
+    local key="$1" dis="$2" d orig prev tmp rc
+    d="$(fx_key_dir "$key")"; orig="$d/preset.orig.ini"
+    [[ -s "$orig" ]] || cp -- "$d/preset.ini" "$orig"
+    prev="$(cat "$d/report.json")"
+    tmp="$(mktemp)"
+    tr -d '\r' < "$orig" | jq -Rr --argjson dis "$dis" '
+        if test("^(Techniques|TechniqueSorting)=") then
+            (split("=")[0]) as $k | ((. | sub("^[^=]*="; "")) | split(",") | map(select((split("@")[1] // "") as $f | ($dis | index($f)) | not)) | join(",")) as $v
+            | $k + "=" + $v
+        else . end' > "$tmp"
+    FX_TOGGLING=1 FX_IMPORT_NAME="$(jq -r .name <<<"$prev")" cmd_fx_set "$key" "file:$tmp" >/dev/null; rc=$?
+    rm -f "$tmp"
+    (( rc == 0 )) || return $rc
+    printf '%s\n' "$dis" > "$d/disabled.json"
+    # keep where the look came from (an SFX preset stays one), and what's off
+    jq -c --argjson p "$prev" --argjson dis "$dis" \
+        '. + ($p | {source, name, id, url, sfxGame, archive, bundled, importedAt} | with_entries(select(.value != null))) + {disabled:$dis}' \
+        "$d/report.json" > "$d/report.json.new" && mv "$d/report.json.new" "$d/report.json"
+}
+cmd_fx_toggle() {
+    local key="$1" file="$2" st="$3" d dis
+    valid_game_key "$key" && [[ "$file" =~ ^[^/]+\.fx$ && "$st" =~ ^(on|off)$ ]] || { err "use: fx toggle <key> <file.fx> on|off"; return 2; }
+    d="$(fx_key_dir "$key")"
+    [[ -s "$d/preset.ini" || -s "$d/preset.orig.ini" ]] || { err "only a downloaded or imported preset has effects to switch"; return 3; }
+    dis="$(jq -c '.' "$d/disabled.json" 2>/dev/null || echo '[]')"
+    dis="$(jq -c --arg f "$file" --arg s "$st" 'if $s == "off" then (. + [$f] | unique) else map(select(. != $f)) end' <<<"$dis")"
+    fx_reapply_without "$key" "$dis" || return $?
+    log "✔ ${file%.fx} $([[ "$st" == off ]] && echo off || echo on) in $(game_label "$key") — applies the next time the game starts"
+}
+# fx lighter <key> — switch off what the review flags (extra sharpeners, gamma tools, film effects)
+cmd_fx_lighter() {
+    local key="$1" d dis r
+    valid_game_key "$key" || { err "use: fx lighter <key>"; return 2; }
+    d="$(fx_key_dir "$key")"
+    r="$(cmd_fx_review "$key")" || return $?
+    dis="$(jq -c --argjson s "$(jq -c .suggestOff <<<"$r")" '. + $s | unique' "$d/disabled.json" 2>/dev/null || jq -c .suggestOff <<<"$r")"
+    [[ "$dis" != "[]" ]] || { log "Nothing flagged to switch off in this preset."; return 0; }
+    fx_reapply_without "$key" "$dis" || return $?
+    log "✔ Lighter: $(jq -r 'map(sub("\\.fx$"; "")) | join(", ")' <<<"$dis") off in $(game_label "$key") — applies the next time the game starts"
+}
+
 cmd_fx() {
     local sub="$1"; shift 2>/dev/null
     case "$sub" in
@@ -5658,7 +5799,7 @@ cmd_fx() {
         package)  [[ -n "${1:-}" ]] || { err "use: fx package <idx>"; return 2; }; fx_install_pkg "$1" ;;
         search)   cmd_fx_search "$*" ;;
         presets)  cmd_fx_presets "${1:-}" ;;
-        set)      cmd_fx_set "${1:-}" "${2:-}" ;;
+        set)      FX_SFX_GAME="${3:-}" cmd_fx_set "${1:-}" "${2:-}" ;;
         importlist) cmd_fx_importlist "${1:-}" ;;
         link)     cmd_fx_link "$@" ;;
         import)   cmd_fx_import "${1:-}" "${2:-}" "${3:-}" ;;
@@ -5673,6 +5814,10 @@ cmd_fx() {
                      done ;;
         effectskey) cmd_fx_effectskey "${1:-}" ;;
         shotkey)  cmd_fx_shotkey "${1:-}" ;;
+        review)   cmd_fx_review "${1:-}" ;;
+        reviews)  cmd_fx_reviews "${1:-}" ;;
+        toggle)   cmd_fx_toggle "${1:-}" "${2:-}" "${3:-}" ;;
+        lighter)  cmd_fx_lighter "${1:-}" ;;
         scan)     if [[ "${1:-}" == --cached ]]; then
                       if [[ -s "$FX_CACHE/scan.json" ]]; then cat "$FX_CACHE/scan.json"; else echo '[]'; fi
                   else cmd_fx_scan; fi ;;
