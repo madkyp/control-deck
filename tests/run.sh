@@ -1580,6 +1580,10 @@ mkgpu card1 17095983104 55 61000 250000000     # RX 9070 XT
 eq "picks the card with the most VRAM" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_dev)" "$G2/card1/device"
 eq "…its own temperature sensor" "$(CONTROL_DECK_SYSFS="$T/sys2" fn amd_gpu_temp)" 61
 eq "session samples read it: GPU °C, load, W" "$(CONTROL_DECK_SYSFS="$T/sys2" CONTROL_DECK_GPU_VENDOR=amd fn session_sample | awk '{print $3, $4, $5}')" "61 55 250"
+section "TEST look (black and white)"
+mkdir -p "$HOME/.local/share/control-deck/reshade/Shaders/SweetFX"; echo 'technique Monochrome {}' > "$HOME/.local/share/control-deck/reshade/Shaders/SweetFX/Monochrome.fx"
+eq "vkBasalt: SweetFX Monochrome as a ReShade shader" "$(fn fx_builtin test /dev/stdout | grep -E '^(effects|monochrome) =' | paste -sd '|')" "effects = monochrome|monochrome = \"$HOME/.local/share/control-deck/reshade/Shaders/SweetFX/Monochrome.fx\""
+eq "ReShade: the Monochrome technique" "$(fn reshade_builtin test /dev/stdout | head -1)" "Techniques=Monochrome@Monochrome.fx"
 section "ReShade screenshot key"
 eq "PrtSc by default" "$("$CD" fx status | jq -r .shotKey)" PrtSc
 "$CD" fx shotkey F10 >/dev/null; eq "changed and kept" "$("$CD" fx status | jq -c '[.shotKey, .key, .effectsKey]')" "[\"F10\",$("$CD" fx status | jq -c .key),$("$CD" fx status | jq -c .effectsKey)]"

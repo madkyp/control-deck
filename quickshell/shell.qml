@@ -4282,7 +4282,8 @@ ShellRoot {
                                             model: [["sharpen", win.t("SHARPEN"), win.t("AMD FidelityFX CAS: crisper image, almost free")],
                                                     ["sharpen-aa", win.t("SHARPEN + AA"), win.t("SMAA anti-aliasing, then CAS sharpening")],
                                                     ["fxaa", "FXAA", win.t("Light anti-aliasing, softer edges")],
-                                                    ["clarity", win.t("CLARITY"), win.t("Denoised luma sharpening: detail without boosting grain")]]
+                                                    ["clarity", win.t("CLARITY"), win.t("Denoised luma sharpening: detail without boosting grain")],
+                                                    ["test", win.t("TEST (B/W)"), win.t("Black and white, impossible to miss: to check the effects are drawn in this game. Then pick a real look.")]]
                                             delegate: Chip {
                                                 required property var modelData
                                                 property string k: "builtin:" + modelData[0]

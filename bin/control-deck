@@ -4871,6 +4871,10 @@ fx_builtin() {   # name out.conf
         sharpen-aa) body=$'effects = smaa:cas\ncasSharpness = 0.4\nsmaaEdgeDetection = luma\nsmaaThreshold = 0.05\nsmaaMaxSearchSteps = 32\nsmaaMaxSearchStepsDiag = 16\nsmaaCornerRounding = 25' ;;
         fxaa)       body=$'effects = fxaa\nfxaaQualitySubpix = 0.75\nfxaaQualityEdgeThreshold = 0.125\nfxaaQualityEdgeThresholdMin = 0.0312' ;;
         clarity)    body=$'effects = dls\ndlsSharpness = 0.5\ndlsDenoise = 0.17' ;;
+        test)       # black and white (SweetFX Monochrome, a ReShade shader): can't be missed
+                    local mono; mono="$(fx_find Monochrome.fx)"
+                    [[ -n "$mono" ]] || return 3
+                    body="effects = monochrome"$'\n'"monochrome = \"$mono\""$'\n'"reshadeTexturePath = \"$FX_DIR/Textures\""$'\n'"reshadeIncludePath = \"$FX_DIR/Shaders\"" ;;
         *) return 2 ;;
     esac
     printf '# written by Control Deck (built-in look: %s)\n%s\ntoggleKey = %s\nenableOnLaunch = True\n' "$1" "$body" "$(fx_key)" > "$2"
@@ -4897,7 +4901,12 @@ cmd_fx_set() {
                 rep="$(reshade_need_files "$d/ReShadePreset.ini.new")"; mv "$d/ReShadePreset.ini.new" "$d/ReShadePreset.ini"
                 rep="$(jq -c --arg n "$name" '. + {source:"builtin", name:$n}' <<<"$rep")"
             else
-                fx_builtin "$name" "$d/vkBasalt.conf.new" || { rm -f "$d/vkBasalt.conf.new"; err "unknown built-in look: $name"; return 2; }
+                local brc=0; fx_builtin "$name" "$d/vkBasalt.conf.new" || brc=$?
+                if (( brc )); then
+                    rm -f "$d/vkBasalt.conf.new"
+                    if (( brc == 3 )); then err "this look needs the shaders: FX → INSTALL"; return 3; fi
+                    err "unknown built-in look: $name"; return 2
+                fi
                 mv "$d/vkBasalt.conf.new" "$d/vkBasalt.conf"
                 rep="$(jq -nc --arg n "$name" '{source:"builtin", name:$n, applied:1, effects:[$n], skipped:[], partial:[]}')"
             fi
@@ -5359,6 +5368,7 @@ reshade_builtin() {   # name out.ini
         sharpen-aa) t="SMAA@SMAA.fx,ContrastAdaptiveSharpen@CAS.fx" ;;
         fxaa)       t="FXAA@FXAA.fx" ;;
         clarity)    t="LumaSharpen@LumaSharpen.fx,Vibrance@Vibrance.fx" ;;
+        test)       t="Monochrome@Monochrome.fx" ;;     # black and white: the effects are obviously on
         *) return 2 ;;
     esac
     printf 'Techniques=%s\nTechniqueSorting=%s\n' "$t" "$t" > "$2"
