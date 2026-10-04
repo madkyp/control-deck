@@ -50,6 +50,8 @@ var ES = {
     " important), none younger than ": " importantes), ninguno más reciente que ",
     " in orphans (no game uses them)": " en huérfanos (ningún juego los usa)",
     " is ": " es ",
+    " is missing and isn't in any known pack → import the preset again": " falta y no está en ningún pack conocido → importa de nuevo el preset",
+    " is missing here → install ": " falta aquí → instalar ",
     " is out (you have ": " ya está disponible (tienes la ",
     " min played": " min jugados",
     " numbered snapshots (": " snapshots numerados (",
@@ -266,6 +268,7 @@ var ES = {
     "From SweetFX Settings DB": "De SweetFX Settings DB",
     "From chaotic-aur (asks for your password) plus the standard shaders.": "Desde chaotic-aur (pide tu contraseña) y los shaders estándar.",
     "GAME": "JUEGO",
+    "GAMEMODE is on but GameMode isn't installed → install it": "GAMEMODE está activado pero GameMode no está instalado → instálalo",
     "GAMING ONLY": "SOLO GAMING",
     "GAMING TOOLS": "HERRAMIENTAS",
     "GET DATA (70 MB)": "DESCARGAR DATOS (70 MB)",
@@ -277,6 +280,7 @@ var ES = {
     "GUIDE ▾": "GUÍA ▾",
     "GameMode active": "GameMode activo",
     "GameMode has it on performance": "GameMode lo tiene en rendimiento",
+    "GameMode isn't installed on this PC: this does nothing. HEALTH or CHECK FOR THIS PC installs it.": "GameMode no está instalado en este PC: esto no hace nada. SALUD o CHECK FOR THIS PC lo instalan.",
     "GameMode switches it to performance while you play": "GameMode lo pone en rendimiento mientras juegas",
     "Games launched through the deck (Steam) or Umbral 0.10+.": "Juegos lanzados con la app (Steam) o con Umbral 0.10+.",
     "Get the data once to see what players with hardware like yours use.": "Descarga los datos una vez para ver qué usan los jugadores con un hardware como el tuyo.",
@@ -659,6 +663,7 @@ var ES = {
     "not in the gamemode group: it can't switch the governor": "no estás en el grupo gamemode: no puede cambiar el governor",
     "not in this kernel (needs 6.14 or newer); Proton falls back to esync/fsync": "no está en este kernel (necesita 6.14 o superior); Proton usa esync/fsync en su lugar",
     "not installed (optional)": "no instalado (opcional)",
+    "not installed (optional: CPU governor and priorities while playing)": "no instalado (opcional: governor de la CPU y prioridades mientras juegas)",
     "not installed": "no instalado",
     "nothing heavy to render right now": "ahora no tiene nada pesado que renderizar",
     "nothing to clean": "nada que limpiar",
@@ -699,6 +704,7 @@ var ES = {
     "search repos · AUR · flatpak…  or  github.com/user/repo": "busca en repos · AUR · flatpak…  o  github.com/usuario/repo",
     "shader cache clean": "limpiar caché de shaders",
     "shader install": "instalar shaders",
+    "shader not found in any known package": "shader no encontrado en ningún pack conocido",
     "shader packs: ": "packs de shaders: ",
     "snap-pac is installed: every pacman operation already gets a pre/post snapshot.": "snap-pac está instalado: cada operación de pacman ya tiene su snapshot pre/post.",
     "snap-pac is not installed: the deck takes a snapshot itself before pacman changes.": "snap-pac no está instalado: la app hace ella misma un snapshot antes de cambios con pacman.",
@@ -751,6 +757,7 @@ var ES = {
 };
 // sentences with values inside: [regex, replacement]
 var PATTERNS = [
+    [new RegExp("^not installed: (\\d+) game profile\\(s\\) have GAMEMODE on and it does nothing$"), "no está instalado: $1 perfil(es) de juego tienen GAMEMODE activado y no hace nada"],
     [new RegExp("^Online game with anti-cheat \\((.*)\\): neither is safe there\\.$"), "Juego online con anti-cheat ($1): ninguno es seguro ahí."],
     [new RegExp("^(DirectX 10–12|DirectX 9|OpenGL|A Windows game) under Proton: ReShade itself runs presets exactly as made, depth effects included, with its in-game menu to tweak them\\.$"), "$1 con Proton: ReShade de verdad aplica los presets tal cual, con efectos de profundidad, y tiene su menú en el juego para ajustarlos."],
     [new RegExp("^Your current preset has (\\d+) depth effect\\(s\\) vkBasalt has to skip\\.$"), "Tu preset actual tiene $1 efecto(s) de profundidad que vkBasalt tendría que omitir."],

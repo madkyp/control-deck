@@ -3083,8 +3083,11 @@ ShellRoot {
                                 color: pal.text; font.family: win.mono; font.pixelSize: 10
                                 text: "· " + win.gameName(String(modelData.key).replace(/^[a-z]+:/, "")) + ": "
                                       + (modelData.kind === "env" ? modelData.var + win.t(" is ") + (modelData.vendor === "mesa" ? "Mesa" : modelData.vendor.toUpperCase()) + win.t("-only → remove")
-                                         : (modelData.kind === "reshade" ? win.t("ReShade isn't installed in its folder on this PC → set it up")
-                                            : win.t("vkBasalt isn't installed here → FX → INSTALL")))
+                                         : modelData.kind === "reshade" ? win.t("ReShade isn't installed in its folder on this PC → set it up")
+                                         : modelData.kind === "shader" ? modelData.file + (modelData.pack ? win.t(" is missing here → install ") + modelData.pack.name
+                                                                                                          : win.t(" is missing and isn't in any known pack → import the preset again"))
+                                         : modelData.kind === "gamemode" ? win.t("GAMEMODE is on but GameMode isn't installed → install it")
+                                         : win.t("vkBasalt isn't installed here → FX → INSTALL"))
                             }
                         }
                     }
@@ -3300,7 +3303,14 @@ ShellRoot {
                             Text { text: win.t("LAUNCH"); Layout.preferredWidth: 52; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 6
-                                Chip { label: "GAMEMODE"; tint: pal.ok; active: win.gp.gamemode === true; onClicked: win.gpSet("gamemode", !win.gp.gamemode) }
+                                Chip {
+                                    // on but GameMode isn't installed on this PC: it would do nothing
+                                    property bool missing: (win.gstat.gamemode || {}).installed === false
+                                    label: "GAMEMODE" + (missing && win.gp.gamemode === true ? " ⚠" : "")
+                                    tint: missing ? pal.amber : pal.ok; active: win.gp.gamemode === true
+                                    tip: missing ? win.t("GameMode isn't installed on this PC: this does nothing. HEALTH or CHECK FOR THIS PC installs it.") : ""
+                                    onClicked: win.gpSet("gamemode", !win.gp.gamemode)
+                                }
                                 Chip { label: win.t("MANGOHUD"); tint: pal.ok; active: win.gp.mangohud === true; onClicked: win.gpSet("mangohud", !win.gp.mangohud) }
                                 Chip { label: "FX"; tint: pal.ok; active: win.gp.fx === true; onClicked: win.openFx()
                                        tip: win.t("Visual shaders (vkBasalt): sharpening, anti-aliasing, ReShade presets") }
@@ -4627,7 +4637,7 @@ ShellRoot {
                                 Text {
                                     visible: index === 0 || healthList.model[index - 1].group !== modelData.group
                                     Layout.topMargin: index === 0 ? 2 : 8
-                                    text: ({ system: win.t("SYSTEM"), driver: win.t("GPU DRIVER"), vulkan: "VULKAN", libs: win.t("32-BIT LIBRARIES") })[modelData.group] || modelData.group.toUpperCase()
+                                    text: ({ system: win.t("SYSTEM"), driver: win.t("GPU DRIVER"), vulkan: "VULKAN", libs: win.t("32-BIT LIBRARIES"), tools: win.t("GAMING TOOLS") })[modelData.group] || modelData.group.toUpperCase()
                                     color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 2; font.bold: true
                                 }
                                 Rectangle {

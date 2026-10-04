@@ -4390,6 +4390,20 @@ cmd_health() {
     fi
     need_pkgs libs warn "32-bit TLS (online games)" lib32-gnutls
 
+    # GameMode: the GAMEMODE chip does nothing without it
+    if gamemode_installed; then
+        chk tools:gamemode tools ok "GameMode" "$(pkg_ver gamemode | sed 's/-[^-]*$//')"
+    else
+        local gmn; gmn="$(profiles_json 2>/dev/null | jq '[to_entries[] | select(.key != "default" and .value.gamemode == true)] | length' 2>/dev/null)"
+        if (( ${gmn:-0} > 0 )); then
+            chk tools:gamemode tools warn "GameMode" "not installed: $gmn game profile(s) have GAMEMODE on and it does nothing" \
+                "sudo pacman -S --needed gamemode lib32-gamemode"
+        else
+            chk tools:gamemode tools info "GameMode" "not installed (optional: CPU governor and priorities while playing)" \
+                "sudo pacman -S --needed gamemode lib32-gamemode"
+        fi
+    fi
+
     local all=""
     ((${#missing[@]})) && all="sudo pacman -S --needed $(printf '%s\n' "${missing[@]}" | sort -u | paste -sd ' ')"
     printf '%s\n' "${checks[@]}" | jq -sc --arg all "$all" --argjson ml "$multilib" --arg v "$vendors" '{
@@ -4409,6 +4423,11 @@ cmd_health() {
 OVERLAY_QML="${CONTROL_DECK_OVERLAY_QML:-$HOME/.config/quickshell/control-deck-overlay/shell.qml}"
 
 # first temperature (°C, integer) of a hwmon chip whose label matches, else temp1
+# GameMode present? (CONTROL_DECK_GAMEMODE=0/1 pins it, for the tests)
+gamemode_installed() {
+    [[ -n "${CONTROL_DECK_GAMEMODE:-}" ]] && { [[ "$CONTROL_DECK_GAMEMODE" == 1 ]]; return; }
+    have gamemoderun
+}
 # the AMD GPU to report: the one with the most VRAM (the dedicated card, not the
 # CPU's integrated graphics, which is also amdgpu: Ryzen 7000/9000 have one)
 amd_gpu_dev() {
@@ -4584,14 +4603,28 @@ fx_packages() {
         k == "PackageDescription" { ds = v } k == "DownloadUrl" { u = v } k == "RepositoryUrl" { rp = v }
         k == "InstallPath" { ip = v } k == "EffectFiles" { ef = v } k == "DenyEffectFiles" { dn = v }
         END { flush() }' \
-    | jq -Rsc --slurpfile inst <(fx_installed_json) '
+    | jq -Rsc --slurpfile inst <(fx_installed_json) --argjson extra "$(fx_extra_packages)" \
+          --argjson dirs "$(find "$FX_DIR/Shaders" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | jq -Rsc 'split("\n") | map(select(. != ""))')" '
         [split("\n")[] | select(. != "") | split("\t")
          | {idx:.[0], default:(.[1] == "1"), name:.[2], desc:.[3], url:.[4], repo:.[5],
             sub:(.[6] | sub("^\\.\\\\reshade-shaders\\\\Shaders\\\\?"; "") | gsub("\\\\"; "/")),
-            files:(.[7] | split(",") | map(select(. != ""))), deny:(.[8] | split(",") | map(select(. != "")))}
-         | . + {installed:(($inst[0][.idx] // null) != null)}]'
+            files:(.[7] | split(",") | map(select(. != ""))), deny:(.[8] | split(",") | map(select(. != "")))}]
+        + $extra
+        # installed: recorded by fx_install_pkg, or its own folder already there (put by hand)
+        | map(.sub as $s | . + {installed:((($inst[0][.idx] // null) != null) or ($s != "" and ($dirs | index($s)) != null))})'
 }
 fx_installed_json() { if [[ -s "$FX_DIR/packages.json" ]]; then cat "$FX_DIR/packages.json"; else echo '{}'; fi; }
+
+# free shader packs that presets use but ReShade's installer doesn't list; same shape
+# as fx_packages, merged into it. Checked by hand: repo, license, folder layout, files.
+FX_EXTRA_PACKAGES='[
+  {"idx":"x-niceguy", "default":false, "extra":true, "name":"NiceGuy-Shaders by Ehsan2077 (community)",
+   "desc":"NGLighting (ray traced GI), lamps, volumetric fog, rim light… CC0.",
+   "url":"https://github.com/mj-ehsan/NiceGuy-Shaders/archive/refs/heads/main.zip",
+   "repo":"https://github.com/mj-ehsan/NiceGuy-Shaders", "sub":"NiceGuy-Shaders",
+   "files":["NGLighting.fx","NiceGuy_Lamps.fx","DynamicRaindrops.fx","FastSharp.fx","HoleFiller.fx","Rim.fx","Scatter.fx","SlowSharp.fx","Volumetric Fog V2.0.fx","VolumetricFog.fx"],
+   "deny":[]}]'
+fx_extra_packages() { if [[ -n "${CONTROL_DECK_FX_EXTRA_PACKAGES:-}" ]]; then cat "$CONTROL_DECK_FX_EXTRA_PACKAGES"; else echo "$FX_EXTRA_PACKAGES"; fi; }
 
 # download one package and merge it: shaders keep the package's sub-folder,
 # textures are flattened (vkBasalt takes a single texture folder)
@@ -4814,7 +4847,7 @@ fx_convert() {   # preset.ini out.conf → report JSON on stdout
             path="$(fx_find "$file")"
         fi
         if [[ -z "$path" ]]; then
-            skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any official package"}]' <<<"$skipped")"; continue
+            skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any known package"}]' <<<"$skipped")"; continue
         fi
         if grep -qE 'ReShade::(GetLinearizedDepth|DepthBuffer)|GetLinearizedDepth\(|DepthBufferTex|SV_Depth' "$path"; then
             skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"uses the depth buffer, which vkBasalt can'\''t read"}]' <<<"$skipped")"; continue
@@ -5355,7 +5388,7 @@ reshade_need_files() {   # preset.ini → report JSON {applied, effects, skipped
             [[ -n "$pk" ]] && fx_install_pkg "$pk" >&2 && pkgs="$(fx_packages)"
         fi
         if [[ -n "$(fx_find "$file")" ]]; then used+=("$file")
-        else skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any official package"}]' <<<"$skipped")"; fi
+        else skipped="$(jq -c --arg n "$name" --arg f "$file" '. + [{effect:$n, file:$f, why:"shader not found in any known package"}]' <<<"$skipped")"; fi
     done
     jq -nc --argjson s "$skipped" --args '{applied:($ARGS.positional | unique | length), effects:($ARGS.positional | unique), skipped:$s, partial:[]}' "${used[@]}"
 }
@@ -6120,6 +6153,25 @@ cmd_gaudit() {
     done < <(umbral_json | jq -r '(.prefixes // []) as $px | .games[]? | select(.hidden != true) | . as $g
         | (if .kind == "battlenet" then (($px | map(select(.id == $g.prefix_id)) | first // {}).options.env // {}) else (.options.env // {}) end)
         | to_entries[] | ["umbral:" + $g.id, .key, (.value | tostring)] | join("\u001f")' 2>/dev/null)
+    # shader files a game's look needs that this PC doesn't have (looks travel in BACKUP, shaders don't)
+    local rf pk pkgs=""
+    for rf in "$FX_PROFILES"/*/report.json; do
+        [[ -f "$rf" ]] || continue
+        k="$(basename "$(dirname "$rf")")"; k="${k/_/:}"
+        while IFS= read -r var; do
+            [[ "$var" == *.fx && -z "$(fx_find "$var")" ]] || continue
+            [[ -n "$pkgs" ]] || pkgs="$(fx_packages 2>/dev/null)"
+            pk="$(jq -c --arg f "$var" '[.[] | select(.files | index($f))] | first // null | if . then {idx, name} else null end' <<<"${pkgs:-[]}")"
+            issues+=("$(jq -nc --arg k "$k" --arg f "$var" --argjson p "${pk:-null}" \
+                '{key:$k, kind:"shader", file:$f, pack:$p, fix:(if $p then "install" else "none" end)}')")
+        done < <(jq -r '.effects[]?' "$rf")
+    done
+    # GameMode on in a profile but not installed here: the wrapper just skips it
+    if ! gamemode_installed; then
+        while IFS= read -r k; do
+            [[ -n "$k" ]] && issues+=("$(jq -nc --arg k "$k" '{key:$k, kind:"gamemode", fix:"install"}')")
+        done < <(profiles_json | jq -r 'to_entries[] | select(.key != "default" and .value.gamemode == true) | .key')
+    fi
     printf '%s\n' "${issues[@]}" | jq -sc --arg v "$v" '{vendor:$v, issues:map(select(. != null))}'
 }
 
@@ -6147,9 +6199,22 @@ cmd_gaudit_fix() {
             cmd_fx_mode "$k" reshade >/dev/null 2>&1 && log "→ $(game_label "$k"): ReShade set up on this PC" || log "✗ $(game_label "$k"): ReShade couldn't be set up here (see FX)"
             n=$((n + 1))
         fi
+        local pk
+        while IFS= read -r pk; do
+            [[ -n "$pk" ]] || continue
+            fx_install_pkg "$pk" >/dev/null 2>&1 && log "→ $(game_label "$k"): shaders installed ($pk)" || log "✗ $(game_label "$k"): couldn't install shader pack $pk"
+            n=$((n + 1))
+        done < <(jq -r --arg k "$k" '[.issues[] | select(.key == $k and .kind == "shader" and .pack != null) | .pack.idx] | unique[]' <<<"$a")
+        jq -r --arg k "$k" '.issues[] | select(.key == $k and .kind == "shader" and .pack == null) | .file' <<<"$a" \
+            | while IFS= read -r f; do log "  $(game_label "$k"): $f isn't in any known pack — import the preset's own archive again"; done
         jq -e --arg k "$k" 'any(.issues[]; .key == $k and .kind == "vkbasalt")' <<<"$a" >/dev/null \
             && log "  $(game_label "$k"): vkBasalt isn't installed here — FX → INSTALL"
     done <<<"$keys"
+    if jq -e --arg w "$which" 'any(.issues[]; .kind == "gamemode" and ($w == "all" or .key == $w))' <<<"$a" >/dev/null; then
+        log "→ pkexec: installing GameMode (gamemode, lib32-gamemode)"
+        if pk_pacman -S --needed --noconfirm -- gamemode lib32-gamemode; then log "✔ GameMode installed"; n=$((n + 1))
+        else log "✗ GameMode couldn't be installed (cancelled?)"; fi
+    fi
     log "✔ $n change(s)."
 }
 

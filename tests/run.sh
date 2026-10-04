@@ -13,6 +13,7 @@ trap 'pkill -f -- "$T/fake/" 2>/dev/null; rm -rf "$T"' EXIT
 
 export HOME="$T/home"
 export CONTROL_DECK_UMBRAL_RUNNING="$T/umbral-running.json"   # never the real one
+export CONTROL_DECK_FX_EXTRA_PACKAGES="$T/fx-extra.json"; echo "[]" > "$T/fx-extra.json"   # community packs: none unless a test adds one
 unset XDG_DATA_HOME XDG_CACHE_HOME XDG_CONFIG_HOME CONTROL_DECK_APPS_DIR INSTALL_ANY_APPS_DIR GITHUB_TOKEN
 export LC_ALL=C.UTF-8
 mkdir -p "$HOME" "$T/bin" "$T/dl" "$T/fake" "$T/sys"
@@ -1584,6 +1585,33 @@ section "TEST look (black and white)"
 mkdir -p "$HOME/.local/share/control-deck/reshade/Shaders/SweetFX"; echo 'technique Monochrome {}' > "$HOME/.local/share/control-deck/reshade/Shaders/SweetFX/Monochrome.fx"
 eq "vkBasalt: SweetFX Monochrome as a ReShade shader" "$(fn fx_builtin test /dev/stdout | grep -E '^(effects|monochrome) =' | paste -sd '|')" "effects = monochrome|monochrome = \"$HOME/.local/share/control-deck/reshade/Shaders/SweetFX/Monochrome.fx\""
 eq "ReShade: the Monochrome technique" "$(fn reshade_builtin test /dev/stdout | head -1)" "Techniques=Monochrome@Monochrome.fx"
+section "Community shader packs + CHECK FOR THIS PC (shaders, GameMode)"
+FXD="$HOME/.local/share/control-deck/reshade"
+mkdir -p "$T/xpk/Comm-main/Shaders" "$T/xpk/Comm-main/Textures"; echo 'technique Glow {}' > "$T/xpk/Comm-main/Shaders/Glow.fx"; echo x > "$T/xpk/Comm-main/Textures/glow.png"
+( cd "$T/xpk" && bsdtar -a -cf "$T/xpk/comm.zip" Comm-main )
+echo '[{"idx":"x-comm","default":false,"extra":true,"name":"Comm pack (community)","desc":"","url":"file://'"$T"'/xpk/comm.zip","repo":"","sub":"Comm","files":["Glow.fx"],"deny":[]}]' > "$T/fx-extra.json"
+eq "community packs listed with the official ones" "$("$CD" fx packages | jq -c '.[] | select(.extra) | [.idx, .installed]')" '["x-comm",false]'
+printf 'Techniques=Glow@Glow.fx\n' > "$T/glow.ini"
+eq "a preset needing it installs it like an official pack" "$(fn reshade_need_files "$T/glow.ini" 2>/dev/null | jq -c '[.applied, .skipped]')" '[1,[]]'
+yes "…into its own folder" "[[ -f '$FXD/Shaders/Comm/Glow.fx' && -f '$FXD/Textures/glow.png' ]]"
+eq "…and marked installed" "$("$CD" fx packages | jq -r '.[] | select(.idx == "x-comm") | .installed')" true
+# a look brought from another PC that uses a shader this one lacks
+GD="$HOME/.local/share/control-deck/gaming/fx/steam_6100"; mkdir -p "$GD"
+echo '{"source":"file","name":"Moved","mode":"reshade","applied":2,"effects":["Glow.fx","Nowhere.fx"],"skipped":[]}' > "$GD/report.json"
+rm -rf "$FXD/Shaders/Comm"
+GA="$(CONTROL_DECK_GAMEMODE=1 "$CD" gaudit)"
+eq "missing shader of a known pack → install it" "$(jq -c '[.issues[] | select(.key == "steam:6100" and .kind == "shader") | [.file, .fix, (.pack.idx // null)]]' <<<"$GA")" '[["Glow.fx","install","x-comm"],["Nowhere.fx","none",null]]'
+CONTROL_DECK_GAMEMODE=1 "$CD" gaudit fix steam:6100 >/dev/null 2>&1
+yes "FIX installs the pack" "[[ -f '$FXD/Shaders/Comm/Glow.fx' ]]"
+rm -rf "$GD"
+# GameMode on in a profile, not installed here
+"$CD" gprofile set steam:100 gamemode=true >/dev/null
+eq "GameMode not installed → flagged for the profiles using it" "$(CONTROL_DECK_GAMEMODE=0 "$CD" gaudit | jq -c '[.issues[] | select(.kind == "gamemode") | .key] | index("steam:100") != null')" true
+eq "…installed → nothing to fix" "$(CONTROL_DECK_GAMEMODE=1 "$CD" gaudit | jq '[.issues[] | select(.kind == "gamemode")] | length')" 0
+eq "HEALTH: warns with the install command" "$(CONTROL_DECK_GAMEMODE=0 "$CD" health | jq -c '.checks[] | select(.id == "tools:gamemode") | [.status, .fix]')" '["warn","sudo pacman -S --needed gamemode lib32-gamemode"]'
+rm -f "$T/pkexec.log"; CONTROL_DECK_GAMEMODE=0 "$CD" gaudit fix all >/dev/null 2>&1
+has "FIX ALL installs it through pkexec pacman" "$(cat "$T/pkexec.log" 2>/dev/null)" "gamemode lib32-gamemode"
+echo "[]" > "$T/fx-extra.json"
 section "ReShade screenshot key"
 eq "PrtSc by default" "$("$CD" fx status | jq -r .shotKey)" PrtSc
 "$CD" fx shotkey F10 >/dev/null; eq "changed and kept" "$("$CD" fx status | jq -c '[.shotKey, .key, .effectsKey]')" "[\"F10\",$("$CD" fx status | jq -c .key),$("$CD" fx status | jq -c .effectsKey)]"

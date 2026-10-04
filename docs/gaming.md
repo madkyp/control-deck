@@ -676,6 +676,24 @@ until vkBasalt is installed.
 - STATUS lists the last 8 sessions with a small temperature graph.
   `sessions on|off` (the SUMMARY chip) controls it; it's on by default.
 
+### Community shader packs (FX)
+- Some presets use free shaders that ReShade's installer list (EffectPackages.ini)
+  doesn't carry: Rabbit's KCD2 preset uses NGLighting, from NiceGuy-Shaders. The
+  deck keeps a short, hand-checked list (`FX_EXTRA_PACKAGES`: repo, license,
+  layout, files) merged into `fx packages`. A preset that needs one installs it
+  like an official pack, into `Shaders/<pack>`. A pack whose folder is already
+  there counts as installed.
+- Looks travel in BACKUP, but shaders don't: CHECK FOR THIS PC lists the effect
+  files of each game's look that this PC lacks. FIX installs the pack that has
+  them; files in no known pack ask for the preset's archive to be imported again.
+
+### GameMode not installed
+- The wrapper used to skip GAMEMODE silently when `gamemoderun` is missing (the
+  run log said "gamemode not installed"; the AMD PC had no GameMode at all). Now:
+  the chip turns amber (⚠), HEALTH has a GAMING TOOLS → GameMode row with the
+  install command, and CHECK FOR THIS PC lists the profiles using it. FIX ALL
+  installs `gamemode lib32-gamemode` with pkexec.
+
 ### IO PRIORITY and the disk scheduler
 - The chip runs the game under `ionice -c2 -n0` (best-effort, highest level).
   The level is honoured by BFQ only: mq-deadline and kyber honour the class,
