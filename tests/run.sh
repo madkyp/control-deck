@@ -913,6 +913,21 @@ has "uset passes the options to umbral --set" "$(cat "$T/umbral.log")" "umbral -
 "$CD" uset umbral:1484d426be 'bad key=1' >/dev/null 2>&1; eq "…a key that isn't an option is refused before Umbral" "$?" 2
 stub umbral 'exit 2'
 "$CD" uopts umbral:1484d426be >/dev/null 2>&1; eq "older Umbral (no --get) → 4, the GUI stays read-only" "$?" 4
+# Crisol (mod manager): a game's mods, open it there, play with mods
+eq "mods without Crisol → {}" "$(CONTROL_DECK_CRISOL=crisol-missing "$CD" mods steam:100)" '{}'
+stub crisol 'echo "crisol $*" >> "'"$T"'/crisol.log"
+case "$1" in
+  --list) echo "[{\"key\":\"steam:100\",\"name\":\"G\",\"mods\":2,\"enabled\":1,\"profile\":\"Main\",\"applied\":true,\"pending_changes\":false,\"updates\":1,\"layout\":\"me3\",\"loader\":{\"name\":\"ME3\",\"level\":\"required\",\"installed\":true}}]" ;;
+  --play) [ "$2" = steam:100 ] || { echo "No existe el juego $2" >&2; exit 2; } ;;
+esac'
+eq "mods: the game's mods in Crisol" "$("$CD" mods steam:100 | jq -c '[.mods, .enabled, .updates, .loader.name]')" '[2,1,1,"ME3"]'
+eq "…a game Crisol doesn't have → {}" "$("$CD" mods steam:999)" '{}'
+"$CD" mods foo >/dev/null 2>&1; eq "…not a game key → 2" "$?" 2
+rm -f "$T/crisol.log"; "$CD" mplay steam:100 >/dev/null
+has "mplay plays through Crisol" "$(cat "$T/crisol.log")" "crisol --play steam:100"
+"$CD" mplay steam:5 >/dev/null 2>&1; eq "…Crisol refuses → 3" "$?" 3
+CONTROL_DECK_CRISOL=crisol-missing "$CD" mopen steam:100 >/dev/null 2>&1; eq "mopen without Crisol → 4" "$?" 4
+rm -f "$T/bin/crisol"
 # CHECK FOR THIS PC: an Umbral game's other-vendor variable is removed through Umbral
 stub umbral 'echo "umbral $*" >> "'"$T"'/umbral.log"; exit 0'
 cp "$T/umbral.json" "$T/umbral.json.bak"

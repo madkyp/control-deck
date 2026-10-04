@@ -3287,6 +3287,33 @@ cmd_uset() {
     esac
 }
 
+CRISOL="${CONTROL_DECK_CRISOL:-crisol}"   # the tests point it elsewhere: this PC may have the real one
+# mods steam:<id>|umbral:<id> — the game's mods in Crisol (github.com/madkyp/crisol-app):
+# {mods, enabled, profile, applied, pending_changes, updates, layout, loader}; {} without Crisol or that game
+cmd_mods() {
+    local key="$1"
+    [[ "$key" == steam:* || "$key" == umbral:* ]] || { err "use: mods steam:<id>|umbral:<id>"; return 2; }
+    have "$CRISOL" || { echo '{}'; return 0; }
+    "$CRISOL" --list 2>/dev/null | jq -c --arg k "$key" \
+        'first(.[] | select(.key == $k) | {mods, enabled, profile, applied, pending_changes, updates, layout, loader}) // {}' \
+        2>/dev/null || echo '{}'
+}
+# mopen key — open the game's page in Crisol; mplay key — play it with its mods (crisol --play)
+cmd_mopen() {
+    local key="$1"
+    [[ "$key" == steam:* || "$key" == umbral:* ]] || { err "use: mopen steam:<id>|umbral:<id>"; return 2; }
+    have "$CRISOL" || { err "Crisol is not installed"; return 4; }
+    setsid -f "$CRISOL" --game "$key" >/dev/null 2>&1
+    log "▶ Crisol: $(game_label "$key")"
+}
+cmd_mplay() {
+    local key="$1" out
+    [[ "$key" == steam:* || "$key" == umbral:* ]] || { err "use: mplay steam:<id>|umbral:<id>"; return 2; }
+    have "$CRISOL" || { err "Crisol is not installed"; return 4; }
+    out="$("$CRISOL" --play "$key" 2>&1)" || { err "${out:-Crisol could not start the game}"; return 3; }
+    log "▶ Playing with mods: $(game_label "$key")"; history_add "play with mods" crisol "$key" 0
+}
+
 # gstop umbral:<id> — close a game through Umbral (≥ 0.11), which also ends its wineserver
 cmd_gstop() {
     local key="$1"
@@ -4190,6 +4217,8 @@ Gaming
   playing [quiet|lite on|off]   While playing: hold notifications · Hyprland without animations/blur/shadows
   iosched <key>                 The game's disk and I/O scheduler (does IO PRIORITY do anything there?)
   gstop umbral:<id>             Close an Umbral game (Umbral 0.11+)
+  mods <game>                   The game's mods in Crisol (count, profile, applied, updates, loader)
+  mopen <game> / mplay <game>   Open the game in Crisol / play it with its mods
   uopts umbral:<id>             An Umbral game's options (Umbral 0.12+)
   uset umbral:<id> k=v …        Change them: gamemode=on fps_limit=120 env.NAME=value (env.NAME= removes)
   sessions [N|on|off]           Last game sessions (temps, load, power) · turn the end-of-game summary on/off
@@ -6624,6 +6653,9 @@ main() {
         uilang)      cmd_uilang "${1:-}" ;;
         playing)     cmd_playing "$@" ;;
         gstop)       cmd_gstop "${1:-}" ;;
+        mods)        cmd_mods "${1:-}" ;;
+        mopen)       cmd_mopen "${1:-}" ;;
+        mplay)       cmd_mplay "${1:-}" ;;
         uopts)       cmd_uopts "${1:-}" ;;
         uset)        cmd_uset "$@" ;;
         iosched)     cmd_iosched "${1:-}" ;;

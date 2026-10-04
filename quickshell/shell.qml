@@ -334,6 +334,7 @@ ShellRoot {
         }
         property var    games: []
         property var    ioInfo: ({})        // the selected game's disk + I/O scheduler (IO PRIORITY)
+        property var    mods: ({})          // the selected game's mods in Crisol ({} = no Crisol / not there)
         property var    uopts: ({})         // an Umbral game's options (Umbral 0.12+: umbral --get); {} = read-only
         function uset(args) { runGame(["uset", selGame].concat(args), "SAVING…"); }
         // the variables of an Umbral game as "A=1 B=2" ↔ the env.X=… arguments that turn one into the other
@@ -488,6 +489,7 @@ ShellRoot {
             ups = {}; if (g.source === "steam") upsProc.running = true;
             ioInfo = {}; if (g.source === "steam" || g.source === "umbral") { ioProc.command = [scriptPath, "iosched", g.key]; ioProc.running = true; }
             uopts = {}; if (g.source === "umbral") uoptsProc.running = true;
+            mods = {}; if (g.source === "steam" || g.source === "umbral") modsProc.running = true;
             sug = {}; sugExpanded = false; if (g.source === "steam") sugProc.running = true;
             if (g.new) { seenProc.command = [scriptPath, "gseen", g.key]; seenProc.running = true; }
             fx = {}; fxConfirm = ""; if (gameView === "fx") openFx();
@@ -1163,6 +1165,11 @@ ShellRoot {
             stdout: StdioCollector { onStreamFinished: { var l = text.trim(); if (l === "es" || l === "en") win.lang = l; } }
         }
         Process { id: langSaveProc }
+        Process {
+            id: modsProc
+            command: [win.scriptPath, "mods", win.selGame]
+            stdout: StdioCollector { onStreamFinished: { try { win.mods = JSON.parse(text); } catch (e) { win.mods = {}; } } }
+        }
         Process {
             id: uoptsProc
             command: [win.scriptPath, "uopts", win.selGame]
@@ -3299,6 +3306,41 @@ ShellRoot {
                                     tip: win.t("Visual shaders (ReShade / vkBasalt) for this game")
                                     onClicked: win.openFx()
                                 }
+                            }
+                        }
+                    }
+
+                    // mods (Crisol): how many, the profile, updates and the mod loader; open it or play with mods
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: win.mods.layout !== undefined
+                        implicitHeight: modsRow.implicitHeight + 20
+                        radius: 8; color: pal.card; border.color: pal.border; border.width: 1
+                        RowLayout {
+                            id: modsRow
+                            anchors.fill: parent; anchors.margins: 10; spacing: 10
+                            Text { text: win.t("MODS"); Layout.preferredWidth: 52; color: pal.dim; font.family: win.mono; font.pixelSize: 9; font.letterSpacing: 1 }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: pal.text; font.family: win.mono; font.pixelSize: 11
+                                property var ld: win.mods.loader || {}
+                                // older Crisol (< 0.2) lists only mods/applied: show what there is
+                                text: !win.mods.mods ? win.t("No mods yet (Crisol)")
+                                      : (win.mods.enabled !== undefined && win.mods.enabled !== null ? win.mods.enabled + "/" : "")
+                                        + win.mods.mods + win.t(" mods on")
+                                        + (win.mods.profile ? "  ·  " + win.mods.profile : "")
+                                        + (win.mods.applied ? "" : "  ·  " + win.t("not applied"))
+                                        + (win.mods.pending_changes ? "  ·  " + win.t("changes to apply") : "")
+                                        + (win.mods.updates ? "  ·  " + win.mods.updates + win.t(" updates") : "")
+                                        + (ld.level === "required" && !ld.installed ? "  ·  ⚠ " + win.t("missing loader: ") + ld.name : "")
+                            }
+                            MiniBtn {
+                                label: win.t("PLAY WITH MODS"); visible: (win.mods.enabled !== undefined && win.mods.enabled !== null ? win.mods.enabled : win.mods.mods || 0) > 0
+                                on: !win.gameBusy; onClicked: win.runGame(["mplay", win.selGame], "LAUNCHING…")
+                            }
+                            MiniBtn {
+                                label: win.t("OPEN IN CRISOL"); primary: false
+                                on: !win.gameBusy; onClicked: win.runGame(["mopen", win.selGame], "OPENING…")
                             }
                         }
                     }

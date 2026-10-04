@@ -821,3 +821,12 @@ until vkBasalt is installed.
 ## Not implemented yet
 
 Nothing: every module is implemented or listed under Dropped.
+
+### Mods through Crisol (LIBRARY → MODS)
+
+[Crisol](https://github.com/madkyp/crisol-app) is the author's mod manager for Steam and Umbral games (Nexus Mods). Both apps use the same game keys (`steam:<appid>`, `umbral:<id>`), so the deck only reads and calls it:
+
+- `mods <game>` → `crisol --list` filtered to that game: `{mods, enabled, profile, applied, pending_changes, updates, layout, loader}`; `{}` without Crisol or when Crisol doesn't know the game (the MODS card is hidden). Older Crisol only lists `mods`/`applied`: the card shows what there is.
+- `mopen <game>` → `crisol --game <game>` (detached). `mplay <game>` → `crisol --play <game>`: Mod Engine 3 for FromSoftware games, Umbral for its games, Steam for the rest (the mods are already in the game folder).
+- `CONTROL_DECK_CRISOL` points the commands at another binary: the tests use it, because this PC may have the real Crisol on `PATH`.
+
