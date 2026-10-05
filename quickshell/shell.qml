@@ -750,33 +750,6 @@ ShellRoot {
             }
             background: Rectangle { color: pal.cardHi; border.color: pal.accent; border.width: 1; radius: 6 }
         }
-        // a fix command, shown and copied, never run
-        component FixLine: RowLayout {
-            property string cmd
-            spacing: 6
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: fixTxt.implicitHeight + 10
-                radius: 4; color: pal.logBg; border.color: pal.border; border.width: 1
-                Text {
-                    id: fixTxt
-                    anchors.fill: parent; anchors.margins: 5
-                    text: cmd === "reboot" ? win.t("Restart the PC") : "$ " + cmd
-                    wrapMode: Text.WrapAnywhere
-                    color: pal.sky; font.family: win.mono; font.pixelSize: 10
-                }
-            }
-            Chip {
-                visible: cmd !== "reboot"
-                label: win.copiedFix === cmd ? win.t("COPIED ✓") : win.t("COPY")
-                tint: pal.ok; active: win.copiedFix === cmd
-                onClicked: {
-                    fixCopyProc.command = ["wl-copy", "--", cmd];
-                    fixCopyProc.running = true;
-                    win.copiedFix = cmd; copiedTimer.restart();
-                }
-            }
-        }
         component Section: RowLayout {
             property string label
             property string info: ""
@@ -2298,6 +2271,9 @@ ShellRoot {
                             }
                         }
                     }
+
+                    // no snapper: keep the column tall so the window doesn't spread out around it
+                    Item { Layout.fillHeight: true; visible: win.snapStatus.snapper !== true }
 
                     Rectangle {
                         Layout.fillWidth: true; Layout.fillHeight: true

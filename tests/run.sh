@@ -532,6 +532,16 @@ while IFS= read -r k; do [[ "$src" == *"$k"* ]] || { dead=$((dead + 1)); echo " 
 done < <(sed -n 's/^    "\(\([^"\\]\|\\.\)*\)": .*/\1/p' "$ROOT/quickshell/es.js")
 eq "no dead Spanish keys" "$dead" 0
 if (( $(grep -c '^    "' "$ROOT/quickshell/es.js") > 250 )); then ok "es.js has the keys"; else bad "es.js has the keys" "fewer than 250"; fi
+# every win.X / pal.X the GUI uses is defined (a split or a prune can drop one; QML only notices at run time)
+undef="$(python3 - "$ROOT/quickshell/shell.qml" <<'PY2'
+import re, sys
+t = open(sys.argv[1]).read()
+have = set(re.findall(r'property\s+(?:\w+\s+)?\w+\s+(\w+)', t)) | set(re.findall(r'function\s+(\w+)', t)) | set(re.findall(r'\bid:\s*(\w+)', t))
+have |= {"visible", "width", "height", "color", "screen", "title", "implicitWidth", "implicitHeight", "contentItem"}
+print(" ".join(sorted((set(re.findall(r'\bwin\.(\w+)', t)) | set(re.findall(r'\bpal\.(\w+)', t))) - have)))
+PY2
+)"
+eq "the GUI uses nothing undefined" "$undef" ""
 # ==========================================================================
 printf '\n\e[1m%d passed, %d failed\e[0m\n' "$pass" "$failed"
 [[ $failed -eq 0 ]]
