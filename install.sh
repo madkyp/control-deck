@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installer for Control Deck — Arch / CachyOS
+# Installer for System Deck — Arch / CachyOS
 # Copies the deck into place and (optionally) installs missing dependencies.
 #
 #   ./install.sh            copy + check and install dependencies
@@ -75,39 +75,61 @@ if [[ -e "$HOME/.local/bin/install-any" || -d "$HOME/.config/quickshell/install-
 fi
 
 # ---- files ------------------------------------------------------------------
-echo "== Installing Control Deck =="
-echo "→ backend   ~/.local/bin/control-deck"
-install -Dm755 "$SRC/bin/control-deck" "$HOME/.local/bin/control-deck"
+echo "== Installing System Deck =="
+echo "→ backend   ~/.local/bin/system-deck"
+install -Dm755 "$SRC/bin/system-deck" "$HOME/.local/bin/system-deck"
 
-echo "→ icon      ~/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
-install -Dm644 "$SRC/icons/control-deck.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
+echo "→ icon      ~/.local/share/icons/hicolor/scalable/apps/system-deck.svg"
+install -Dm644 "$SRC/icons/system-deck.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/system-deck.svg"
 gtk-update-icon-cache -qtf "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 
-echo "→ launcher  ~/.local/share/applications/control-deck.desktop"
-install -Dm644 "$SRC/control-deck.desktop" "$HOME/.local/share/applications/control-deck.desktop"
+echo "→ launcher  ~/.local/share/applications/system-deck.desktop"
+install -Dm644 "$SRC/system-deck.desktop" "$HOME/.local/share/applications/system-deck.desktop"
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
 # version info, used by the deck to spot a newer version of itself on GitHub
-commit="${CONTROL_DECK_COMMIT:-$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)}"
-gh_repo="${CONTROL_DECK_REPO:-$(git -C "$SRC" remote get-url origin 2>/dev/null \
+commit="${SYSTEM_DECK_COMMIT:-$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)}"
+gh_repo="${SYSTEM_DECK_REPO:-$(git -C "$SRC" remote get-url origin 2>/dev/null \
         | sed -nE 's#.*github\.com[:/]([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//' || true)}"
 branch="$(git -C "$SRC" branch --show-current 2>/dev/null || true)"
 src="$SRC"; git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 || src=""
-mkdir -p "$HOME/.local/share/control-deck"
+mkdir -p "$HOME/.local/share/system-deck"
 printf 'SRC=%s\nREPO=%s\nBRANCH=%s\nCOMMIT=%s\nDATE=%s\n' \
-    "$src" "${gh_repo:-madkyp/control-deck}" "${branch:-main}" "$commit" "$(date -Is)" \
-    > "$HOME/.local/share/control-deck/install.env"
+    "$src" "${gh_repo:-madkyp/system-deck}" "${branch:-main}" "$commit" "$(date -Is)" \
+    > "$HOME/.local/share/system-deck/install.env"
 echo "→ version   ${commit:0:7}"
 
 # the GUI goes last: a running deck reloads as soon as shell.qml changes
-echo "→ GUI       ~/.config/quickshell/control-deck/shell.qml"
-install -Dm644 "$SRC/quickshell/overlay.qml" "$HOME/.config/quickshell/control-deck-overlay/shell.qml"
-install -Dm644 "$SRC/quickshell/es.js" "$HOME/.config/quickshell/control-deck/es.js"
-install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/control-deck/shell.qml"
+echo "→ GUI       ~/.config/quickshell/system-deck/shell.qml"
+install -Dm644 "$SRC/quickshell/es.js" "$HOME/.config/quickshell/system-deck/es.js"
+install -Dm644 "$SRC/quickshell/shell.qml" "$HOME/.config/quickshell/system-deck/shell.qml"
+
+# Control Deck became System Deck (apps) + Gaming Deck (games): move the app data
+# over and remove the old deck. The old command stays while a Steam game still
+# launches through it (Gaming Deck's migrate switches those, with Steam closed).
+if [[ -d "$HOME/.local/share/control-deck" || -x "$HOME/.local/bin/control-deck" || -d "$HOME/.config/quickshell/control-deck" ]]; then
+    echo
+    echo "== Migrating from Control Deck =="
+    "$HOME/.local/bin/system-deck" migrate || true
+    rm -rf "$HOME/.config/quickshell/control-deck" "$HOME/.config/quickshell/control-deck-overlay"
+    rm -f "$HOME/.local/share/applications/control-deck.desktop" "$HOME/.local/share/icons/hicolor/scalable/apps/control-deck.svg"
+    update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+    if grep -qs 'control-deck run' "$HOME"/.local/share/Steam/userdata/*/config/localconfig.vdf "$HOME"/.steam/steam/userdata/*/config/localconfig.vdf; then
+        echo "⚠  Some Steam games still launch through control-deck: install Gaming Deck (or run 'gaming-deck migrate'"
+        echo "   with Steam closed) — the old command stays until then."
+    elif [[ -e "$HOME/.local/bin/control-deck" ]]; then
+        rm -f "$HOME/.local/bin/control-deck"; echo "→ removed the old control-deck command"
+    fi
+    # what's left of the old data folder once both decks have taken theirs
+    old="$HOME/.local/share/control-deck"
+    if [[ -d "$old" && ! -e "$old/gaming" && ! -e "$old/reshade" ]]; then
+        rm -f "$old/install.env" "$old/ui.json" "$old/history.tsv"; rm -rf "$old/logs"; rmdir "$old" 2>/dev/null || true
+    fi
+fi
 
 echo
 echo "✔ Installed."
-echo "  Run it with:  qs -c control-deck   (or \"Control Deck\" from your app menu)"
+echo "  Run it with:  qs -c system-deck   (or \"System Deck\" from your app menu)"
 echo
 echo "  Optional extras from the AUR:"
 echo "    · appimageupdatetool — update AppImages that don't come from GitHub"
@@ -115,5 +137,5 @@ echo "    · debtap             — install .deb packages (then: sudo debtap -u)
 echo
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) : ;;
-    *) echo "⚠  ~/.local/bin is not in your PATH. Add it to use 'control-deck' from a terminal." ;;
+    *) echo "⚠  ~/.local/bin is not in your PATH. Add it to use 'system-deck' from a terminal." ;;
 esac

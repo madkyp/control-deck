@@ -10,13 +10,13 @@ block="$1"; out="$2"; first="${3:-14}"; shots="${4:-1}"
 work="$(mktemp -d)"; mkdir -p "$out"
 python3 - "$repo/quickshell/shell.qml" "$block" "$work/shell.qml" <<'PY'
 import sys
-t = open(sys.argv[1]).read().replace('title: "Control Deck"', 'title: "CD close test 7731"', 1)
-anchor = '        property string gameView: "library"\n'
+t = open(sys.argv[1]).read().replace('title: "System Deck"', 'title: "CD close test 7731"', 1)
+anchor = '        property string lang: "en"\n'
 assert anchor in t
 open(sys.argv[3], 'w').write(t.replace(anchor, anchor + open(sys.argv[2]).read(), 1))
 PY
 cp "$repo/quickshell/es.js" "$work/"
-CONTROL_DECK_BIN="$repo/bin/control-deck" timeout $(( first + 10 * shots + 20 )) qs -p "$work" > "$out/qml.log" 2>&1 & qp=$!
+SYSTEM_DECK_BIN="$repo/bin/system-deck" timeout $(( first + 10 * shots + 20 )) qs -p "$work" > "$out/qml.log" 2>&1 & qp=$!
 start=$(date +%s); sleep 4
 a="$(hyprctl clients -j | jq -r '.[] | select(.title == "CD close test 7731") | .address' | head -1)"
 id="$(hyprctl clients -j | jq -r '.[] | select(.title == "CD close test 7731") | .stableId' | head -1)"

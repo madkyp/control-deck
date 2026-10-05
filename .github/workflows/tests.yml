@@ -18,7 +18,7 @@ jobs:
         run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: ShellCheck
-        run: shellcheck -x -S warning bin/control-deck install.sh uninstall.sh tests/run.sh
+        run: shellcheck -x -S warning bin/system-deck install.sh uninstall.sh tests/run.sh
 
       - name: Test suite
         run: tests/run.sh

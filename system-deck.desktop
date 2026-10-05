@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Control Deck
+Name=System Deck
 Comment=Install, manage, update and clean up your apps (AppImage, pacman, AUR, Flatpak, GitHub)
-Exec=qs -c control-deck
-Icon=control-deck
+Exec=qs -c system-deck
+Icon=system-deck
 Terminal=false
 Categories=System;Utility;
 Keywords=install;appimage;flatpak;aur;pacman;update;
