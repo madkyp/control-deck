@@ -380,6 +380,9 @@ ShellRoot {
             snapListProc.running = true;
         }
 
+        // saves the ESP/ENG choice (uilang <es|en>)
+        Process { id: langSaveProc }
+
         // ---- backend processes: install ---------------------------------
         Process {
             id: detectManyProc

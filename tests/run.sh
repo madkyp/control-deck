@@ -538,7 +538,10 @@ import re, sys
 t = open(sys.argv[1]).read()
 have = set(re.findall(r'property\s+(?:\w+\s+)?\w+\s+(\w+)', t)) | set(re.findall(r'function\s+(\w+)', t)) | set(re.findall(r'\bid:\s*(\w+)', t))
 have |= {"visible", "width", "height", "color", "screen", "title", "implicitWidth", "implicitHeight", "contentItem"}
-print(" ".join(sorted((set(re.findall(r'\bwin\.(\w+)', t)) | set(re.findall(r'\bpal\.(\w+)', t))) - have)))
+# processes and timers are reached by id (fooProc.running = true): those ids must exist too
+procs = set(re.findall(r'\b([a-z]\w*)\.(?:running|command|start\(|restart\(|stop\()', t))
+procs -= {x.strip() for ps in re.findall(r'function\s*\w*\s*\(([^)]*)\)', t) for x in ps.split(",")}
+print(" ".join(sorted((set(re.findall(r'\bwin\.(\w+)', t)) | set(re.findall(r'\bpal\.(\w+)', t)) | procs) - have)))
 PY2
 )"
 eq "the GUI uses nothing undefined" "$undef" ""
