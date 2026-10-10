@@ -504,11 +504,13 @@ section "Migration from Control Deck"
 OLDD="$T/old-cd"; NEWD="$HOME/.local/share/system-deck"; mkdir -p "$OLDD/trash/x" "$OLDD/logs" "$OLDD/gaming"
 printf '2026-10-01 10:00:00\tinstall\trepo\tfoo\tok\n2026-10-01 11:00:00\tplay\tsteam\tsteam:9100\tok\n' > "$OLDD/history.tsv"
 echo log > "$OLDD/logs/launch-foo.log"; echo g > "$OLDD/logs/run.log"
+echo sig123 > "$OLDD/last-notified"; rm -f "$NEWD/last-notified"
 mkdir -p "$HOME/.config/systemd/user"; printf '[Timer]\nOnUnitActiveSec=12h\n' > "$HOME/.config/systemd/user/control-deck-updates.timer"; : > "$HOME/.config/systemd/user/control-deck-updates.service"
 mv "$NEWD/history.tsv" "$NEWD/history.keep" 2>/dev/null; mv "$NEWD/trash" "$NEWD/trash.keep" 2>/dev/null
 SYSTEM_DECK_OLD_DATA="$OLDD" "$CD" migrate >/dev/null 2>&1
 eq "history: only the app lines come over (no game ones)" "$(cut -f2-3 "$NEWD/history.tsv" | grep -cE 'steam|gaming|umbral|crisol'), $(head -1 "$NEWD/history.tsv" | cut -f2)" "0, install"
 yes "launcher trash moved" "[[ -d '$NEWD/trash/x' && ! -e '$OLDD/trash' ]]"
+eq "the updates already notified come along (no repeated notice)" "$(cat "$NEWD/last-notified")" sig123
 yes "app logs moved, the game ones left for Gaming Deck" "[[ -f '$NEWD/logs/launch-foo.log' && -f '$OLDD/logs/run.log' ]]"
 yes "game data left for Gaming Deck" "[[ -d '$OLDD/gaming' ]]"
 yes "update check moved to the new name, same interval" "[[ ! -e '$HOME/.config/systemd/user/control-deck-updates.timer' ]] && grep -q 'OnUnitActiveSec=12h' '$HOME/.config/systemd/user/system-deck-updates.timer'"

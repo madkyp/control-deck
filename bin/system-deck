@@ -2142,6 +2142,8 @@ cmd_migrate() {
     fi
     [[ -d "$old/trash" && ! -e "$TRASH_DIR" ]] && mv -- "$old/trash" "$TRASH_DIR" && { log "→ launcher trash"; n=$((n + 1)); }
     [[ -f "$old/ui.json" && ! -f "$new/ui.json" ]] && cp -- "$old/ui.json" "$new/ui.json"
+    # which updates were already notified: without it the next check repeats the same notice
+    [[ -f "$old/last-notified" && ! -f "$new/last-notified" ]] && cp -- "$old/last-notified" "$new/last-notified"
     if [[ -d "$old/logs" ]]; then
         mkdir -p "$new/logs"
         for f in "$old/logs"/*; do

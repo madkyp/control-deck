@@ -123,7 +123,7 @@ if [[ -d "$HOME/.local/share/control-deck" || -x "$HOME/.local/bin/control-deck"
     # what's left of the old data folder once both decks have taken theirs
     old="$HOME/.local/share/control-deck"
     if [[ -d "$old" && ! -e "$old/gaming" && ! -e "$old/reshade" ]]; then
-        rm -f "$old/install.env" "$old/ui.json" "$old/history.tsv"; rm -rf "$old/logs"; rmdir "$old" 2>/dev/null || true
+        rm -f "$old/install.env" "$old/ui.json" "$old/history.tsv" "$old/last-notified"; rm -rf "$old/logs"; rmdir "$old" 2>/dev/null || true
     fi
 fi
 
